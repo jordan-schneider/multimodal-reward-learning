@@ -14,6 +14,7 @@ Action = Literal[1, 3, 5, 7]
 
 DANGEROUS_OBJECTS: Final = (1, 2, 3, 4)
 PATHABLE_OBJECTS: Final = (9, 100)
+DIAMONDS = (1, 3)
 
 
 @settings(deadline=None)
@@ -22,11 +23,10 @@ PATHABLE_OBJECTS: Final = (9, 100)
     seed=integers(0, 2 ** 31 - 1),
 )
 def test_grid_items(actions: List[int], seed: int) -> None:
-    env = Miner(reward_weights=np.zeros(3), num=1, rand_seed=seed)
+    env = Miner(reward_weights=np.zeros(Miner.N_FEATURES), num=1, rand_seed=seed)
     for action in actions:
         env.act(np.array([action]))
-        info = env.get_info()[0]
-        state = Miner.make_latent_state(info, env.get_state()[0])
+        state = env.make_latent_states()[0]
 
         grid_shape = state.grid.shape
         assert grid_shape == (20, 20)
@@ -43,7 +43,7 @@ def test_grid_items(actions: List[int], seed: int) -> None:
     seed=integers(0, 2 ** 31 - 1),
 )
 def test_empty_increasing(actions: List[int], seed: int):
-    env = Miner(reward_weights=np.zeros(3), num=1, rand_seed=seed)
+    env = Miner(reward_weights=np.zeros(Miner.N_FEATURES), num=1, rand_seed=seed)
     last_n_empty = -1
     for action in actions:
         env.act(np.array([action]))
@@ -52,7 +52,7 @@ def test_empty_increasing(actions: List[int], seed: int):
         if first:
             last_n_empty = -1
 
-        state = Miner.make_latent_state(env.get_info()[0], env.get_state()[0])
+        state = env.make_latent_states()[0]
 
         n_empty = np.sum(state.grid == 100)
 
@@ -66,7 +66,7 @@ def test_empty_increasing(actions: List[int], seed: int):
     seed=integers(0, 2 ** 31 - 1),
 )
 def test_diamonds_remaining_decreasing(actions: List[int], seed: int):
-    env = Miner(reward_weights=np.zeros(3), num=1, rand_seed=seed)
+    env = Miner(reward_weights=np.zeros(Miner.N_FEATURES), num=1, rand_seed=seed)
     last_n_diamonds = 35 * 35 + 1  # number of cells + 1
     for action in actions:
         env.act(np.array([action]))
@@ -75,7 +75,7 @@ def test_diamonds_remaining_decreasing(actions: List[int], seed: int):
         if first:
             last_n_diamonds = 35 * 35 + 1
 
-        state = Miner.make_latent_state(env.get_info()[0], env.get_state()[0])
+        state = env.make_latent_states()[0]
 
         n_diamonds = env.diamonds_remaining(state)
 
@@ -86,21 +86,21 @@ def test_diamonds_remaining_decreasing(actions: List[int], seed: int):
 @settings(deadline=None)
 @given(seed=integers(0, 2 ** 31 - 1),)
 def test_dist_to_diamond(seed: int):
-    env = Miner(reward_weights=np.zeros(3), num=1, rand_seed=seed)
-    start_state = Miner.make_latent_state(env.get_info()[0], env.get_state()[0])
+    env = Miner(reward_weights=np.zeros(Miner.N_FEATURES), num=1, rand_seed=seed)
+    start_state = env.make_latent_states()[0]
     starting_dist, pos = cast(
         Tuple[int, Tuple[int, int]], env.dist_to_diamond(start_state, return_pos=True)
     )
     agent_x, agent_y = start_state.agent_pos
 
     # If the diamond is to the right of the agent and there isn't a boulder in the way, go right.
-    if pos[0] > agent_x and start_state.grid[agent_x + 1][agent_y] not in (1, 3):
+    if pos[0] > agent_x and start_state.grid[agent_x + 1][agent_y] not in DIAMONDS:
         action = np.array([RIGHT])
-    elif pos[0] < agent_x and start_state.grid[agent_x - 1][agent_y] not in (1, 3):
+    elif pos[0] < agent_x and start_state.grid[agent_x - 1][agent_y] not in DIAMONDS:
         action = np.array([LEFT])
-    elif pos[1] > agent_y and start_state.grid[agent_x][agent_y + 1] not in (1, 3):
+    elif pos[1] > agent_y and start_state.grid[agent_x][agent_y + 1] not in DIAMONDS:
         action = np.array([UP])
-    elif pos[1] < agent_y and start_state.grid[agent_x][agent_y - 1] not in (1, 3):
+    elif pos[1] < agent_y and start_state.grid[agent_x][agent_y - 1] not in DIAMONDS:
         action = np.array([DOWN])
     else:
         return  # If there is a boulder in every direction closer to the diamond, then pass the test
@@ -109,7 +109,7 @@ def test_dist_to_diamond(seed: int):
 
     _, _, first = env.observe()
 
-    end_state = Miner.make_latent_state(env.get_info()[0], env.get_state()[0])
+    end_state = env.make_latent_states()[0]
     ending_dist = cast(int, Miner.dist_to_diamond(end_state))
 
     assert (
@@ -123,8 +123,8 @@ def test_dist_to_diamond(seed: int):
 @settings(deadline=None)
 @given(seed=integers(0, 2 ** 31 - 1),)
 def test_safe_at_start(seed):
-    env = Miner(reward_weights=np.zeros(3), num=1, rand_seed=seed)
-    start_state = Miner.make_latent_state(env.get_info()[0], env.get_state()[0])
+    env = Miner(reward_weights=np.zeros(Miner.N_FEATURES), num=1, rand_seed=seed)
+    start_state = env.make_latent_states()[0]
     agent_pos = start_state.agent_pos
     danger, t = cast(
         Tuple[bool, int], Miner.in_danger(start_state, return_time_to_die=True, debug=True)
@@ -267,8 +267,8 @@ def test_in_danger(seed):
     # into two below it. Then we can find a path to underneath the object, move down, and be in
     # danger.
 
-    env = Miner(reward_weights=np.zeros(3), num=1, rand_seed=seed)
-    start_state = Miner.make_latent_state(env.get_info()[0], env.get_state()[0])
+    env = Miner(reward_weights=np.zeros(Miner.N_FEATURES), num=1, rand_seed=seed)
+    start_state = env.make_latent_states()[0]
 
     path = find_path_to_dangerous_state(start_state)
 
@@ -279,12 +279,12 @@ def test_in_danger(seed):
 
     for action in path:
         env.act(np.array([action]))
-        state = Miner.make_latent_state(env.get_info()[0], env.get_state()[0])
+        state = env.make_latent_states()[0]
         if state.agent_pos[0] == old_agent_pos[0] and state.agent_pos[1] == old_agent_pos[1]:
             # We tried to path through an immobile rock, I'm not going to deal with this case
             pass
 
-    old_agent_pos = Miner.make_latent_state(env.get_info()[0], env.get_state()[0]).agent_pos
+    old_agent_pos = env.make_latent_states()[0].agent_pos
     agent_pos = old_agent_pos
 
     # We're in a dangerous position, keep trying to go down.
@@ -293,9 +293,9 @@ def test_in_danger(seed):
     while agent_pos[0] == old_agent_pos[0] and agent_pos[1] == old_agent_pos[1]:
         old_agent_pos = agent_pos
         env.act(np.array([DOWN]))
-        agent_pos = Miner.make_latent_state(env.get_info()[0], env.get_state()[0]).agent_pos
+        agent_pos = env.make_latent_states()[0].agent_pos
 
-    state = Miner.make_latent_state(env.get_info()[0], env.get_state()[0])
+    state = env.make_latent_states()[0]
     agent_x, agent_y = state.agent_pos
     danger, t = cast(Tuple[bool, int], Miner.in_danger(state, return_time_to_die=True))
 
@@ -314,13 +314,14 @@ def test_in_danger(seed):
 @settings(deadline=None)
 @given(
     seed=integers(0, 2 ** 31 - 1),
-    reward_weights=arrays(np.float64, (3,), elements=floats(allow_nan=False, allow_infinity=False)),
+    reward_weights=arrays(
+        np.float64, (Miner.N_FEATURES,), elements=floats(allow_nan=False, allow_infinity=False)
+    ),
 )
 def test_reward(seed: int, reward_weights: np.ndarray) -> None:
     env = Miner(reward_weights=reward_weights, num=1, rand_seed=seed)
-    state = Miner.make_latent_state(env.get_info()[0], env.get_state()[0])
-    features = Miner.make_feature(state)
+    features = env.make_features()
 
-    reward, _, _ = env.observe()
-    assert reward == reward_weights @ features
+    rewards, _, _ = env.observe()
+    assert np.array_equal(rewards, features @ reward_weights)
 
