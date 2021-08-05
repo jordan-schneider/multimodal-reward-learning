@@ -1,0 +1,21 @@
+name: mrl
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.8
+  - pytorch
+  - cpuonly
+  - qt=5.12.5
+  - mpi4py
+  - pip
+  - pip:
+    - gym3
+    - procgen
+    - torch
+    - pandas
+    - matplotlib
+    - numpy>=1.21
+    - gym
+    - filelock
+prefix: /home/joschnei/anaconda3/envs/mrl
