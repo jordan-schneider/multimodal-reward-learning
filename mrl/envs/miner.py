@@ -56,6 +56,9 @@ class Miner(ProcgenGym3Env):
 
         # compute features
         features = self.make_features()
+        assert self._reward_weights.shape == (
+            self.N_FEATURES,
+        ), f"reward weights={self._reward_weights}"
 
         rewards = features @ self._reward_weights
 
@@ -139,18 +142,23 @@ class Miner(ProcgenGym3Env):
             for state, n_diamonds in zip(self.states, self.diamonds)
         ]
 
-        return np.array([pickup, exits, dangers, dists, self.diamonds], dtype=np.float32).T
+        features = np.array([pickup, exits, dangers, dists, self.diamonds], dtype=np.float32).T
+        assert features.shape == (self.num, self.N_FEATURES)
+
+        return features
 
     @staticmethod
     def in_danger(
         state: MinerState, return_time_to_die: bool = False, debug: bool = False
     ) -> Union[bool, Tuple[bool, int]]:
-        sim = ProcgenGym3Env(1, env_name="miner", distribution_mode=state.difficulty)
+        sim = ProcgenGym3Env(
+            1,
+            env_name="miner",
+            distribution_mode=state.difficulty,
+        )
         sim.set_state((state.serialization,))
 
         start_state = Miner.make_latent_state(sim.get_info()[0], sim.get_state()[0])
-
-        assert state == start_state
 
         _, old_obs, _ = sim.observe()
 
