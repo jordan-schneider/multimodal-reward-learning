@@ -4,10 +4,10 @@ channels:
   - conda-forge
 dependencies:
   - python=3.8
-  - pytorch
-  - cpuonly
-  - qt=5.12.5
   - mpi4py
+  - c-compiler
+  - cmake
+  - qt=5.12.5
   - pip
   - pip:
     - gym3
@@ -18,4 +18,10 @@ dependencies:
     - numpy>=1.21
     - gym
     - filelock
-prefix: /home/joschnei/anaconda3/envs/mrl
+    - fire
+    # Dev
+    - pytest
+    - hypothesis
+    - mypy
+    - pylint
+    - black
