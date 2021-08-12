@@ -5,13 +5,11 @@ channels:
 dependencies:
   - python=3.8
   - mpi4py
-  - c-compiler
   - cmake
   - qt=5.12.5
   - pip
   - pip:
     - gym3
-    - procgen
     - torch
     - pandas
     - matplotlib
