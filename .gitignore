@@ -130,3 +130,6 @@ dmypy.json
 
 # Experiment data does not go in git
 data/
+
+# Memory profiling folder
+memprof/

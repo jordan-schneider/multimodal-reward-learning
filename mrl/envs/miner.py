@@ -45,6 +45,12 @@ class Miner(ProcgenGym3Env):
         self.diamonds = [Miner.diamonds_remaining(state) for state in self.states]
         self.firsts = [True] * num
 
+        self.danger_sim = ProcgenGym3Env(
+            1,
+            env_name="miner",
+            distribution_mode=kwargs.get("distribution_mode", "hard"),
+        )
+
     def act(self, action: np.ndarray) -> None:
         super().act(action)
         self.last_diamonds = self.diamonds
@@ -91,6 +97,7 @@ class Miner(ProcgenGym3Env):
             self.exit_pos = tuple(exit_pos)
             self.serialization = serialization
 
+            # TODO(joschnei): Consider removing this as deadcode.
             if grid.shape[0] == 10:
                 self.difficulty = "easy"
             elif grid.shape[0] == 20:
@@ -129,7 +136,7 @@ class Miner(ProcgenGym3Env):
         )
 
     def make_features(self) -> np.ndarray:
-        dangers = [Miner.in_danger(state) for state in self.states]
+        dangers = [self.in_danger(state) for state in self.states]
         dists = [Miner.dist_to_diamond(state) for state in self.states]
         pickup = [
             Miner.got_diamond(n_diamonds, last_n_diamonds, first)
@@ -147,27 +154,25 @@ class Miner(ProcgenGym3Env):
 
         return features
 
-    @staticmethod
     def in_danger(
-        state: MinerState, return_time_to_die: bool = False, debug: bool = False
+        self, state: MinerState, return_time_to_die: bool = False, debug: bool = False
     ) -> Union[bool, Tuple[bool, int]]:
-        sim = ProcgenGym3Env(
-            1,
-            env_name="miner",
-            distribution_mode=state.difficulty,
-        )
-        sim.set_state((state.serialization,))
+        self.danger_sim.set_state((state.serialization,))
 
-        start_state = Miner.make_latent_state(sim.get_info()[0], sim.get_state()[0])
+        if debug:
+            start_state = Miner.make_latent_state(
+                self.danger_sim.get_info()[0], self.danger_sim.get_state()[0]
+            )
 
-        _, old_obs, _ = sim.observe()
+        _, last_obs, _ = self.danger_sim.observe()
 
-        sim.act(np.array([Miner.ACTION_DICT["stay"]]))  # Do nothing
-        _, obs, first = sim.observe()
+        self.danger_sim.act(np.array([Miner.ACTION_DICT["stay"]]))
+        _, current_obs, first = self.danger_sim.observe()
 
-        after_state = Miner.make_latent_state(sim.get_info()[0], sim.get_state()[0])
-
-        if not first:
+        if debug and not first:
+            after_state = Miner.make_latent_state(
+                self.danger_sim.get_info()[0], self.danger_sim.get_state()[0]
+            )
             assert (
                 state.agent_pos[0] == after_state.agent_pos[0]
                 and state.agent_pos[1] == after_state.agent_pos[1]
@@ -175,16 +180,24 @@ class Miner(ProcgenGym3Env):
 
         t = 1
 
-        while np.all(obs["rgb"] != old_obs["rgb"]) and not first:
-            old_obs = obs
-            sim.act(np.array([4]))  # Do nothing
-            _, obs, first = sim.observe()
+        while np.all(current_obs["rgb"] != last_obs["rgb"]) and not first:
+            last_obs = current_obs
+            self.danger_sim.act(np.array([Miner.ACTION_DICT["stay"]]))
+            _, current_obs, first = self.danger_sim.observe()
             t += 1
             if debug:
                 print(t)
-                print(Miner.make_latent_state(sim.get_info()[0], sim.get_state()[0]).grid)
+                print(
+                    Miner.make_latent_state(
+                        self.danger_sim.get_info()[0], self.danger_sim.get_state()[0]
+                    ).grid
+                )
 
         # first means that we died somehow, which means we're in danger
+        # TODO(joschnei): This isn't quite true. There's a time horizon somewhere of 1000, and if
+        # it is also here then we can get first by simply running out of time. I probably won't
+        # fix this, as it only happens near the very end of the time horizon, and if you make it out
+        # there the danger penalty probably isn't affecting much.
         if return_time_to_die:
             return first, t
         else:
