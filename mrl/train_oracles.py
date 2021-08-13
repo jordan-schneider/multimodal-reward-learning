@@ -1,13 +1,27 @@
 from pathlib import Path
+from typing import Optional, Tuple, cast
 
 import fire  # type: ignore
 import gym3  # type: ignore
 import numpy as np
+import torch
 from mpi4py import MPI  # type: ignore
-from phasic_policy_gradient.train import train_fn  # type: ignore
+from phasic_policy_gradient import logger
+from phasic_policy_gradient.ppg import PhasicValueModel
+from phasic_policy_gradient.train import train_fn
 
 from mrl.envs import Miner
 from mrl.rewards import load_reward
+
+
+def get_model_path(modeldir: Path) -> Tuple[Optional[Path], int]:
+    models = modeldir.glob("model[0-9][0-9][0-9].jd")
+    if not models:
+        return None, 0
+
+    latest_model = sorted(models)[-1]
+    start_time = int(str(latest_model)[-6:-3])
+    return latest_model, start_time * 100_000
 
 
 def train(
@@ -30,7 +44,18 @@ def train(
 
     comm = MPI.COMM_WORLD
 
-    train_fn(arch="detach", n_epoch_vf=6, log_dir=path, comm=comm, venv=env, port=port)
+    model_path, start_time = get_model_path(path)
+
+    train_fn(
+        venv=env,
+        model_path=model_path,
+        start_time=start_time,
+        arch="detach",
+        n_epoch_vf=6,
+        log_dir=path,
+        comm=comm,
+        port=port,
+    )
 
 
 if __name__ == "__main__":
