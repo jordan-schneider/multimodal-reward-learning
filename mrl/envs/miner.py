@@ -97,28 +97,18 @@ class Miner(ProcgenGym3Env):
             self.exit_pos = tuple(exit_pos)
             self.serialization = serialization
 
-            # TODO(joschnei): Consider removing this as deadcode.
-            if grid.shape[0] == 10:
-                self.difficulty = "easy"
-            elif grid.shape[0] == 20:
-                self.difficulty = "hard"
-            elif grid.shape[0] == 35:
-                self.difficulty = "memory"
-
         def __eq__(self, other: Any) -> bool:
             correct_class = isinstance(other, Miner.MinerState)
             grid_equal = np.array_equal(self.grid, other.grid)
             agent_pos_equal = self.agent_pos == other.agent_pos
             exit_pos_equal = self.exit_pos == other.exit_pos
             serialization_equal = self.serialization == other.serialization
-            difficulty_equal = self.difficulty == other.difficulty
             return (
                 correct_class
                 and grid_equal
                 and agent_pos_equal
                 and exit_pos_equal
                 and serialization_equal
-                and difficulty_equal
             )
 
     def make_latent_states(self) -> List[MinerState]:
