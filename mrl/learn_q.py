@@ -4,6 +4,7 @@ from typing import Callable, cast
 
 import fire  # type: ignore
 import torch
+import tqdm
 from gym3 import Env  # type: ignore
 from gym3 import ExtractDictObWrapper
 from phasic_policy_gradient.ppg import PhasicValueModel
@@ -29,7 +30,15 @@ class QNetwork(torch.nn.Module):
         )
 
     def forward(self, obs: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        return self.head(self.enc(obs))[action]
+        assert obs.shape[1:] == (64, 64, 3)
+
+        # ImpalaEncoder expects (batch, time, h, w, c)
+        obs = obs.reshape((1, *obs.shape))
+
+        z = self.enc.stateless_forward(obs)
+        q_values = self.head(z)
+        out = q_values[0].gather(1, action.view(-1, 1)).reshape(-1)
+        return out
 
     @staticmethod
     def add_action_heads(n_actions: int, value_head: torch.nn.Linear) -> torch.nn.Linear:
@@ -46,6 +55,7 @@ class QNetwork(torch.nn.Module):
 
         out = type(value_head)(value_head.in_features, n_actions)
         out.weight.data[:] = value_head.weight
+        out = out.to(value_head.weight.device)
 
         return out
 
@@ -63,14 +73,20 @@ def train_q_with_v(
     n_epochs: int,
     batch_size: int,
 ) -> QNetwork:
-    for _ in range(n_epochs):
-        for states, actions, rewards, next_states in DataLoader(buffer, batch_size=batch_size):
-            optim.zero_grad()
-            q_pred = q.forward(states, actions)
-            q_targ = rewards + q.discount_rate * v(next_states)
-            loss = cast(torch.Tensor, (q_pred - q_targ) ** 2)
-            loss.backward()
-            optim.step()
+    for epoch in range(n_epochs):
+        with tqdm(DataLoader(buffer, batch_size=batch_size), unit="batch") as tepoch:
+            for states, actions, rewards, next_states in tepoch:
+                tepoch.set_description(f"Epoch {epoch}/{n_epochs}")
+
+                n = len(states)
+                optim.zero_grad()
+                q_pred = q.forward(states, actions)
+                q_targ = rewards + q.discount_rate * v(next_states).reshape(-1)
+                assert q_pred.shape == (n,), f"q_pred={q_pred.shape} not expected ({n})"
+                assert q_targ.shape == (n,), f"q_targ={q_targ.shape} not expected ({n})"
+                loss = torch.sum((q_pred - q_targ) ** 2)
+                loss.backward()
+                optim.step()
 
     return q
 
@@ -84,18 +100,12 @@ def learn_q(
     training_epochs: int = 10,
     batch_size: int = 64,
 ) -> QNetwork:
-    trajs = rollout(env, policy, env_interactions)
-    print(trajs.keys())
-    print(trajs["finalstate"])
-    print(trajs["ob"][0, -1])
-    # print(trajs)
-    exit()
     buffer = SarsDataset.from_dict(rollout(env, policy, env_interactions))
 
-    train_q_with_v(
+    q_network = train_q_with_v(
         buffer=buffer,
         q=q_network,
-        v=policy.value,
+        v=lambda x: policy.value(x.reshape(1, *x.shape))[0],  # V expects (batch, time, ...)
         optim=optim,
         n_epochs=training_epochs,
         batch_size=batch_size,
@@ -104,25 +114,36 @@ def learn_q(
     return q_network
 
 
-def refine(datadir: Path, lr: float = 10e-3, discount_rate: float = 0.99) -> None:
+def refine(
+    datadir: Path,
+    lr: float = 10e-3,
+    discount_rate: float = 0.999,
+    training_epochs: int = 10,
+    batch_size: int = 64,
+    env_interactions: int = 1_000_000,
+) -> None:
     datadir = Path(datadir)
     env = ProcgenGym3Env(1, "miner")
     env = ExtractDictObWrapper(env, "rgb")
 
-    model = torch.load(get_model_path(datadir)[0], map_location=torch.device("cuda:0"))
+    model_path, t = get_model_path(datadir)
+    model = torch.load(model_path, map_location=torch.device("cuda:0"))
     q = QNetwork(model, n_actions=16, discount_rate=discount_rate)
 
     optim = torch.optim.Adam(q.parameters(), lr=lr)
 
-    learn_q(
+    q = learn_q(
         env=env,
         policy=model,
         q_network=q,
         optim=optim,
-        training_epochs=2,
-        batch_size=2,
-        env_interactions=2000,
+        training_epochs=training_epochs,
+        batch_size=batch_size,
+        env_interactions=env_interactions,
     )
+
+    model_number = t // 100_000
+    torch.save(q, datadir / f"q_model_{model_number}.jd")
 
 
 if __name__ == "__main__":

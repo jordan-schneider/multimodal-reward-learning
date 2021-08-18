@@ -23,7 +23,7 @@ class SarsDataset(torch.utils.data.Dataset):
         self.index_map = self._compute_index_map(self.dones)
 
     def _compute_index_map(self, dones: torch.Tensor) -> np.ndarray:
-        index_map = np.empty((len(self)), dtype=np.uint64)
+        index_map = np.empty((len(self)), dtype=int)
         j = 0
         for i in range(len(self)):
             if dones[j]:
@@ -35,7 +35,7 @@ class SarsDataset(torch.utils.data.Dataset):
 
     def __len__(self) -> int:
         # Each time we end an episode, the final state cannot be used
-        return len(self.states) - np.sum(self.dones) - 1
+        return len(self.states) - torch.sum(self.dones) - 1
 
     def __getitem__(self, i: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         j = self.index_map[i]
@@ -49,6 +49,6 @@ class SarsDataset(torch.utils.data.Dataset):
         actions = cast(torch.Tensor, data["ac"]).flatten()  # (num, T) -> (num * T)
         rewards = cast(torch.Tensor, data["reward"]).flatten()  # (num, T) -> (num * T)
         firsts = cast(torch.Tensor, data["first"]).flatten()  # (num, T) -> (num * T)
-        dones = np.concatenate(firsts[1:], [False])
+        dones = firsts[1:]
 
         return cls(states, actions, rewards, dones)
