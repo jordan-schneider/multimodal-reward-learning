@@ -1,18 +1,14 @@
 from pathlib import Path
-from typing import Optional, Tuple, cast
 
 import fire  # type: ignore
 import gym3  # type: ignore
 import numpy as np
-import torch
 from mpi4py import MPI  # type: ignore
-from phasic_policy_gradient import logger
-from phasic_policy_gradient.ppg import PhasicValueModel
 from phasic_policy_gradient.train import train_fn
 
 from mrl.envs import Miner
 from mrl.rewards import load_reward
-from util import get_model_path
+from mrl.util import get_model_path
 
 
 def train(
