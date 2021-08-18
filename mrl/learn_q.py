@@ -1,23 +1,18 @@
+from copy import deepcopy
 from pathlib import Path
 from typing import Callable, cast
 
 import fire  # type: ignore
 import torch
 from gym3 import Env  # type: ignore
-from phasic_policy_gradient.impala_cnn import ImpalaEncoder
+from gym3 import ExtractDictObWrapper
 from phasic_policy_gradient.ppg import PhasicValueModel
 from phasic_policy_gradient.roller import Roller
 from procgen import ProcgenGym3Env
 from torch.utils.data import DataLoader
 
-from offline_buffer import SarsDataset
-from util import get_model_path
-
-
-def module_copy(m: torch.nn.Module) -> torch.nn.Module:
-    c = type(m)()
-    c.load_state_dict(m.state_dict())
-    return c
+from mrl.offline_buffer import SarsDataset
+from mrl.util import get_model_path
 
 
 class QNetwork(torch.nn.Module):
@@ -26,7 +21,7 @@ class QNetwork(torch.nn.Module):
         assert discount_rate >= 0.0 and discount_rate <= 1.0
         self.discount_rate = discount_rate
 
-        self.enc = ImpalaEncoder.from_enc(policy.get_encoder(policy.true_vf_key))
+        self.enc = deepcopy(policy.get_encoder(policy.true_vf_key))
 
         # TODO: Try random initialization to see if we're getting negative transfer here.
         self.head = self.add_action_heads(
@@ -89,6 +84,12 @@ def learn_q(
     training_epochs: int = 10,
     batch_size: int = 64,
 ) -> QNetwork:
+    trajs = rollout(env, policy, env_interactions)
+    print(trajs.keys())
+    print(trajs["finalstate"])
+    print(trajs["ob"][0, -1])
+    # print(trajs)
+    exit()
     buffer = SarsDataset.from_dict(rollout(env, policy, env_interactions))
 
     train_q_with_v(
@@ -106,6 +107,7 @@ def learn_q(
 def refine(datadir: Path, lr: float = 10e-3, discount_rate: float = 0.99) -> None:
     datadir = Path(datadir)
     env = ProcgenGym3Env(1, "miner")
+    env = ExtractDictObWrapper(env, "rgb")
 
     model = torch.load(get_model_path(datadir)[0], map_location=torch.device("cuda:0"))
     q = QNetwork(model, n_actions=16, discount_rate=discount_rate)
