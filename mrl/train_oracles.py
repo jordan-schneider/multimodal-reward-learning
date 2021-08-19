@@ -8,7 +8,7 @@ from phasic_policy_gradient.train import train_fn
 
 from mrl.envs import Miner
 from mrl.rewards import load_reward
-from mrl.util import get_model_path
+from mrl.util import find_policy_path
 
 
 def train(
@@ -31,7 +31,9 @@ def train(
 
     comm = MPI.COMM_WORLD
 
-    model_path, start_time = get_model_path(path)
+    model_path, model_iter = find_policy_path(path / "models")
+
+    start_time = model_iter * 100_000  # LogSaveHelper ic_per_save value
 
     train_fn(
         venv=env,
@@ -39,9 +41,10 @@ def train(
         start_time=start_time,
         arch="detach",
         n_epoch_vf=6,
-        log_dir=path,
+        log_dir=path / "logs",
         comm=comm,
         port=port,
+        save_dir=path / "models",
     )
 
 
