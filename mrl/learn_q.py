@@ -1,18 +1,18 @@
-import pickle
+import pickle as pkl
 from copy import deepcopy
 from pathlib import Path
-from typing import Callable, cast
+from typing import Callable, Optional, Tuple, cast
 
 import fire  # type: ignore
 import numpy as np  # type: ignore
 import torch
-import tqdm  # type: ignore
 from gym3 import Env  # type: ignore
 from gym3 import ExtractDictObWrapper
 from phasic_policy_gradient.ppg import PhasicValueModel
 from procgen import ProcgenGym3Env
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm  # type: ignore
 
 from mrl.offline_buffer import RLDataset, SarsDataset
 from mrl.util import find_policy_path, procgen_rollout
@@ -65,8 +65,8 @@ class QNetwork(torch.nn.Module):
 
 
 def train_q_with_v(
-    train_buffer: SarsDataset,
-    val_buffer: RLDataset,
+    train_data: SarsDataset,
+    val_data: RLDataset,
     q: QNetwork,
     v: Callable[[torch.Tensor], torch.Tensor],
     optim: torch.optim.Optimizer,
@@ -77,18 +77,17 @@ def train_q_with_v(
 ) -> QNetwork:
     val_counter = 0
     val_step = 0
-
     train_step = 0
     for epoch in range(n_epochs):
-        with tqdm(DataLoader(train_buffer, batch_size=batch_size), unit="batch") as tepoch:
+        with tqdm(DataLoader(dataset=train_data, batch_size=batch_size), unit="batch") as tepoch:
             for states, actions, rewards, next_states in tepoch:
                 tepoch.set_description(f"Epoch {epoch}/{n_epochs}")
 
                 n = len(states)
 
                 optim.zero_grad()
-                q_pred = q.forward(states, actions)
-                q_targ = rewards + q.discount_rate * v(next_states).reshape(-1)
+                q_pred = q.forward(states.to(device=q.device), actions.to(device=q.device)).cpu()
+                q_targ = rewards + q.discount_rate * v(next_states.to(q.device)).reshape(-1)
                 assert q_pred.shape == (n,), f"q_pred={q_pred.shape} not expected ({n})"
                 assert q_targ.shape == (n,), f"q_targ={q_targ.shape} not expected ({n})"
                 loss = torch.sum((q_pred - q_targ) ** 2)
@@ -105,7 +104,7 @@ def train_q_with_v(
                     val_counter = 0
                     val_loss = eval_q_rmse(
                         q_fn=q.forward,
-                        data=val_buffer,
+                        data=val_data,
                         discount_rate=q.discount_rate,
                         device=q.device,
                     )
@@ -115,40 +114,55 @@ def train_q_with_v(
     return q
 
 
-def learn_q(
-    env: Env,
-    policy: PhasicValueModel,
-    q_network: QNetwork,
-    optim: torch.optim.Optimizer,
-    writer: SummaryWriter,
+def get_rollouts(
+    datadir: Path,
     train_env_steps: int,
     val_env_steps: int,
-    training_epochs: int,
-    batch_size: int,
-    val_period: int,
-    outdir: Path,
-) -> QNetwork:
-    train_buffer = SarsDataset.from_rl_dataset(procgen_rollout(env, policy, train_env_steps))
+    policy: PhasicValueModel,
+    overwrite: bool,
+) -> Tuple[SarsDataset, RLDataset]:
+    train_rollouts_path = datadir / "train_rollouts.pkl"
+    val_rollouts_path = datadir / "val_rollouts.pkl"
 
-    pickle.dump(train_buffer, open(outdir / "train_rollouts.pkl", "wb"))
+    train_data: Optional[SarsDataset] = None
+    val_data: Optional[RLDataset] = None
 
-    val_buffer = SarsDataset.from_rl_dataset(procgen_rollout(env, policy, val_env_steps))
+    if not overwrite and train_rollouts_path.exists() and val_rollouts_path.exists():
+        train_data = cast(SarsDataset, pkl.load(train_rollouts_path.open("rb")))
+        val_data = cast(RLDataset, pkl.load(val_rollouts_path.open("rb")))
 
-    pickle.dump(val_buffer, open(outdir / "val_rollouts.pkl", "wb"))
+        train_missing = train_env_steps - len(train_data.states)
+        val_missing = val_env_steps - len(val_data.states)
+    else:
+        train_missing = train_env_steps
+        val_missing = val_env_steps
 
-    q_network = train_q_with_v(
-        train_buffer=train_buffer,
-        val_buffer=val_buffer,
-        q=q_network,
-        v=lambda x: policy.value(x.reshape(1, *x.shape))[0],  # V expects (batch, time, ...)
-        optim=optim,
-        n_epochs=training_epochs,
-        batch_size=batch_size,
-        writer=writer,
-        val_period=val_period,
-    )
+    if train_missing > 0 or val_missing > 0:
+        env = ProcgenGym3Env(1, "miner")
+        env = ExtractDictObWrapper(env, "rgb")
+        if train_missing > 0:
+            print(train_missing)
+            states, actions, rewards, firsts = procgen_rollout(env, policy, train_missing)
+            if train_data is not None:
+                train_data.append_gym3(states, actions, rewards, firsts)
+            else:
+                train_data = SarsDataset.from_gym3(states, actions, rewards, firsts)
 
-    return q_network
+            pkl.dump(train_data, open(datadir / "train_rollouts.pkl", "wb"))
+        if val_missing > 0:
+            print(val_missing)
+            states, actions, rewards, firsts = procgen_rollout(env, policy, val_missing)
+            if val_data is not None:
+                val_data.append_gym3(states, actions, rewards, firsts)
+            else:
+                val_data = RLDataset.from_gym3(states, actions, rewards, firsts)
+
+            pkl.dump(val_data, open(datadir / "val_rollouts.pkl", "wb"))
+
+    assert train_data is not None
+    assert val_data is not None
+
+    return train_data, val_data
 
 
 def refine(
@@ -160,35 +174,33 @@ def refine(
     train_env_steps: int = 1_000_000,
     val_env_steps: int = 100_000,
     val_period: int = 2000 * 10,
+    overwrite: bool = False,
 ) -> None:
     datadir = Path(datadir)
-    env = ProcgenGym3Env(1, "miner")
-    env = ExtractDictObWrapper(env, "rgb")
 
     policy_path, policy_iter = find_policy_path(datadir / "models")
-    model = torch.load(policy_path, map_location=torch.device("cuda:0"))
-    q = QNetwork(model, n_actions=16, discount_rate=discount_rate)
+    policy = torch.load(policy_path, map_location=torch.device("cuda:0"))
+    q = QNetwork(policy, n_actions=16, discount_rate=discount_rate)
+
+    train_data, val_data = get_rollouts(datadir, train_env_steps, val_env_steps, policy, overwrite)
 
     optim = torch.optim.Adam(q.parameters(), lr=lr)
 
     writer = SummaryWriter(log_dir=datadir / "logs")
 
-    q = learn_q(
-        env=env,
-        policy=model,
-        q_network=q,
+    q = train_q_with_v(
+        train_data=train_data,
+        val_data=val_data,
+        q=q,
+        v=lambda x: policy.value(x.reshape(1, *x.shape))[0].cpu(),  # V expects (batch, time, ...)
         optim=optim,
-        training_epochs=training_epochs,
+        n_epochs=training_epochs,
         batch_size=batch_size,
-        train_env_steps=train_env_steps,
-        val_env_steps=val_env_steps,
-        val_period=val_period,
         writer=writer,
-        outdir=datadir,
+        val_period=val_period,
     )
 
-    model_number = policy_iter // 100_000
-    torch.save(q, datadir / f"q_model_{model_number}.jd")
+    torch.save(q, datadir / f"models/q_model_{policy_iter}.jd")
 
 
 def compute_returns(
@@ -219,11 +231,7 @@ def eval_q_rmse(
 ) -> float:
     loss = 0.0
     for states, actions, rewards in data.trajs(include_incomplete=False):
-        values = (
-            q_fn(torch.tensor(states[:-1], device=device), torch.tensor(actions, device=device))
-            .detach()
-            .cpu()
-        )
+        values = q_fn(states[:-1].to(device=device), actions.to(device=device)).detach().cpu()
         returns = compute_returns(rewards.numpy(), discount_rate)[:-1]
 
         errors = values - returns
@@ -243,7 +251,7 @@ def eval(datadir: Path, discount_rate: float = 0.999, env_interactions: int = 1_
     env = ExtractDictObWrapper(env, "rgb")
     print("Gathering environment interactions")
     data = procgen_rollout(env, policy, env_interactions)
-    pickle.dump(data, open(datadir / "eval_rollouts.pkl", "wb"))
+    pkl.dump(data, open(datadir / "eval_rollouts.pkl", "wb"))
 
     print("Evaluating loss")
     loss = eval_q_rmse(q.forward, data, discount_rate, device=q.device)
