@@ -19,19 +19,34 @@ class RLDataset:
         self.rewards = rewards
         self.dones = dones
 
-    @classmethod
-    def from_gym3(
-        cls, states: np.ndarray, actions: np.ndarray, rewards: np.ndarray, firsts: np.ndarray
-    ) -> RLDataset:
-        """Builds RLDataset from procgen_rollout output arrays"""
+    @staticmethod
+    def process_gym3(
+        states: np.ndarray, actions: np.ndarray, rewards: np.ndarray, firsts: np.ndarray
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         # (T, num, H, W, C) -> (num * T, H, W, C)
         flat_states = torch.tensor(states).flatten(0, 1)
         flat_actions = torch.tensor(actions).flatten()  # (num, T) -> (num * T)
         flat_rewards = torch.tensor(rewards).flatten()  # (num, T) -> (num * T)
         flat_firsts = torch.tensor(firsts).flatten()  # (num, T) -> (num * T)
         dones = flat_firsts[1:]
+        return flat_states, flat_actions, flat_rewards, dones
 
-        return cls(flat_states, flat_actions, flat_rewards, dones)
+    @classmethod
+    def from_gym3(
+        cls, states: np.ndarray, actions: np.ndarray, rewards: np.ndarray, firsts: np.ndarray
+    ) -> RLDataset:
+        """Builds RLDataset from procgen_rollout output arrays"""
+        return cls(*RLDataset.process_gym3(states, actions, rewards, firsts))
+
+    def append_gym3(
+        self, states: np.ndarray, actions: np.ndarray, rewards: np.ndarray, firsts: np.ndarray
+    ) -> RLDataset:
+        s, a, r, d = self.process_gym3(states, actions, rewards, firsts)
+        self.states = torch.cat((self.states, s), dim=0)
+        self.actions = torch.cat((self.actions, a))
+        self.rewards = torch.cat((self.rewards, r))
+        self.dones = torch.cat((self.rewards, d))
+        return self
 
     @classmethod
     def from_dict(cls, data: dict) -> RLDataset:
@@ -96,3 +111,14 @@ class SarsDataset(torch.utils.data.Dataset, RLDataset):
     @classmethod
     def from_rl_dataset(cls, data: RLDataset) -> SarsDataset:
         return cls(data.states, data.actions, data.rewards, data.dones)
+
+    @classmethod
+    def from_gym3(
+        cls, states: np.ndarray, actions: np.ndarray, rewards: np.ndarray, firsts: np.ndarray
+    ) -> SarsDataset:
+        return cls(*RLDataset.process_gym3(states, actions, rewards, firsts))
+
+    def append_gym3(
+        self, states: np.ndarray, actions: np.ndarray, rewards: np.ndarray, firsts: np.ndarray
+    ) -> SarsDataset:
+        super().append_gym3(states, actions, rewards, firsts)

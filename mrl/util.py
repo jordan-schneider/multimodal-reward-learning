@@ -10,7 +10,9 @@ from tqdm import trange
 from mrl.offline_buffer import RLDataset
 
 
-def procgen_rollout(env: ProcgenGym3Env, policy: PhasicValueModel, timesteps: int) -> RLDataset:
+def procgen_rollout(
+    env: ProcgenGym3Env, policy: PhasicValueModel, timesteps: int
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     state_shape = env.ob_space.shape
 
     states = np.empty((timesteps, env.num, *state_shape))
@@ -35,7 +37,7 @@ def procgen_rollout(env: ProcgenGym3Env, policy: PhasicValueModel, timesteps: in
         actions[t] = action
     record(timesteps - 1, env, states, rewards, firsts)
 
-    return RLDataset.from_gym3(states, actions, rewards, firsts)
+    return states, actions, rewards, firsts
 
 
 def find_policy_path(policydir: Path) -> Tuple[Optional[Path], int]:
