@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Generator, Iterator, Tuple, cast
+import logging
+from typing import Generator, Tuple, cast
 
 import numpy as np
 import torch
@@ -45,7 +46,7 @@ class RLDataset:
         self.states = torch.cat((self.states, s), dim=0)
         self.actions = torch.cat((self.actions, a))
         self.rewards = torch.cat((self.rewards, r))
-        self.dones = torch.cat((self.rewards, d))
+        self.dones = torch.cat((self.dones, d))
         return self
 
     @classmethod
@@ -87,13 +88,16 @@ class SarsDataset(torch.utils.data.Dataset, RLDataset):
     ) -> None:
         super().__init__(states, actions, rewards, dones)
 
+        if len(self) < 0:
+            raise ValueError("dones cannot be all True")
+
         self.index_map = self._compute_index_map(self.dones)
 
     def _compute_index_map(self, dones: torch.Tensor) -> np.ndarray:
         index_map = np.empty((len(self)), dtype=int)
         j = 0
         for i in range(len(self)):
-            if dones[j]:
+            while dones[j]:
                 j += 1
             index_map[i] = j
             j += 1
@@ -106,6 +110,7 @@ class SarsDataset(torch.utils.data.Dataset, RLDataset):
 
     def __getitem__(self, i: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         j = self.index_map[i]
+        logging.debug(f"Mapping {i} to {j}")
         return self.states[j], self.actions[j], self.rewards[j], self.states[j + 1]
 
     @classmethod
@@ -121,4 +126,5 @@ class SarsDataset(torch.utils.data.Dataset, RLDataset):
     def append_gym3(
         self, states: np.ndarray, actions: np.ndarray, rewards: np.ndarray, firsts: np.ndarray
     ) -> SarsDataset:
-        super().append_gym3(states, actions, rewards, firsts)
+        """This function exists entirely to fix the return type."""
+        return cast(SarsDataset, super().append_gym3(states, actions, rewards, firsts))
