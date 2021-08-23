@@ -34,15 +34,19 @@ class QNetwork(torch.nn.Module):
         self.device = policy.device
 
     def forward(self, obs: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+        q_values = self.get_action_values(obs)
+        out = q_values.gather(dim=1, index=action.view(-1, 1)).reshape(-1)
+        return out
+
+    def get_action_values(self, obs: torch.Tensor) -> torch.Tensor:
         assert obs.shape[1:] == (64, 64, 3)
 
         # ImpalaEncoder expects (batch, time, h, w, c)
         obs = obs.reshape((1, *obs.shape))
 
         z = self.enc.stateless_forward(obs)
-        q_values = self.head(z)
-        out = q_values[0].gather(1, action.view(-1, 1)).reshape(-1)
-        return out
+        q_values = self.head(z)[0]
+        return q_values
 
     @staticmethod
     def add_action_heads(n_actions: int, value_head: torch.nn.Linear) -> torch.nn.Linear:
@@ -68,12 +72,12 @@ def train_q_with_v(
     train_data: SarsDataset,
     val_data: RLDataset,
     q: QNetwork,
-    v: Callable[[torch.Tensor], torch.Tensor],
     optim: torch.optim.Optimizer,
     n_epochs: int,
     batch_size: int,
     val_period: int,
     writer: SummaryWriter,
+    v: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
 ) -> QNetwork:
     val_counter = 0
     val_step = 0
@@ -87,7 +91,15 @@ def train_q_with_v(
 
                 optim.zero_grad()
                 q_pred = q.forward(states.to(device=q.device), actions.to(device=q.device)).cpu()
-                q_targ = rewards + q.discount_rate * v(next_states.to(q.device)).reshape(-1)
+
+                if v is not None:
+                    v_next = v(next_states.to(q.device)).reshape(-1)
+                else:
+                    q_values = q.get_action_values(next_states.to(q.device))
+                    v_next, _ = q_values.max(dim=1)
+                    v_next = v_next.cpu()
+
+                q_targ = rewards + q.discount_rate * v_next
                 assert q_pred.shape == (n,), f"q_pred={q_pred.shape} not expected ({n})"
                 assert q_targ.shape == (n,), f"q_targ={q_targ.shape} not expected ({n})"
                 loss = torch.sum((q_pred - q_targ) ** 2)
@@ -166,7 +178,8 @@ def get_rollouts(
 
 
 def refine(
-    datadir: Path,
+    indir: Path,
+    outdir: Path,
     lr: float = 10e-3,
     discount_rate: float = 0.999,
     training_epochs: int = 10,
@@ -174,25 +187,34 @@ def refine(
     train_env_steps: int = 1_000_000,
     val_env_steps: int = 100_000,
     val_period: int = 2000 * 10,
+    use_v_next_state: bool = False,
     overwrite: bool = False,
 ) -> None:
-    datadir = Path(datadir)
+    indir = Path(indir)
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
 
-    policy_path, policy_iter = find_policy_path(datadir / "models")
+    policy_path, policy_iter = find_policy_path(indir / "models")
     policy = torch.load(policy_path, map_location=torch.device("cuda:0"))
     q = QNetwork(policy, n_actions=16, discount_rate=discount_rate)
 
-    train_data, val_data = get_rollouts(datadir, train_env_steps, val_env_steps, policy, overwrite)
+    train_data, val_data = get_rollouts(outdir, train_env_steps, val_env_steps, policy, overwrite)
 
     optim = torch.optim.Adam(q.parameters(), lr=lr)
 
-    writer = SummaryWriter(log_dir=datadir / "logs")
+    writer = SummaryWriter(log_dir=outdir / "logs")
+
+    if use_v_next_state:
+        # V expects (batch, time, ...)
+        v: Optional[Callable] = lambda x: policy.value(x.reshape(1, *x.shape))[0].cpu()
+    else:
+        v = None
 
     q = train_q_with_v(
         train_data=train_data,
         val_data=val_data,
         q=q,
-        v=lambda x: policy.value(x.reshape(1, *x.shape))[0].cpu(),  # V expects (batch, time, ...)
+        v=v,
         optim=optim,
         n_epochs=training_epochs,
         batch_size=batch_size,
@@ -200,7 +222,7 @@ def refine(
         val_period=val_period,
     )
 
-    torch.save(q, datadir / f"models/q_model_{policy_iter}.jd")
+    torch.save(q, outdir / f"models/q_model_{policy_iter}.jd")
 
 
 def compute_returns(
@@ -216,13 +238,14 @@ def compute_returns(
     else:
         returns = np.empty(len(rewards))
         current_return = 0
-        for i, reward in enumerate(reversed(rewards)):
+        for i, reward in enumerate(reversed(rewards)):  # type: ignore
             current_return = current_return * discount_rate + reward
             returns[-i] = current_return
 
     return returns
 
 
+@torch.no_grad()
 def eval_q_rmse(
     q_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
     data: RLDataset,
@@ -250,7 +273,7 @@ def eval(datadir: Path, discount_rate: float = 0.999, env_interactions: int = 1_
     env = ProcgenGym3Env(1, "miner")
     env = ExtractDictObWrapper(env, "rgb")
     print("Gathering environment interactions")
-    data = procgen_rollout(env, policy, env_interactions)
+    data = RLDataset.from_gym3(*procgen_rollout(env, policy, env_interactions))
     pkl.dump(data, open(datadir / "eval_rollouts.pkl", "wb"))
 
     print("Evaluating loss")
