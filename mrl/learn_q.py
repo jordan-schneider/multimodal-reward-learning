@@ -1,3 +1,4 @@
+import logging
 import pickle as pkl
 from copy import deepcopy
 from functools import partial
@@ -91,6 +92,7 @@ def train_q_with_v(
     train_step = 0
     n_batches = n_train_steps // batch_size
     for _ in trange(n_batches):
+        # TODO(joschnei): Change get_env_interactions to a Protocol or class to fix mypy error
         states, actions, rewards, next_states = get_env_interactions(timesteps=batch_size)
 
         # n is not batch_size because batch_size actions generate batch_size - # dones - 1
@@ -173,7 +175,7 @@ def refine(
     lr: float = 10e-3,
     discount_rate: float = 0.999,
     batch_size: int = 64,
-    train_env_steps: int = 1_000_000,
+    train_env_steps: int = 10_000_000,
     val_env_steps: int = 100_000,
     val_period: int = 2000 * 10,
     overwrite: bool = False,
@@ -184,7 +186,16 @@ def refine(
 
     policy_path, policy_iter = find_policy_path(indir / "models")
     policy = torch.load(policy_path, map_location=torch.device("cuda:0"))
-    q = QNetwork(policy, n_actions=16, discount_rate=discount_rate)
+
+    model_outdir = outdir / "models"
+    model_outdir.mkdir(parents=True, exist_ok=True)
+    model_path = model_outdir / f"q_model_{policy_iter}.jd"
+
+    if model_path.exists():
+        logging.info(f"Loading Q model from {model_path}")
+        q = cast(QNetwork, torch.load(model_path))
+    else:
+        q = QNetwork(policy, n_actions=16, discount_rate=discount_rate)
 
     env = ProcgenGym3Env(1, "miner")
     env = ExtractDictObWrapper(env, "rgb")
@@ -208,9 +219,7 @@ def refine(
         writer=writer,
     )
 
-    model_outdir = outdir / "models"
-    model_outdir.mkdir(parents=True, exist_ok=True)
-    torch.save(q, model_outdir / f"q_model_{policy_iter}.jd")
+    torch.save(q, model_path)
 
 
 def compute_returns(
@@ -260,14 +269,14 @@ def eval(datadir: Path, discount_rate: float = 0.999, env_interactions: int = 1_
 
     env = ProcgenGym3Env(1, "miner")
     env = ExtractDictObWrapper(env, "rgb")
-    print("Gathering environment interactions")
+    logging.info("Gathering environment interactions")
     data = RLDataset.from_gym3(*procgen_rollout(env, policy, env_interactions, tqdm=True))
     pkl.dump(data, open(datadir / "eval_rollouts.pkl", "wb"))
 
-    print("Evaluating loss")
+    logging.info("Evaluating loss")
     loss = eval_q_rmse(q.forward, data, discount_rate, device=q.device)
 
-    print(f"Loss={loss} over {env_interactions} env timesteps.")
+    logging.info(f"Loss={loss} over {env_interactions} env timesteps.")
 
 
 if __name__ == "__main__":
