@@ -1,3 +1,4 @@
+import logging
 from typing import Any, Dict, Final, List, Optional, Tuple, Union, cast
 
 import numpy as np
@@ -176,8 +177,8 @@ class Miner(ProcgenGym3Env):
             _, current_obs, first = self.danger_sim.observe()
             t += 1
             if debug:
-                print(t)
-                print(
+                logging.debug(t)
+                logging.debug(
                     Miner.make_latent_state(
                         self.danger_sim.get_info()[0], self.danger_sim.get_state()[0]
                     ).grid
