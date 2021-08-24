@@ -198,13 +198,24 @@ class Miner(ProcgenGym3Env):
     def dist_to_diamond(
         state: MinerState, return_pos: bool = False
     ) -> Union[int, Tuple[int, Tuple[int, int]]]:
+        if Miner.diamonds_remaining(state) == 0:
+            if return_pos:
+                return 0, (0, 0)
+            else:
+                return 0
+
+        MAX_DIST: Final[int] = 35 * 2 + 1  # maximum possible L_1 distance on a 35x35 grid
         agent_x, agent_y = state.agent_pos
-        min_dist = 35 * 2 + 1  # maximum possible L_1 distance on a 35x35 grid
+        min_dist = MAX_DIST
         assert len(state.grid.shape) == 2
         for x in range(state.grid.shape[0]):
             for y in range(state.grid.shape[1]):
                 if "diamond" in state.GRID_ITEM_NAMES[state.grid[x][y]]:
                     dist = np.abs(agent_x - x) + np.abs(agent_y - y)
+                    assert (
+                        dist < MAX_DIST
+                    ), f"Dist larger than theoretical max: ({agent_x},{agent_y}) to ({x},{y}) for dist={dist}"
+
                     if dist < min_dist:
                         min_dist = dist
                         pos_closest_diamond = (x, y)
