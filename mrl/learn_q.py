@@ -2,7 +2,7 @@ import logging
 import pickle as pkl
 from copy import deepcopy
 from pathlib import Path
-from typing import Callable, Optional, cast
+from typing import Callable, Literal, Optional, cast
 
 import fire  # type: ignore
 import numpy as np  # type: ignore
@@ -152,7 +152,7 @@ def learn_trunc_returns(
         optim.zero_grad()
         q_pred = q.forward(states.to(device=q.device), actions.to(device=q.device)).cpu()
         assert q_pred.shape == (n,), f"q_pred={q_pred.shape} not expected ({n})"
-        loss = torch.sum((q_pred - partial_returns.to(q.device)) ** 2)
+        loss = torch.sum((q_pred - partial_returns) ** 2)
 
         writer.add_scalar("train/loss", loss, global_step=train_step)
 
@@ -221,11 +221,14 @@ def refine(
     trunc_returns: bool = False,
     trunc_horizon: Optional[int] = None,
     overwrite: bool = False,
+    verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> None:
     if trunc_returns:
         assert (
             trunc_horizon is not None
         ), f"Must specify a truncation horizon to use truncated returns."
+
+    logging.basicConfig(level=verbosity)
 
     indir = Path(indir)
     outdir = Path(outdir)
@@ -327,12 +330,18 @@ def eval_q_partial_rmse(
     discount_rate: float,
     device: torch.device,
 ) -> float:
-    loss = 0.0
-    for states, actions, partial_returns in data.truncated_returns(
+    states, actions, partial_returns = data.truncated_returns(
         horizon=k, discount_rate=discount_rate
+    )
+
+    loss = 0.0
+    for state_batch, action_batch, return_batch in zip(
+        np.array_split(states, len(states) // 100),
+        np.array_split(actions, len(actions) // 100),
+        np.array_split(partial_returns, len(partial_returns) // 100),
     ):
-        values = q_fn(states[:-1].to(device=device), actions.to(device=device)).detach().cpu()
-        errors = values - partial_returns
+        values = q_fn(state_batch.to(device=device), action_batch.to(device=device)).detach().cpu()
+        errors = values - return_batch
         loss += torch.sqrt(torch.mean(errors ** 2)).item()
     return loss
 
