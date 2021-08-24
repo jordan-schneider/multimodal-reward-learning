@@ -222,7 +222,9 @@ def refine(
         val_period=val_period,
     )
 
-    torch.save(q, outdir / f"models/q_model_{policy_iter}.jd")
+    model_outdir = outdir / "models"
+    model_outdir.mkdir(parents=True, exist_ok=True)
+    torch.save(q, model_outdir / f"q_model_{policy_iter}.jd")
 
 
 def compute_returns(
