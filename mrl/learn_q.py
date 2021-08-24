@@ -1,7 +1,8 @@
 import pickle as pkl
 from copy import deepcopy
+from functools import partial
 from pathlib import Path
-from typing import Callable, Optional, Tuple, cast
+from typing import Callable, Iterable, Optional, Tuple, cast
 
 import fire  # type: ignore
 import numpy as np  # type: ignore
@@ -12,7 +13,7 @@ from phasic_policy_gradient.ppg import PhasicValueModel
 from procgen import ProcgenGym3Env
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-from tqdm import tqdm  # type: ignore
+from tqdm import trange  # type: ignore
 
 from mrl.offline_buffer import RLDataset, SarsDataset
 from mrl.util import find_policy_path, procgen_rollout
@@ -48,6 +49,11 @@ class QNetwork(torch.nn.Module):
         q_values = self.head(z)[0]
         return q_values
 
+    def state_value(self, obs: torch.Tensor) -> torch.Tensor:
+        q_values = self.get_action_values(obs)
+        v, _ = q_values.max(dim=1)
+        return v
+
     @staticmethod
     def add_action_heads(n_actions: int, value_head: torch.nn.Linear) -> torch.nn.Linear:
         """Takes a state value head and copies it to n_action state-action value heads.
@@ -69,112 +75,96 @@ class QNetwork(torch.nn.Module):
 
 
 def train_q_with_v(
-    train_data: SarsDataset,
+    get_env_interactions: Callable[
+        [int], Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+    ],
+    n_train_steps: int,
     val_data: RLDataset,
     q: QNetwork,
     optim: torch.optim.Optimizer,
-    n_epochs: int,
     batch_size: int,
     val_period: int,
     writer: SummaryWriter,
-    v: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
 ) -> QNetwork:
     val_counter = 0
     val_step = 0
     train_step = 0
-    for epoch in range(n_epochs):
-        with tqdm(DataLoader(dataset=train_data, batch_size=batch_size), unit="batch") as tepoch:
-            for states, actions, rewards, next_states in tepoch:
-                tepoch.set_description(f"Epoch {epoch}/{n_epochs}")
+    n_batches = n_train_steps // batch_size
+    for _ in trange(n_batches):
+        states, actions, rewards, next_states = get_env_interactions(timesteps=batch_size)
 
-                n = len(states)
+        # n is not batch_size because batch_size actions generate batch_size - # dones - 1
+        # usable transitions
+        n = len(states)
 
-                optim.zero_grad()
-                q_pred = q.forward(states.to(device=q.device), actions.to(device=q.device)).cpu()
+        optim.zero_grad()
+        q_pred = q.forward(states.to(device=q.device), actions.to(device=q.device)).cpu()
 
-                if v is not None:
-                    v_next = v(next_states.to(q.device)).reshape(-1)
-                else:
-                    q_values = q.get_action_values(next_states.to(q.device))
-                    v_next, _ = q_values.max(dim=1)
-                    v_next = v_next.cpu()
+        v_next = q.state_value(next_states.to(q.device)).cpu()
+        q_targ = rewards + q.discount_rate * v_next
+        assert q_pred.shape == (n,), f"q_pred={q_pred.shape} not expected ({n})"
+        assert q_targ.shape == (n,), f"q_targ={q_targ.shape} not expected ({n})"
+        loss = torch.sum((q_pred - q_targ) ** 2)
 
-                q_targ = rewards + q.discount_rate * v_next
-                assert q_pred.shape == (n,), f"q_pred={q_pred.shape} not expected ({n})"
-                assert q_targ.shape == (n,), f"q_targ={q_targ.shape} not expected ({n})"
-                loss = torch.sum((q_pred - q_targ) ** 2)
+        writer.add_scalar("train/loss", loss, global_step=train_step)
 
-                writer.add_scalar("train/loss", loss, global_step=train_step)
+        loss.backward()
+        optim.step()
 
-                loss.backward()
-                optim.step()
+        train_step += 1
+        val_counter += n
 
-                train_step += 1
-                val_counter += n
-
-                if val_counter > val_period:
-                    val_counter = 0
-                    val_loss = eval_q_rmse(
-                        q_fn=q.forward,
-                        data=val_data,
-                        discount_rate=q.discount_rate,
-                        device=q.device,
-                    )
-                    writer.add_scalar("val/rmse", val_loss, global_step=val_step)
-                    val_step += 1
+        if val_counter > val_period:
+            val_counter = 0
+            val_loss = eval_q_rmse(
+                q_fn=q.forward,
+                data=val_data,
+                discount_rate=q.discount_rate,
+                device=q.device,
+            )
+            writer.add_scalar("val/rmse", val_loss, global_step=val_step)
+            val_step += 1
 
     return q
 
 
 def get_rollouts(
-    datadir: Path,
-    train_env_steps: int,
+    env: ProcgenGym3Env,
     val_env_steps: int,
     policy: PhasicValueModel,
+    datadir: Path,
     overwrite: bool,
-) -> Tuple[SarsDataset, RLDataset]:
-    train_rollouts_path = datadir / "train_rollouts.pkl"
+) -> RLDataset:
     val_rollouts_path = datadir / "val_rollouts.pkl"
 
-    train_data: Optional[SarsDataset] = None
     val_data: Optional[RLDataset] = None
 
-    if not overwrite and train_rollouts_path.exists() and val_rollouts_path.exists():
-        train_data = cast(SarsDataset, pkl.load(train_rollouts_path.open("rb")))
+    if not overwrite and val_rollouts_path.exists():
         val_data = cast(RLDataset, pkl.load(val_rollouts_path.open("rb")))
 
-        train_missing = train_env_steps - len(train_data.states)
         val_missing = val_env_steps - len(val_data.states)
     else:
-        train_missing = train_env_steps
         val_missing = val_env_steps
 
-    if train_missing > 0 or val_missing > 0:
-        env = ProcgenGym3Env(1, "miner")
-        env = ExtractDictObWrapper(env, "rgb")
-        if train_missing > 0:
-            print(train_missing)
-            states, actions, rewards, firsts = procgen_rollout(env, policy, train_missing)
-            if train_data is not None:
-                train_data.append_gym3(states, actions, rewards, firsts)
-            else:
-                train_data = SarsDataset.from_gym3(states, actions, rewards, firsts)
+    if val_missing > 0:
+        states, actions, rewards, firsts = procgen_rollout(env, policy, val_missing, tqdm=True)
+        if val_data is not None:
+            val_data.append_gym3(states, actions, rewards, firsts)
+        else:
+            val_data = RLDataset.from_gym3(states, actions, rewards, firsts)
 
-            pkl.dump(train_data, open(datadir / "train_rollouts.pkl", "wb"))
-        if val_missing > 0:
-            print(val_missing)
-            states, actions, rewards, firsts = procgen_rollout(env, policy, val_missing)
-            if val_data is not None:
-                val_data.append_gym3(states, actions, rewards, firsts)
-            else:
-                val_data = RLDataset.from_gym3(states, actions, rewards, firsts)
+        pkl.dump(val_data, open(datadir / "val_rollouts.pkl", "wb"))
 
-            pkl.dump(val_data, open(datadir / "val_rollouts.pkl", "wb"))
-
-    assert train_data is not None
     assert val_data is not None
 
-    return train_data, val_data
+    return val_data
+
+
+def make_sars_rollout(
+    env: ProcgenGym3Env, policy: PhasicValueModel, timesteps: int
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    data = SarsDataset.from_gym3(*procgen_rollout(env, policy, timesteps))
+    return data.make_sars()
 
 
 def refine(
@@ -182,12 +172,10 @@ def refine(
     outdir: Path,
     lr: float = 10e-3,
     discount_rate: float = 0.999,
-    training_epochs: int = 10,
     batch_size: int = 64,
     train_env_steps: int = 1_000_000,
     val_env_steps: int = 100_000,
     val_period: int = 2000 * 10,
-    use_v_next_state: bool = False,
     overwrite: bool = False,
 ) -> None:
     indir = Path(indir)
@@ -198,28 +186,26 @@ def refine(
     policy = torch.load(policy_path, map_location=torch.device("cuda:0"))
     q = QNetwork(policy, n_actions=16, discount_rate=discount_rate)
 
-    train_data, val_data = get_rollouts(outdir, train_env_steps, val_env_steps, policy, overwrite)
+    env = ProcgenGym3Env(1, "miner")
+    env = ExtractDictObWrapper(env, "rgb")
+
+    val_data = get_rollouts(
+        env=env, val_env_steps=val_env_steps, policy=policy, datadir=outdir, overwrite=overwrite
+    )
 
     optim = torch.optim.Adam(q.parameters(), lr=lr)
 
     writer = SummaryWriter(log_dir=outdir / "logs")
 
-    if use_v_next_state:
-        # V expects (batch, time, ...)
-        v: Optional[Callable] = lambda x: policy.value(x.reshape(1, *x.shape))[0].cpu()
-    else:
-        v = None
-
     q = train_q_with_v(
-        train_data=train_data,
-        val_data=val_data,
-        q=q,
-        v=v,
-        optim=optim,
-        n_epochs=training_epochs,
+        get_env_interactions=partial(make_sars_rollout, env=env, policy=policy),
+        n_train_steps=train_env_steps,
         batch_size=batch_size,
-        writer=writer,
+        val_data=val_data,
         val_period=val_period,
+        q=q,
+        optim=optim,
+        writer=writer,
     )
 
     model_outdir = outdir / "models"
@@ -275,7 +261,7 @@ def eval(datadir: Path, discount_rate: float = 0.999, env_interactions: int = 1_
     env = ProcgenGym3Env(1, "miner")
     env = ExtractDictObWrapper(env, "rgb")
     print("Gathering environment interactions")
-    data = RLDataset.from_gym3(*procgen_rollout(env, policy, env_interactions))
+    data = RLDataset.from_gym3(*procgen_rollout(env, policy, env_interactions, tqdm=True))
     pkl.dump(data, open(datadir / "eval_rollouts.pkl", "wb"))
 
     print("Evaluating loss")

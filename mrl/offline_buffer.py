@@ -5,6 +5,7 @@ from typing import Generator, Tuple, cast
 
 import numpy as np
 import torch
+from torch.functional import Tensor
 
 
 class RLDataset:
@@ -19,6 +20,11 @@ class RLDataset:
         self.actions = actions
         self.rewards = rewards
         self.dones = dones
+
+        self.states.requires_grad = False
+        self.actions.requires_grad = False
+        self.rewards.requires_grad = False
+        self.dones.requires_grad = False
 
     @staticmethod
     def process_gym3(
@@ -78,7 +84,7 @@ class RLDataset:
             yield self.states[start:], self.actions[start:], self.rewards[start:]
 
 
-class SarsDataset(torch.utils.data.Dataset, RLDataset):
+class SarsDataset(RLDataset):
     def __init__(
         self,
         states: torch.Tensor,
@@ -112,6 +118,15 @@ class SarsDataset(torch.utils.data.Dataset, RLDataset):
         j = self.index_map[i]
         logging.debug(f"Mapping {i} to {j}")
         return self.states[j], self.actions[j], self.rewards[j], self.states[j + 1]
+
+    def make_sars(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        # The torch index typing doesn't handle numpy arrays for some reason.
+        states = self.states[self.index_map]  # type: ignore
+        actions = self.actions[self.index_map]  # type: ignore
+        rewards = self.rewards[self.index_map]  # type: ignore
+        next_states = self.states[self.index_map + 1]  # type: ignore
+
+        return states, actions, rewards, next_states
 
     @classmethod
     def from_rl_dataset(cls, data: RLDataset) -> SarsDataset:

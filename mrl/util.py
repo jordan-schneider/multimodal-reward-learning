@@ -5,13 +5,16 @@ import numpy as np
 import torch
 from phasic_policy_gradient.ppg import PhasicValueModel
 from procgen import ProcgenGym3Env
-from tqdm import trange
+from tqdm import trange  # type: ignore
 
 from mrl.offline_buffer import RLDataset
 
 
 def procgen_rollout(
-    env: ProcgenGym3Env, policy: PhasicValueModel, timesteps: int
+    env: ProcgenGym3Env,
+    policy: PhasicValueModel,
+    timesteps: int,
+    tqdm: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     state_shape = env.ob_space.shape
 
@@ -27,7 +30,9 @@ def procgen_rollout(
         rewards[t] = reward
         firsts[t] = first
 
-    for t in trange(timesteps - 1):
+    times = trange(timesteps - 1) if tqdm else range(timesteps - 1)
+
+    for t in times:
         record(t, env, states, rewards, firsts)
         action, _, _ = policy.act(
             torch.tensor(states[t], device=policy.device), firsts[t], policy.initial_state(env.num)
