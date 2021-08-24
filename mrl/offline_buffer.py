@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Generator, Tuple, cast
+from typing import Generator, List, Tuple, cast
 
 import numpy as np
 import torch
@@ -88,30 +88,49 @@ class RLDataset:
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         assert discount_rate >= 0.0 and discount_rate <= 1.0
 
-        discounts = torch.pow(torch.ones(horizon) * discount_rate, torch.arange(horizon))
+        discounts = torch.pow(
+            torch.ones(horizon, dtype=self.rewards.dtype) * discount_rate, torch.arange(horizon)
+        )
+
         done_indices = self.dones.nonzero(as_tuple=True)[0] + 1
-        not_done = self.dones.logical_not()
-
-        returns = []
-
+        returns: List[torch.Tensor] = []
         start_index = 0
         for done_index in done_indices:
+            logging.debug(
+                f"done_index={done_index}, start_index={start_index}, n_returns={len(returns)}"
+            )
             while start_index < done_index:
                 reward_batch = self.rewards[start_index : min(start_index + horizon, done_index)]
+                assert (
+                    reward_batch.dtype == discounts.dtype
+                ), f"dtype mismatch, reward_batch={reward_batch.dtype}, discounts={discounts.dtype}"
                 returns.append(reward_batch @ discounts[: len(reward_batch)])
                 start_index += 1
 
+        logging.debug(f"start_index={start_index}, n_returns={len(returns)}")
+
+        if len(done_indices) > 0:
+            assert (
+                start_index == done_indices.max(dim=0)[0]
+            ), f"final start_index={start_index} but max done_index={done_indices.max(dim=0)[0]}"
+
         # After the last done, we don't want to use any fewer than k rewards, because the episode
         # hasn't actually ended, the k-step return can't be computed.
-        for start_index in range(start_index, len(self.states) - horizon):
-            reward_batch = self.rewards[start_index : start_index + horizon]
+        for i in range(start_index, len(self.rewards) - horizon):
+            reward_batch = self.rewards[i : i + horizon]
+            assert (
+                reward_batch.dtype == discounts.dtype
+            ), f"dtype mismatch, reward_batch={reward_batch.dtype}, discounts={discounts.dtype}"
             returns.append(reward_batch @ discounts)
 
-        states, actions = self.states[not_done], self.actions[not_done]
+        last_index = max(start_index, len(self.rewards) - horizon)
+        states, actions = self.states[:last_index], self.actions[:last_index]
 
-        assert len(states) == len(returns)
+        assert len(states) == len(returns), f"{len(states)} states but {len(returns)} returns"
 
-        return states, actions, torch.cat(returns)
+        returns_torch = torch.stack(returns)
+
+        return states, actions, returns_torch
 
 
 class SarsDataset(RLDataset):
