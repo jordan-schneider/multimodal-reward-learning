@@ -84,7 +84,9 @@ def test_diamonds_remaining_decreasing(actions: List[int], seed: int):
 
 
 @settings(deadline=None)
-@given(seed=integers(0, 2 ** 31 - 1),)
+@given(
+    seed=integers(0, 2 ** 31 - 1),
+)
 def test_dist_to_diamond(seed: int):
     env = Miner(reward_weights=np.zeros(Miner.N_FEATURES), num=1, rand_seed=seed)
     start_state = env.make_latent_states()[0]
@@ -121,13 +123,15 @@ def test_dist_to_diamond(seed: int):
 
 
 @settings(deadline=None)
-@given(seed=integers(0, 2 ** 31 - 1),)
+@given(
+    seed=integers(0, 2 ** 31 - 1),
+)
 def test_safe_at_start(seed):
     env = Miner(reward_weights=np.zeros(Miner.N_FEATURES), num=1, rand_seed=seed)
     start_state = env.make_latent_states()[0]
     agent_pos = start_state.agent_pos
     danger, t = cast(
-        Tuple[bool, int], Miner.in_danger(start_state, return_time_to_die=True, debug=True)
+        Tuple[bool, int], env.in_danger(start_state, return_time_to_die=True, debug=True)
     )
     assert (
         not danger
@@ -135,9 +139,9 @@ def test_safe_at_start(seed):
 
 
 def flood_search(state: Miner.MinerState, goals: List[Tuple[int, int]]) -> Optional[List[Action]]:
-    """ Perform a flood search for a path to one of the goal states.
-    
-    Not guaranteed to be the shortest path, or even a valid path, as falling objects can block the 
+    """Perform a flood search for a path to one of the goal states.
+
+    Not guaranteed to be the shortest path, or even a valid path, as falling objects can block the
     path.
     """
     last_action = np.empty(state.grid.shape, dtype=np.int8)
@@ -223,7 +227,7 @@ def find_dangerous_path_above(state: Miner.MinerState) -> Optional[List[Action]]
 
 
 def find_dangerous_object_candidates(state: Miner.MinerState) -> List[Tuple[int, int]]:
-    """ Find all dangerous objects with two empty spaces underneath """
+    """Find all dangerous objects with two empty spaces underneath"""
     danger_objs: List[Tuple[int, int]] = []
     for x, row in enumerate(state.grid):
         for y, item in enumerate(row):
@@ -237,8 +241,8 @@ def find_dangerous_object_candidates(state: Miner.MinerState) -> List[Tuple[int,
 
 
 def find_path_to_dangerous_state(state: Miner.MinerState) -> Optional[List[Action]]:
-    """ Tries to find a path to a dangerous state, where an object is about to fall on you.
-    
+    """Tries to find a path to a dangerous state, where an object is about to fall on you.
+
     The pathing does not model changes in the state from falling objects, and so sometimes the
     returned path will not be valid.
     """
@@ -261,7 +265,9 @@ def find_path_to_dangerous_state(state: Miner.MinerState) -> Optional[List[Actio
 
 
 @settings(deadline=None)
-@given(seed=integers(0, 2 ** 31 - 1),)
+@given(
+    seed=integers(0, 2 ** 31 - 1),
+)
 def test_in_danger(seed):
     # We need to find a boulder or diamond with a dirt directly underneath it and a tile we can move
     # into two below it. Then we can find a path to underneath the object, move down, and be in
@@ -297,7 +303,7 @@ def test_in_danger(seed):
 
     state = env.make_latent_states()[0]
     agent_x, agent_y = state.agent_pos
-    danger, t = cast(Tuple[bool, int], Miner.in_danger(state, return_time_to_die=True))
+    danger, t = cast(Tuple[bool, int], env.in_danger(state, return_time_to_die=True))
 
     should_be_danger = state.grid[agent_x, agent_y + 1] in DANGEROUS_OBJECTS
 
@@ -324,4 +330,3 @@ def test_reward(seed: int, reward_weights: np.ndarray) -> None:
 
     rewards, _, _ = env.observe()
     assert np.array_equal(rewards, features @ reward_weights)
-
