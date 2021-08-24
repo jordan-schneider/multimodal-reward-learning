@@ -83,6 +83,36 @@ class RLDataset:
         if include_incomplete:
             yield self.states[start:], self.actions[start:], self.rewards[start:]
 
+    def truncated_returns(
+        self, horizon: int, discount_rate: float
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        assert discount_rate >= 0.0 and discount_rate <= 1.0
+
+        discounts = torch.pow(torch.ones(horizon) * discount_rate, torch.arange(horizon))
+        done_indices = self.dones.nonzero(as_tuple=True)[0] + 1
+        not_done = self.dones.logical_not()
+
+        returns = []
+
+        start_index = 0
+        for done_index in done_indices:
+            while start_index < done_index:
+                reward_batch = self.rewards[start_index : min(start_index + horizon, done_index)]
+                returns.append(reward_batch @ discounts[: len(reward_batch)])
+                start_index += 1
+
+        # After the last done, we don't want to use any fewer than k rewards, because the episode
+        # hasn't actually ended, the k-step return can't be computed.
+        for start_index in range(start_index, len(self.states) - horizon):
+            reward_batch = self.rewards[start_index : start_index + horizon]
+            returns.append(reward_batch @ discounts)
+
+        states, actions = self.states[not_done], self.actions[not_done]
+
+        assert len(states) == len(returns)
+
+        return states, actions, torch.cat(returns)
+
 
 class SarsDataset(RLDataset):
     def __init__(

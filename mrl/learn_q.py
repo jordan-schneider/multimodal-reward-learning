@@ -1,22 +1,20 @@
 import logging
 import pickle as pkl
 from copy import deepcopy
-from functools import partial
 from pathlib import Path
-from typing import Callable, Iterable, Optional, Tuple, cast
+from typing import Callable, Optional, cast
 
 import fire  # type: ignore
 import numpy as np  # type: ignore
 import torch
-from gym3 import Env  # type: ignore
-from gym3 import ExtractDictObWrapper
+from gym3 import ExtractDictObWrapper  # type: ignore
 from phasic_policy_gradient.ppg import PhasicValueModel
 from procgen import ProcgenGym3Env
-from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import trange  # type: ignore
 
-from mrl.offline_buffer import RLDataset, SarsDataset
+from mrl.offline_buffer import RLDataset
+from mrl.online_batcher import BatchGenerator
 from mrl.util import find_policy_path, procgen_rollout
 
 
@@ -76,15 +74,13 @@ class QNetwork(torch.nn.Module):
 
 
 def train_q_with_v(
-    get_env_interactions: Callable[
-        [int], Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
-    ],
+    batch_gen: BatchGenerator,
     n_train_steps: int,
+    batch_size: int,
     val_data: RLDataset,
+    val_period: int,
     q: QNetwork,
     optim: torch.optim.Optimizer,
-    batch_size: int,
-    val_period: int,
     writer: SummaryWriter,
 ) -> QNetwork:
     val_counter = 0
@@ -92,8 +88,7 @@ def train_q_with_v(
     train_step = 0
     n_batches = n_train_steps // batch_size
     for _ in trange(n_batches):
-        # TODO(joschnei): Change get_env_interactions to a Protocol or class to fix mypy error
-        states, actions, rewards, next_states = get_env_interactions(timesteps=batch_size)
+        states, actions, rewards, next_states = batch_gen.make_sars_batch(timesteps=batch_size)
 
         # n is not batch_size because batch_size actions generate batch_size - # dones - 1
         # usable transitions
@@ -121,6 +116,58 @@ def train_q_with_v(
             val_loss = eval_q_rmse(
                 q_fn=q.forward,
                 data=val_data,
+                discount_rate=q.discount_rate,
+                device=q.device,
+            )
+            writer.add_scalar("val/rmse", val_loss, global_step=val_step)
+            val_step += 1
+
+    return q
+
+
+def learn_trunc_returns(
+    horizon: int,
+    batch_gen: BatchGenerator,
+    n_train_steps: int,
+    batch_size: int,
+    val_data: RLDataset,
+    val_period: int,
+    q: QNetwork,
+    optim: torch.optim.Optimizer,
+    writer: SummaryWriter,
+) -> QNetwork:
+    val_counter = 0
+    val_step = 0
+    train_step = 0
+    n_batches = n_train_steps // batch_size
+    for _ in trange(n_batches):
+        states, actions, partial_returns = batch_gen.make_trunc_return_batch(
+            timesteps=batch_size, horizon=horizon, discount_rate=q.discount_rate
+        )
+
+        # n is not batch_size because batch_size actions generate batch_size - # dones - 1
+        # usable transitions
+        n = len(states)
+
+        optim.zero_grad()
+        q_pred = q.forward(states.to(device=q.device), actions.to(device=q.device)).cpu()
+        assert q_pred.shape == (n,), f"q_pred={q_pred.shape} not expected ({n})"
+        loss = torch.sum((q_pred - partial_returns.to(q.device)) ** 2)
+
+        writer.add_scalar("train/loss", loss, global_step=train_step)
+
+        loss.backward()
+        optim.step()
+
+        train_step += 1
+        val_counter += n
+
+        if val_counter > val_period:
+            val_counter = 0
+            val_loss = eval_q_partial_rmse(
+                q_fn=q.forward,
+                data=val_data,
+                k=horizon,
                 discount_rate=q.discount_rate,
                 device=q.device,
             )
@@ -162,13 +209,6 @@ def get_rollouts(
     return val_data
 
 
-def make_sars_rollout(
-    env: ProcgenGym3Env, policy: PhasicValueModel, timesteps: int
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    data = SarsDataset.from_gym3(*procgen_rollout(env, policy, timesteps))
-    return data.make_sars()
-
-
 def refine(
     indir: Path,
     outdir: Path,
@@ -178,8 +218,15 @@ def refine(
     train_env_steps: int = 10_000_000,
     val_env_steps: int = 100_000,
     val_period: int = 2000 * 10,
+    trunc_returns: bool = False,
+    trunc_horizon: Optional[int] = None,
     overwrite: bool = False,
 ) -> None:
+    if trunc_returns:
+        assert (
+            trunc_horizon is not None
+        ), f"Must specify a truncation horizon to use truncated returns."
+
     indir = Path(indir)
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -208,16 +255,29 @@ def refine(
 
     writer = SummaryWriter(log_dir=outdir / "logs")
 
-    q = train_q_with_v(
-        get_env_interactions=partial(make_sars_rollout, env=env, policy=policy),
-        n_train_steps=train_env_steps,
-        batch_size=batch_size,
-        val_data=val_data,
-        val_period=val_period,
-        q=q,
-        optim=optim,
-        writer=writer,
-    )
+    if trunc_returns:
+        q = learn_trunc_returns(
+            horizon=trunc_horizon,
+            batch_gen=BatchGenerator(env=env, policy=policy),
+            n_train_steps=train_env_steps,
+            batch_size=batch_size,
+            val_data=val_data,
+            val_period=val_period,
+            q=q,
+            optim=optim,
+            writer=writer,
+        )
+    else:
+        q = train_q_with_v(
+            batch_gen=BatchGenerator(env=env, policy=policy),
+            n_train_steps=train_env_steps,
+            batch_size=batch_size,
+            val_data=val_data,
+            val_period=val_period,
+            q=q,
+            optim=optim,
+            writer=writer,
+        )
 
     torch.save(q, model_path)
 
@@ -255,6 +315,24 @@ def eval_q_rmse(
         returns = compute_returns(rewards.numpy(), discount_rate)[:-1]
 
         errors = values - returns
+        loss += torch.sqrt(torch.mean(errors ** 2)).item()
+    return loss
+
+
+@torch.no_grad()
+def eval_q_partial_rmse(
+    q_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+    data: RLDataset,
+    k: int,
+    discount_rate: float,
+    device: torch.device,
+) -> float:
+    loss = 0.0
+    for states, actions, partial_returns in data.truncated_returns(
+        horizon=k, discount_rate=discount_rate
+    ):
+        values = q_fn(states[:-1].to(device=device), actions.to(device=device)).detach().cpu()
+        errors = values - partial_returns
         loss += torch.sqrt(torch.mean(errors ** 2)).item()
     return loss
 
