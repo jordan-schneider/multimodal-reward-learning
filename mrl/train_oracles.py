@@ -13,11 +13,12 @@ from mrl.util import find_policy_path
 
 def train(
     path: Path,
-    overwrite: bool = False,
     seed: int = 0,
     n_parallel_envs: int = 1,
+    total_interacts: int = 100_000_000,
     fix_reward_sign: bool = False,
     use_original_reward: bool = False,
+    overwrite: bool = False,
     port=29500,
 ) -> None:
     path = Path(path)
@@ -35,16 +36,20 @@ def train(
 
     start_time = model_iter * 100_000  # LogSaveHelper ic_per_save value
 
+    model_save_dir = path / "models"
+    model_save_dir.mkdir(parents=True, exist_ok=True)
+
     train_fn(
+        save_dir=model_save_dir,
         venv=env,
         model_path=model_path,
         start_time=start_time,
         arch="detach",
+        interacts_total=total_interacts,
         n_epoch_vf=6,
         log_dir=path / "logs",
         comm=comm,
         port=port,
-        save_dir=path / "models",
     )
 
 
