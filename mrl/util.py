@@ -46,8 +46,8 @@ def procgen_rollout(
 
 
 def find_policy_path(policydir: Path) -> Tuple[Optional[Path], int]:
-    models = policydir.glob("model[0-9][0-9][0-9].jd")
-    if not models:
+    models = list(policydir.glob("model[0-9][0-9][0-9].jd"))
+    if len(models) == 0:
         return None, 0
 
     latest_model = sorted(models)[-1]
