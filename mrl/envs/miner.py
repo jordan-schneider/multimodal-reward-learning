@@ -1,8 +1,14 @@
 import logging
-from typing import Any, Dict, Final, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, Final, List, Tuple, Union, cast
 
 import numpy as np
 from procgen import ProcgenGym3Env  # type: ignore
+
+__DIST_ARRAY = np.array([[np.abs(x) + np.abs(y) for x in range(-34, 35)] for y in range(-34, 35)])
+
+
+def __get_dist_array(agent_x: int, agent_y: int, width: int, height: int) -> np.ndarray:
+    return __DIST_ARRAY[34 - agent_x : 34 - agent_x + width, 34 - agent_y : 34 - agent_y + height]
 
 
 class Miner(ProcgenGym3Env):
@@ -128,7 +134,10 @@ class Miner(ProcgenGym3Env):
 
     def make_features(self) -> np.ndarray:
         dangers = [self.in_danger(state) for state in self.states]
-        dists = [Miner.dist_to_diamond(state) for state in self.states]
+        dists = [
+            Miner.dist_to_diamond(state, diamonds_remaining)
+            for state, diamonds_remaining in zip(self.states, self.diamonds)
+        ]
         pickup = [
             Miner.got_diamond(n_diamonds, last_n_diamonds, first)
             for n_diamonds, last_n_diamonds, first in zip(
@@ -196,31 +205,24 @@ class Miner(ProcgenGym3Env):
 
     @staticmethod
     def dist_to_diamond(
-        state: MinerState, return_pos: bool = False
+        state: MinerState, diamonds_remaining: int, return_pos: bool = False
     ) -> Union[int, Tuple[int, Tuple[int, int]]]:
-        if Miner.diamonds_remaining(state) == 0:
+        if diamonds_remaining == 0:
             if return_pos:
-                return 0, (0, 0)
+                return 0, (-1, -1)
             else:
                 return 0
 
-        MAX_DIST: Final[int] = 35 * 2 + 1  # maximum possible L_1 distance on a 35x35 grid
         agent_x, agent_y = state.agent_pos
-        min_dist = MAX_DIST
-        assert len(state.grid.shape) == 2
-        for x in range(state.grid.shape[0]):
-            for y in range(state.grid.shape[1]):
-                if "diamond" in state.GRID_ITEM_NAMES[state.grid[x][y]]:
-                    dist = np.abs(agent_x - x) + np.abs(agent_y - y)
-                    assert (
-                        dist < MAX_DIST
-                    ), f"Dist larger than theoretical max: ({agent_x},{agent_y}) to ({x},{y}) for dist={dist}"
-
-                    if dist < min_dist:
-                        min_dist = dist
-                        pos_closest_diamond = (x, y)
-
-        assert state.grid[pos_closest_diamond[0]][pos_closest_diamond[1]] in (2, 4)
+        width, height = state.grid.shape
+        diamonds = cast(np.ndarray, np.logical_or(state.grid == 2, state.grid == 4))
+        # TODO(joschnei): Instead of indexing into this, try creating it on the fly, might be faster
+        dists = __get_dist_array(agent_x, agent_y, width, height)
+        diamond_dists = dists * diamonds
+        pos_closest_diamond = cast(
+            Tuple[int, int], np.unravel_index(diamond_dists.argmin(), diamond_dists.shape)
+        )
+        min_dist = diamond_dists[pos_closest_diamond]
 
         if return_pos:
             return min_dist, pos_closest_diamond
@@ -229,7 +231,7 @@ class Miner(ProcgenGym3Env):
 
     @staticmethod
     def diamonds_remaining(state: MinerState) -> int:
-        return np.sum(["diamond" in state.GRID_ITEM_NAMES[item] for item in state.grid.flatten()])
+        return np.sum((state.grid == 2) | (state.grid == 4))
 
     @staticmethod
     def got_diamond(n_diamonds: int, last_n_diamonds: int, first: bool) -> bool:
