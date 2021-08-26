@@ -15,6 +15,7 @@ def train(
     path: Path,
     seed: int = 0,
     n_parallel_envs: int = 1,
+    n_minibatch: int = 8,
     total_interacts: int = 100_000_000,
     fix_reward_sign: bool = False,
     use_original_reward: bool = False,
@@ -42,6 +43,7 @@ def train(
     train_fn(
         save_dir=model_save_dir,
         venv=env,
+        n_minibatch=n_minibatch,
         model_path=model_path,
         start_time=start_time,
         arch="detach",
