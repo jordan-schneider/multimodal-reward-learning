@@ -90,8 +90,10 @@ def test_diamonds_remaining_decreasing(actions: List[int], seed: int):
 def test_dist_to_diamond(seed: int):
     env = Miner(reward_weights=np.zeros(Miner.N_FEATURES), num=1, rand_seed=seed)
     start_state = env.make_latent_states()[0]
+    diamonds_remaining = Miner.diamonds_remaining(start_state)
     starting_dist, pos = cast(
-        Tuple[int, Tuple[int, int]], env.dist_to_diamond(start_state, return_pos=True)
+        Tuple[int, Tuple[int, int]],
+        Miner.dist_to_diamond(start_state, diamonds_remaining, return_pos=True),
     )
     agent_x, agent_y = start_state.agent_pos
 
@@ -112,7 +114,8 @@ def test_dist_to_diamond(seed: int):
     _, _, first = env.observe()
 
     end_state = env.make_latent_states()[0]
-    ending_dist = cast(int, Miner.dist_to_diamond(end_state))
+    diamonds_remaining = Miner.diamonds_remaining(end_state)
+    ending_dist = cast(int, Miner.dist_to_diamond(end_state, diamonds_remaining))
 
     assert (
         first
