@@ -7,7 +7,7 @@ from procgen import ProcgenGym3Env  # type: ignore
 __DIST_ARRAY = np.array([[np.abs(x) + np.abs(y) for x in range(-34, 35)] for y in range(-34, 35)])
 
 
-def __get_dist_array(agent_x: int, agent_y: int, width: int, height: int) -> np.ndarray:
+def get_dist_array(agent_x: int, agent_y: int, width: int, height: int) -> np.ndarray:
     return __DIST_ARRAY[34 - agent_x : 34 - agent_x + width, 34 - agent_y : 34 - agent_y + height]
 
 
@@ -52,12 +52,6 @@ class Miner(ProcgenGym3Env):
         self.diamonds = [Miner.diamonds_remaining(state) for state in self.states]
         self.firsts = [True] * num
 
-        self.danger_sim = ProcgenGym3Env(
-            1,
-            env_name="miner",
-            distribution_mode=kwargs.get("distribution_mode", "hard"),
-        )
-
     def act(self, action: np.ndarray) -> None:
         super().act(action)
         self.last_diamonds = self.diamonds
@@ -96,40 +90,27 @@ class Miner(ProcgenGym3Env):
             grid: np.ndarray,
             agent_pos: Tuple[int, int],
             exit_pos: Tuple[int, int],
-            serialization: str,
         ) -> None:
             self.grid: np.ndarray = grid.transpose()[: grid_size[0], : grid_size[1]]
             assert len(self.grid.shape) == 2
             self.agent_pos = tuple(agent_pos)
             self.exit_pos = tuple(exit_pos)
-            self.serialization = serialization
 
         def __eq__(self, other: Any) -> bool:
             correct_class = isinstance(other, Miner.MinerState)
             grid_equal = np.array_equal(self.grid, other.grid)
             agent_pos_equal = self.agent_pos == other.agent_pos
             exit_pos_equal = self.exit_pos == other.exit_pos
-            serialization_equal = self.serialization == other.serialization
-            return (
-                correct_class
-                and grid_equal
-                and agent_pos_equal
-                and exit_pos_equal
-                and serialization_equal
-            )
+            return correct_class and grid_equal and agent_pos_equal and exit_pos_equal
 
     def make_latent_states(self) -> List[MinerState]:
         infos = self.get_info()
-        serializations = self.get_state()
-        return [
-            self.make_latent_state(info, serialization)
-            for info, serialization in zip(infos, serializations)
-        ]
+        return [self.make_latent_state(info) for info in infos]
 
     @staticmethod
-    def make_latent_state(info: Dict[str, Any], serialization: str) -> MinerState:
+    def make_latent_state(info: Dict[str, Any]) -> MinerState:
         return Miner.MinerState(
-            info["grid_size"], info["grid"], info["agent_pos"], info["exit_pos"], serialization
+            info["grid_size"], info["grid"], info["agent_pos"], info["exit_pos"]
         )
 
     def make_features(self) -> np.ndarray:
@@ -149,6 +130,12 @@ class Miner(ProcgenGym3Env):
             for state, n_diamonds in zip(self.states, self.diamonds)
         ]
 
+        assert len(pickup) == self.num
+        assert len(exits) == self.num
+        assert len(dangers) == self.num
+        assert len(dists) == self.num
+        assert len(self.diamonds) == self.num
+
         features = np.array([pickup, exits, dangers, dists, self.diamonds], dtype=np.float32).T
         assert features.shape == (self.num, self.N_FEATURES)
 
@@ -157,51 +144,40 @@ class Miner(ProcgenGym3Env):
     def in_danger(
         self, state: MinerState, return_time_to_die: bool = False, debug: bool = False
     ) -> Union[bool, Tuple[bool, int]]:
-        self.danger_sim.set_state((state.serialization,))
+        agent_x, agent_y = state.agent_pos
 
-        if debug:
-            start_state = Miner.make_latent_state(
-                self.danger_sim.get_info()[0], self.danger_sim.get_state()[0]
-            )
+        done = False
 
-        _, last_obs, _ = self.danger_sim.observe()
+        # You can't be in danger if there's nothing above you
+        if agent_y + 1 >= state.grid.shape[1]:
+            danger, t = False, 1
+            done = True
 
-        self.danger_sim.act(np.array([Miner.ACTION_DICT["stay"]]))
-        _, current_obs, first = self.danger_sim.observe()
+        # You are only in danger if the thing directly above you is moving
+        if not done:
+            if state.grid[agent_x, agent_y + 1] in {3, 4}:
+                danger, t = True, 1
+                done = True
+            elif state.grid[agent_x, agent_y + 1] in {9, 10}:
+                danger, t = False, 1
+                done = True
 
-        if debug and not first:
-            after_state = Miner.make_latent_state(
-                self.danger_sim.get_info()[0], self.danger_sim.get_state()[0]
-            )
-            assert (
-                state.agent_pos[0] == after_state.agent_pos[0]
-                and state.agent_pos[1] == after_state.agent_pos[1]
-            ), f"Agent moved from {start_state.agent_pos} to {after_state.agent_pos} with exit at {start_state.exit_pos} on\n{start_state.grid}\nto\n{after_state.grid}"
-
+        danger = False
         t = 1
+        y = agent_y + 2
+        while not done and y < state.grid.shape[1]:
+            if state.grid[agent_x, y] in {1, 2, 3, 4}:
+                danger = True
+                t = y - agent_y
+                done = True
 
-        while np.all(current_obs["rgb"] != last_obs["rgb"]) and not first:
-            last_obs = current_obs
-            self.danger_sim.act(np.array([Miner.ACTION_DICT["stay"]]))
-            _, current_obs, first = self.danger_sim.observe()
-            t += 1
-            if debug:
-                logging.debug(t)
-                logging.debug(
-                    Miner.make_latent_state(
-                        self.danger_sim.get_info()[0], self.danger_sim.get_state()[0]
-                    ).grid
-                )
+            if state.grid[agent_x, y] in {9, 10}:
+                done = True
 
-        # first means that we died somehow, which means we're in danger
-        # TODO(joschnei): This isn't quite true. There's a time horizon somewhere of 1000, and if
-        # it is also here then we can get first by simply running out of time. I probably won't
-        # fix this, as it only happens near the very end of the time horizon, and if you make it out
-        # there the danger penalty probably isn't affecting much.
         if return_time_to_die:
-            return first, t
+            return danger, t
         else:
-            return first
+            return danger
 
     @staticmethod
     def dist_to_diamond(
@@ -217,8 +193,8 @@ class Miner(ProcgenGym3Env):
         width, height = state.grid.shape
         diamonds = cast(np.ndarray, np.logical_or(state.grid == 2, state.grid == 4))
         # TODO(joschnei): Instead of indexing into this, try creating it on the fly, might be faster
-        dists = __get_dist_array(agent_x, agent_y, width, height)
-        diamond_dists = dists * diamonds
+        dists = get_dist_array(agent_x, agent_y, width, height)
+        diamond_dists = np.ma.array(dists, mask=diamonds)
         pos_closest_diamond = cast(
             Tuple[int, int], np.unravel_index(diamond_dists.argmin(), diamond_dists.shape)
         )
