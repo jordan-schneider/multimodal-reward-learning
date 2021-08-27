@@ -14,7 +14,7 @@ from mrl.util import find_policy_path
 def train(
     path: Path,
     seed: int = 0,
-    n_parallel_envs: int = 1,
+    n_parallel_envs: int = 64,
     n_minibatch: int = 8,
     total_interacts: int = 100_000_000,
     fix_reward_sign: bool = False,
