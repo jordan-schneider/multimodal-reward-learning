@@ -146,38 +146,24 @@ class Miner(ProcgenGym3Env):
     ) -> Union[bool, Tuple[bool, int]]:
         agent_x, agent_y = state.agent_pos
 
-        done = False
-
         # You can't be in danger if there's nothing above you
         if agent_y + 1 >= state.grid.shape[1]:
-            danger, t = False, 1
-            done = True
+            return (False, -1) if return_time_to_die else False
 
         # You are only in danger if the thing directly above you is moving
-        if not done:
-            if state.grid[agent_x, agent_y + 1] in {3, 4}:
-                danger, t = True, 1
-                done = True
-            elif state.grid[agent_x, agent_y + 1] in {9, 10}:
-                danger, t = False, 1
-                done = True
+        if state.grid[agent_x, agent_y + 1] in {3, 4}:
+            return (True, 1) if return_time_to_die else True
+        elif state.grid[agent_x, agent_y + 1] in {9, 10}:
+            return (False, -1) if return_time_to_die else False
 
-        danger = False
-        t = 1
-        y = agent_y + 2
-        while not done and y < state.grid.shape[1]:
+        for y in range(agent_y + 2, state.grid.shape[1]):
             if state.grid[agent_x, y] in {1, 2, 3, 4}:
-                danger = True
                 t = y - agent_y
-                done = True
+                return (True, t) if return_time_to_die else True
+            elif state.grid[agent_x, y] in {9, 10}:
+                return (False, -1) if return_time_to_die else False
 
-            if state.grid[agent_x, y] in {9, 10}:
-                done = True
-
-        if return_time_to_die:
-            return danger, t
-        else:
-            return danger
+        return (False, -1) if return_time_to_die else False
 
     @staticmethod
     def dist_to_diamond(

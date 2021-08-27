@@ -17,7 +17,7 @@ PATHABLE_OBJECTS: Final = (9, 100)
 DIAMONDS = (1, 3)
 
 
-@settings(deadline=None)
+@settings(deadline=3000)
 @given(
     actions=lists(integers(min_value=0, max_value=15), min_size=1, max_size=10),
     seed=integers(0, 2 ** 31 - 1),
@@ -37,7 +37,7 @@ def test_grid_items(actions: List[int], seed: int) -> None:
                 assert item in grid_keys, f"Invalid item={item} in grid={state.grid}"
 
 
-@settings(deadline=None)
+@settings(deadline=3000)
 @given(
     actions=lists(integers(min_value=0, max_value=15), min_size=1, max_size=10),
     seed=integers(0, 2 ** 31 - 1),
@@ -60,7 +60,7 @@ def test_empty_increasing(actions: List[int], seed: int):
         last_n_empty = n_empty
 
 
-@settings(deadline=None)
+@settings(deadline=3000)
 @given(
     actions=lists(integers(min_value=0, max_value=15), min_size=1, max_size=10),
     seed=integers(0, 2 ** 31 - 1),
@@ -83,7 +83,7 @@ def test_diamonds_remaining_decreasing(actions: List[int], seed: int):
         last_n_diamonds = n_diamonds
 
 
-@settings(deadline=None)
+@settings(deadline=3000)
 @given(
     seed=integers(0, 2 ** 31 - 1),
 )
@@ -125,7 +125,7 @@ def test_dist_to_diamond(seed: int):
     ), f"Distance increased after taking action={action}, from {start_state.agent_pos} to {end_state.agent_pos} for target {pos} on grid={start_state.grid} to grid={end_state.grid}"
 
 
-@settings(deadline=None)
+@settings(deadline=3000)
 @given(
     seed=integers(0, 2 ** 31 - 1),
 )
@@ -267,7 +267,7 @@ def find_path_to_dangerous_state(state: Miner.MinerState) -> Optional[List[Actio
     return flood_search(state=state, goals=[(x, y - 1) for x, y in danger_objs])
 
 
-@settings(deadline=None)
+@settings(deadline=3000)
 @given(
     seed=integers(0, 2 ** 31 - 1),
 )
@@ -320,7 +320,7 @@ def test_in_danger(seed):
         ), f"Bad path. There isn't danger but we think there is at t={t}, grid=\n{state.grid}\n from start=\n{start_state.grid} "
 
 
-@settings(deadline=None)
+@settings(deadline=3000)
 @given(
     seed=integers(0, 2 ** 31 - 1),
     reward_weights=arrays(
