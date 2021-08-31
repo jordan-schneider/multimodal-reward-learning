@@ -25,13 +25,20 @@ def train(
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
 
+    comm = MPI.COMM_WORLD
+
     rng = np.random.default_rng(seed)
-    reward = load_reward(path, rng, overwrite, fix_reward_sign, use_original_reward)
+    reward = load_reward(
+        path=path,
+        rng=rng,
+        comm=comm,
+        overwrite=overwrite,
+        fix_reward_sign=fix_reward_sign,
+        use_original=use_original_reward,
+    )
 
     env = Miner(reward_weights=reward, num=n_parallel_envs, rand_seed=seed)
     env = gym3.ExtractDictObWrapper(env, "rgb")
-
-    comm = MPI.COMM_WORLD
 
     model_path, model_iter = find_policy_path(path / "models")
 

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+from mpi4py.MPI import Comm  # type: ignore
 from numpy.random import Generator
 
 from mrl.envs import Miner
@@ -32,10 +33,19 @@ def make_reward(
 def load_reward(
     path: Path,
     rng: Generator,
+    comm: Comm,
     overwrite: bool = False,
     fix_reward_sign: bool = False,
     use_original: bool = False,
 ) -> np.ndarray:
-    if overwrite or not (path / "reward.npy").exists():
-        return make_reward(path, rng, fix_reward_sign, use_original)
-    return np.load(path / "reward.npy")
+    if comm.rank == 0:
+        if overwrite or not (path / "reward.npy").exists():
+            return make_reward(path, rng, fix_reward_sign, use_original)
+        reward = np.load(path / "reward.npy")
+    else:
+        reward = None
+    print(f"rank={comm.rank}, reward={reward}")
+    reward = comm.bcast(reward, root=0)
+    comm.Barrier()
+    print(f"rank={comm.rank}, reward={reward}")
+    return reward
