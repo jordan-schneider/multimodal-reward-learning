@@ -18,6 +18,7 @@ dependencies:
     - gym
     - filelock
     - tensorboard
+    - arrow
     - tqdm
     - fire
     # Dev
