@@ -6,7 +6,7 @@ import torch
 from hypothesis import given
 from hypothesis.extra.numpy import arrays
 from hypothesis.strategies import booleans, floats, integers, just, shared, tuples
-from mrl.offline_buffer import RLDataset, SarsDataset
+from mrl.offline_buffer import SarsDataset
 from torch.testing import assert_equal
 
 

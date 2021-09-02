@@ -62,14 +62,18 @@ class Miner(ProcgenGym3Env):
         _, observations, self.firsts = super().observe()
 
         # compute features
-        features = self.make_features()
+        self.features = self.make_features()
         assert self._reward_weights.shape == (
             self.N_FEATURES,
         ), f"reward weights={self._reward_weights}"
 
-        rewards = features @ self._reward_weights
+        rewards = self.features @ self._reward_weights
 
         return rewards, observations, self.firsts
+
+    def get_last_features(self) -> np.ndarray:
+        # This is only a function because gym3.Wrapper doens't pass attributres through
+        return self.features
 
     class MinerState:
         GRID_ITEM_NAMES = {
