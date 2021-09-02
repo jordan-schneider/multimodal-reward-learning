@@ -13,7 +13,7 @@ from procgen import ProcgenGym3Env
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import trange  # type: ignore
 
-from mrl.offline_buffer import RLDataset
+from mrl.offline_buffer import RlDataset
 from mrl.online_batcher import BatchGenerator
 from mrl.util import find_policy_path, procgen_rollout
 
@@ -77,7 +77,7 @@ def train_q_with_v(
     batch_gen: BatchGenerator,
     n_train_steps: int,
     batch_size: int,
-    val_data: RLDataset,
+    val_data: RlDataset,
     val_period: int,
     q: QNetwork,
     optim: torch.optim.Optimizer,
@@ -130,7 +130,7 @@ def learn_trunc_returns(
     batch_gen: BatchGenerator,
     n_train_steps: int,
     batch_size: int,
-    val_data: RLDataset,
+    val_data: RlDataset,
     val_period: int,
     q: QNetwork,
     optim: torch.optim.Optimizer,
@@ -183,13 +183,13 @@ def get_rollouts(
     policy: PhasicValueModel,
     datadir: Path,
     overwrite: bool,
-) -> RLDataset:
+) -> RlDataset:
     val_rollouts_path = datadir / "val_rollouts.pkl"
 
-    val_data: Optional[RLDataset] = None
+    val_data: Optional[RlDataset] = None
 
     if not overwrite and val_rollouts_path.exists():
-        val_data = cast(RLDataset, pkl.load(val_rollouts_path.open("rb")))
+        val_data = cast(RlDataset, pkl.load(val_rollouts_path.open("rb")))
 
         val_missing = val_env_steps - len(val_data.states)
     else:
@@ -200,7 +200,7 @@ def get_rollouts(
         if val_data is not None:
             val_data.append_gym3(states, actions, rewards, firsts)
         else:
-            val_data = RLDataset.from_gym3(states, actions, rewards, firsts)
+            val_data = RlDataset.from_gym3(states, actions, rewards, firsts)
 
         pkl.dump(val_data, open(datadir / "val_rollouts.pkl", "wb"))
 
@@ -308,7 +308,7 @@ def compute_returns(
 @torch.no_grad()
 def eval_q_rmse(
     q_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-    data: RLDataset,
+    data: RlDataset,
     discount_rate: float,
     device: torch.device,
 ) -> float:
@@ -325,7 +325,7 @@ def eval_q_rmse(
 @torch.no_grad()
 def eval_q_partial_rmse(
     q_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-    data: RLDataset,
+    data: RlDataset,
     k: int,
     discount_rate: float,
     device: torch.device,
@@ -357,7 +357,7 @@ def eval(datadir: Path, discount_rate: float = 0.999, env_interactions: int = 1_
     env = ProcgenGym3Env(1, "miner")
     env = ExtractDictObWrapper(env, "rgb")
     logging.info("Gathering environment interactions")
-    data = RLDataset.from_gym3(*procgen_rollout(env, policy, env_interactions, tqdm=True))
+    data = RlDataset.from_gym3(*procgen_rollout(env, policy, env_interactions, tqdm=True))
     pkl.dump(data, open(datadir / "eval_rollouts.pkl", "wb"))
 
     logging.info("Evaluating loss")
