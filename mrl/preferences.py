@@ -30,12 +30,41 @@ class StatePreferences:
     diffs: torch.Tensor
 
 
+def noisy_pref(
+    feature_a: torch.Tensor,
+    feature_b: torch.Tensor,
+    reward: np.ndarray,
+    temperature: float,
+    rng: np.random.Generator,
+) -> Tuple[bool, torch.Tensor]:
+    """Generates a noisy preference between feature_a and feature_b
+
+    Args:
+        feature_a (torch.Tensor): Reward features
+        feature_b (torch.Tensor): Reward features
+        reward (np.ndarray): Reward weights
+        temperature (float): How noisy the preference is. Low temp means preference is more often the non-noisy preference, high temperature is closer to random.
+        rng (np.random.Generator): Random number Generator
+
+    Returns:
+        Tuple[bool, torch.Tensor]: If the first feature vector is better than the second, and their signed difference
+    """
+    diff = feature_a - feature_b
+    strength = reward @ diff.numpy()
+    p_correct = 1.0 / (1.0 + np.exp(-strength / temperature))
+    a_better = rng.random() < p_correct
+    if not a_better:
+        diff *= -1
+    return a_better, diff
+
+
 def gen_state_preferences(
     reward_path: Path,
     timesteps: int,
     n_parallel_envs: int,
     outdir: Path,
     outname: str,
+    temperature: Optional[float] = None,
     policy_path_a: Optional[Path] = None,
     policy_path_b: Optional[Path] = None,
     use_value: bool = False,
@@ -59,6 +88,8 @@ def gen_state_preferences(
 
     policy_a = get_policy(policy_path_a, actype=env.ac_space, num=n_parallel_envs)
     policy_b = get_policy(policy_path_b, actype=env.ac_space, num=n_parallel_envs)
+
+    rng = np.random.default_rng()
 
     # TODO: Instead of generating states from a policy, we could define a valid latent state space,
     # sample from that, and convert to features. Alternatively, we could define a valid feature
@@ -94,20 +125,35 @@ def gen_state_preferences(
     diffs: List[torch.Tensor] = []
     skips = torch.zeros((timesteps,), dtype=torch.bool)
     for i in range(timesteps):
-        diff = state_features[0][i] - state_features[1][i]
-        opinion = np.sign(reward @ diff.numpy())
+        if temperature is None:
+            diff = state_features[0][i] - state_features[1][i]
+            opinion = np.sign(reward @ diff.numpy())
 
-        if opinion == 0:
-            skips[i] = True
-            continue
+            if opinion == 0:
+                skips[i] = True
+                continue
 
-        if opinion < 0:
-            # Swap things so the preferred state is first
-            states[0][i], states[1][i] = states[1][i], states[0][i]
-            state_features[0][i], state_features[1][i] = state_features[1][i], state_features[0][i]
+            if opinion < 0:
+                # Swap things so the preferred state is first
+                states[0][i], states[1][i] = states[1][i], states[0][i]
+                state_features[0][i], state_features[1][i] = (
+                    state_features[1][i],
+                    state_features[0][i],
+                )
 
-        diff = diff * opinion
-        diffs.append(diff)
+            diff *= opinion
+            diffs.append(diff)
+        else:
+            a_better, diff = noisy_pref(
+                state_features[0][i], state_features[1][i], reward, temperature, rng
+            )
+            diffs.append(diff)
+            if not a_better:
+                states[0][i], states[1][i] = states[1][i], states[0][i]
+                state_features[0][i], state_features[1][i] = (
+                    state_features[1][i],
+                    state_features[0][i],
+                )
 
     states = (states[0][torch.logical_not(skips)], states[1][torch.logical_not(skips)])
     state_features = (
@@ -130,6 +176,7 @@ def gen_traj_preferences(
     n_parallel_envs: int,
     outdir: Path,
     outname: str,
+    temperature: Optional[float] = None,
     policy_path_a: Optional[Path] = None,
     policy_path_b: Optional[Path] = None,
 ) -> None:
@@ -144,6 +191,8 @@ def gen_traj_preferences(
 
     policy_a = get_policy(policy_path_a, actype=env.ac_space, num=n_parallel_envs)
     policy_b = get_policy(policy_path_b, actype=env.ac_space, num=n_parallel_envs)
+
+    rng = np.random.default_rng()
 
     data_a = RlDataset.from_gym3(
         *procgen_rollout(
@@ -169,14 +218,25 @@ def gen_traj_preferences(
     for traj_a, traj_b in zip(
         data_a.trajs(include_feature=True), data_b.trajs(include_feature=True)
     ):
-        feature_diff = torch.sum(traj_a.features, dim=0) - torch.sum(traj_b.features, dim=0)
-        opinion = np.sign(reward @ feature_diff.numpy())
-        if opinion == 0:
-            continue  # If there is exactly no preference, then skip the entire pair
+        if temperature is None:
+            feature_diff = torch.sum(traj_a.features, dim=0) - torch.sum(traj_b.features, dim=0)
+            opinion = np.sign(reward @ feature_diff.numpy())
+            if opinion == 0:
+                continue  # If there is exactly no preference, then skip the entire pair
 
-        feature_diff *= opinion
+            feature_diff *= opinion
+            a_better = opinion > 0
+        else:
+            a_better, feature_diff = noisy_pref(
+                torch.sum(traj_a.features, dim=0),
+                torch.sum(traj_b.features, dim=0),
+                reward,
+                temperature,
+                rng,
+            )
+
         diffs.append(feature_diff)
-        trajs.append((traj_a, traj_b) if opinion > 0 else (traj_b, traj_a))
+        trajs.append((traj_a, traj_b) if a_better > 0 else (traj_b, traj_a))
 
     out = TrajPreferences(trajs=trajs, diffs=torch.stack(diffs))
     pkl.dump(out, (outdir / f"{outname}.pkl").open("wb"))
