@@ -123,10 +123,15 @@ class RlDataset:
         rewards: torch.Tensor
 
     class TrajF(NamedTuple):
-        states: torch.Tensor
+        states: Optional[torch.Tensor]
         actions: torch.Tensor
         rewards: torch.Tensor
         features: torch.Tensor
+
+    class SlimTrajF(NamedTuple):
+        features: torch.Tensor
+        actions: torch.Tensor
+        rewards: torch.Tensor
 
     @overload
     def trajs(self, *, include_incomplete: bool = False) -> Generator[Traj, None, None]:
@@ -135,6 +140,12 @@ class RlDataset:
     @overload
     def trajs(
         self, *, include_incomplete: bool = False, include_feature: bool
+    ) -> Generator[SlimTrajF, None, None]:
+        ...
+
+    @overload
+    def trajs(
+        self, *, include_incomplete: bool = False, include_feature: bool, keep_states: bool
     ) -> Generator[TrajF, None, None]:
         ...
 
@@ -143,6 +154,7 @@ class RlDataset:
         *,
         include_incomplete: bool = False,
         include_feature: bool = False,
+        keep_states: bool = False,
     ):
         done_indices = self.dones.nonzero(as_tuple=True)[0] + 1
 
@@ -150,12 +162,19 @@ class RlDataset:
         for done_index in done_indices:
             if include_feature:
                 assert self.features is not None
-                yield RlDataset.TrajF(
-                    states=self.states[start:done_index],
-                    actions=self.actions[start : done_index - 1],
-                    rewards=self.rewards[start:done_index],
-                    features=self.features[start:done_index],
-                )
+                if keep_states:
+                    yield RlDataset.TrajF(
+                        states=self.states[start:done_index],
+                        actions=self.actions[start : done_index - 1],
+                        rewards=self.rewards[start:done_index],
+                        features=self.features[start:done_index],
+                    )
+                else:
+                    yield RlDataset.SlimTrajF(
+                        actions=self.actions[start : done_index - 1],
+                        rewards=self.rewards[start:done_index],
+                        features=self.features[start:done_index],
+                    )
             else:
                 yield RlDataset.Traj(
                     states=self.states[start:done_index],
@@ -167,12 +186,19 @@ class RlDataset:
         if include_incomplete:
             if include_feature:
                 assert self.features is not None
-                yield RlDataset.TrajF(
-                    states=self.states[start:],
-                    actions=self.actions[start:],
-                    rewards=self.rewards[start:],
-                    features=self.features[start:],
-                )
+                if keep_states:
+                    yield RlDataset.TrajF(
+                        states=self.states[start:],
+                        actions=self.actions[start:],
+                        rewards=self.rewards[start:],
+                        features=self.features[start:],
+                    )
+                else:
+                    yield RlDataset.SlimTrajF(
+                        actions=self.actions[start:],
+                        rewards=self.rewards[start:],
+                        features=self.features[start:],
+                    )
             else:
                 yield RlDataset.Traj(
                     states=self.states[start:],
