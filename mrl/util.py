@@ -97,9 +97,9 @@ def procgen_rollout(
         return states, actions, rewards, firsts
 
 
-def find_policy_path(policydir: Path) -> Tuple[Optional[Path], int]:
+def find_policy_path(policydir: Path, overwrite: bool = False) -> Tuple[Optional[Path], int]:
     models = list(policydir.glob("model[0-9][0-9][0-9].jd"))
-    if len(models) == 0:
+    if len(models) == 0 or overwrite:
         return None, 0
 
     latest_model = sorted(models)[-1]

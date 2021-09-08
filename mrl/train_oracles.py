@@ -50,7 +50,7 @@ def train(
         )
         env = gym3.ExtractDictObWrapper(env, "rgb")
 
-        model_path, model_iter = find_policy_path(repl_path / "models")
+        model_path, model_iter = find_policy_path(repl_path / "models", overwrite)
 
         start_time = model_iter * 100_000  # LogSaveHelper ic_per_save value
 
