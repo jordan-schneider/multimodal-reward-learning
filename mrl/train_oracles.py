@@ -42,18 +42,19 @@ def train(
     )
 
     for replication in range(replications):
+        repl_path = path / str(replication)
         env = Miner(
-            reward_weights=load_reward(path=path, comm=comm, replication=replication),
+            reward_weights=load_reward(path=repl_path, comm=comm),
             num=n_parallel_envs,
             rand_seed=seed + replication,
         )
         env = gym3.ExtractDictObWrapper(env, "rgb")
 
-        model_path, model_iter = find_policy_path(path / "models")
+        model_path, model_iter = find_policy_path(repl_path / "models")
 
         start_time = model_iter * 100_000  # LogSaveHelper ic_per_save value
 
-        model_save_dir = path / "models"
+        model_save_dir = repl_path / "models"
         model_save_dir.mkdir(parents=True, exist_ok=True)
 
         train_fn(
@@ -65,7 +66,7 @@ def train(
             arch="detach",
             interacts_total=total_interacts,
             n_epoch_vf=6,
-            log_dir=path / "logs",
+            log_dir=repl_path / "logs",
             comm=comm,
             port=port,
         )
