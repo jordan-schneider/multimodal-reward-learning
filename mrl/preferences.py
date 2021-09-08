@@ -1,7 +1,7 @@
 import pickle as pkl
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple, cast
+from typing import List, Literal, NamedTuple, Optional, Tuple, Union, cast
 
 import fire  # type: ignore
 import numpy as np
@@ -19,6 +19,18 @@ from mrl.util import procgen_rollout
 @dataclass
 class TrajPreferences:
     trajs: List[Tuple[RlDataset.TrajF, RlDataset.TrajF]]
+    diffs: torch.Tensor
+
+
+class SlimTrajF(NamedTuple):
+    actions: torch.Tensor
+    rewards: torch.Tensor
+    features: torch.Tensor
+
+
+@dataclass
+class SlimTrajPreferences:
+    trajs: List[Tuple[SlimTrajF, SlimTrajF]]
     diffs: torch.Tensor
 
 
@@ -170,6 +182,19 @@ def gen_state_preferences(
     pkl.dump(out, (outdir / f"{outname}.pkl").open("wb"))
 
 
+def strip_states(path: str) -> None:
+    prefs = cast(TrajPreferences, pkl.load(open(path, "rb")))
+    slim_trajs = [
+        (
+            SlimTrajF(actions=t[0].actions, rewards=t[0].rewards, features=t[0].features),
+            SlimTrajF(actions=t[1].actions, rewards=t[1].rewards, features=t[0].features),
+        )
+        for t in prefs.trajs
+    ]
+    slim_prefs = SlimTrajPreferences(trajs=slim_trajs, diffs=prefs.diffs)
+    pkl.dump(slim_prefs, open(path + ".slim", "wb"))
+
+
 def gen_traj_preferences(
     reward_path: Path,
     timesteps: int,
@@ -179,6 +204,7 @@ def gen_traj_preferences(
     temperature: Optional[float] = None,
     policy_path_a: Optional[Path] = None,
     policy_path_b: Optional[Path] = None,
+    keep_raw_states: bool = False,
 ) -> None:
     reward_path, outdir = Path(reward_path), Path(outdir)
     if not reward_path.exists():
@@ -213,11 +239,18 @@ def gen_traj_preferences(
         )
     )
 
-    trajs: List[Tuple[RlDataset.TrajF, RlDataset.TrajF]] = []
+    trajs: List[Tuple[Union[RlDataset.TrajF, SlimTrajF], Union[RlDataset.TrajF, SlimTrajF]]] = []
     diffs: List[torch.Tensor] = []
     for traj_a, traj_b in zip(
         data_a.trajs(include_feature=True), data_b.trajs(include_feature=True)
     ):
+        if not keep_raw_states:
+            traj_a = SlimTrajF(
+                actions=traj_a.actions, rewards=traj_a.rewards, features=traj_a.features
+            )
+            traj_b = SlimTrajF(
+                actions=traj_b.actions, rewards=traj_b.rewards, features=traj_b.features
+            )
         if temperature is None:
             feature_diff = torch.sum(traj_a.features, dim=0) - torch.sum(traj_b.features, dim=0)
             opinion = np.sign(reward @ feature_diff.numpy())
@@ -269,5 +302,5 @@ class RandomPolicy(PhasicValueModel):
 
 if __name__ == "__main__":
     fire.Fire(
-        {"traj": gen_traj_preferences, "state": gen_state_preferences},
+        {"traj": gen_traj_preferences, "state": gen_state_preferences, "strip": strip_states},
     )
