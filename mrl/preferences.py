@@ -61,18 +61,33 @@ def noisy_pref(
 
 
 def gen_state_preferences(
-    reward_path: Path,
+    path: Path,
     timesteps: int,
     n_parallel_envs: int,
-    outdir: Path,
     outname: str,
     temperature: Optional[float] = None,
     policy_path_a: Optional[Path] = None,
     policy_path_b: Optional[Path] = None,
     use_value: bool = False,
     value_path: Optional[Path] = None,
+    replications: Optional[int] = None,
 ) -> None:
-    reward_path, outdir = Path(reward_path), Path(outdir)
+    path = Path(path)
+    if replications is not None:
+        offset = 0 if (path / "0").exists() else 1
+        for i in range(offset, replications + offset):
+            if policy_path_a is not None or policy_path_b is not None or use_value:
+                raise NotImplementedError(
+                    "Specifying policies and value networks with replications not supported at this time."
+                )
+            gen_state_preferences(
+                path=path / str(i),
+                timesteps=timesteps,
+                n_parallel_envs=n_parallel_envs,
+                outname=outname,
+                temperature=temperature,
+            )
+    reward_path, outdir = path / "reward.npy", path / "prefs/state"
     if not reward_path.exists():
         raise ValueError(f"Reward does not exist at {reward_path}")
     reward = np.load(reward_path)
@@ -198,13 +213,13 @@ def gen_traj_preferences(
 ) -> None:
     path = Path(path)
     if replications is not None:
+        if policy_path_a is not None or policy_path_b is not None:
+            raise NotImplementedError(
+                "Replications flag not compatible with specifying a policy path at this time."
+            )
+
         offset = 0 if (path / "0").exists() else 1
         for i in range(offset, replications + offset):
-            if policy_path_a is not None or policy_path_b is not None:
-                raise NotImplementedError(
-                    "Replications flag not compatible with specifying a policy path at this time."
-                )
-
             gen_traj_preferences(
                 path=path / str(i),
                 timesteps=timesteps,
