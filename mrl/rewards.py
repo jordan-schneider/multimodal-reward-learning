@@ -1,3 +1,4 @@
+from itertools import product
 from pathlib import Path
 
 import numpy as np
@@ -13,10 +14,31 @@ def make_original_reward() -> np.ndarray:
     return reward
 
 
-def make_reward(
-    path: Path, rng: Generator, fix_sign: bool = False, use_original: bool = False
-) -> np.ndarray:
+def make_near_original_rewards(rootdir: Path, replications: int) -> None:
+    n = replications ** (1.0 / 3.0)
+    assert (
+        n.is_integer()
+    ), "If using near original rewards, you must have a perfect cube of replications"
+    n = int(n)
 
+    # TODO: Unhardcode these
+    danger = np.linspace(0.0, -1.0, n)
+    dists = np.linspace(0.0, -0.1, n)
+    diamonds = np.linspace(0.0, -0.1, n)
+
+    for i, vals in enumerate(product(danger, dists, diamonds)):
+        reward = np.array([1.0, 10.0, *vals])
+        reward = reward / np.linalg.norm(reward)
+
+        np.save(rootdir / str(i) / "reward.npy", reward)
+
+
+def make_reward(
+    path: Path,
+    rng: Generator,
+    fix_sign: bool = False,
+    use_original: bool = False,
+) -> None:
     if use_original:
         reward = make_original_reward()
     else:
@@ -27,22 +49,32 @@ def make_reward(
             reward = pos_reward * [1.0, 1.0, -1.0, -1.0, -1.0]
 
     np.save(path / "reward.npy", reward)
-    return reward
 
 
-def load_reward(
+def make_rewards(
     path: Path,
     rng: Generator,
     comm: Comm,
     overwrite: bool = False,
     fix_reward_sign: bool = False,
     use_original: bool = False,
-) -> np.ndarray:
+    use_near_original: bool = False,
+    replications: int = 1,
+) -> None:
     if comm.rank == 0:
-        if overwrite or not (path / "reward.npy").exists():
-            reward = make_reward(path, rng, fix_reward_sign, use_original)
+        if use_near_original:
+            if overwrite or not (path / "1" / "reward.npy").exists():
+                make_near_original_rewards(path, replications)
         else:
-            reward = np.load(path / "reward.npy")
+            for repl in range(replications):
+                if overwrite or not (path / str(repl) / "reward.npy").exists():
+                    make_reward(path / str(repl), rng, fix_reward_sign, use_original)
+    comm.Barrier()
+
+
+def load_reward(path: Path, comm: Comm, replication: int) -> np.ndarray:
+    if comm.rank == 0:
+        reward = np.load(path / str(replication) / "reward.npy")
     else:
         reward = None
     reward = comm.bcast(reward, root=0)
