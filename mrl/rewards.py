@@ -75,9 +75,9 @@ def make_rewards(
     comm.Barrier()
 
 
-def load_reward(path: Path, comm: Comm, replication: int) -> np.ndarray:
+def load_reward(path: Path, comm: Comm) -> np.ndarray:
     if comm.rank == 0:
-        reward = np.load(path / str(replication) / "reward.npy")
+        reward = np.load(path / "reward.npy")
     else:
         reward = None
     reward = comm.bcast(reward, root=0)
