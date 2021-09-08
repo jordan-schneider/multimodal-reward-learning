@@ -30,7 +30,9 @@ def make_near_original_rewards(rootdir: Path, replications: int) -> None:
         reward = np.array([1.0, 10.0, *vals])
         reward = reward / np.linalg.norm(reward)
 
-        np.save(rootdir / str(i) / "reward.npy", reward)
+        repl_dir = rootdir / str(i)
+        repl_dir.mkdir(parents=True, exist_ok=True)
+        np.save(repl_dir / "reward.npy", reward)
 
 
 def make_reward(
@@ -48,6 +50,7 @@ def make_reward(
             pos_reward = np.abs(reward)
             reward = pos_reward * [1.0, 1.0, -1.0, -1.0, -1.0]
 
+    path.mkdir(parents=True, exist_ok=True)
     np.save(path / "reward.npy", reward)
 
 
@@ -63,7 +66,7 @@ def make_rewards(
 ) -> None:
     if comm.rank == 0:
         if use_near_original:
-            if overwrite or not (path / "1" / "reward.npy").exists():
+            if overwrite or not (path / "0" / "reward.npy").exists():
                 make_near_original_rewards(path, replications)
         else:
             for repl in range(replications):
