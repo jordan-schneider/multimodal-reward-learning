@@ -198,7 +198,7 @@ def get_rollouts(
     if val_missing > 0:
         states, actions, rewards, firsts = procgen_rollout(env, policy, val_missing, tqdm=True)
         if val_data is not None:
-            val_data.append_gym3(states, actions, rewards, firsts)
+            val_data.append_gym3(states=states, actions=actions, rewards=rewards, firsts=firsts)
         else:
             val_data = RlDataset.from_gym3(states, actions, rewards, firsts)
 
