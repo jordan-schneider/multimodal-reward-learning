@@ -191,7 +191,7 @@ def get_rollouts(
     if not overwrite and val_rollouts_path.exists():
         val_data = cast(RlDataset, pkl.load(val_rollouts_path.open("rb")))
 
-        val_missing = val_env_steps - len(val_data.states)
+        val_missing = val_env_steps - len(val_data)
     else:
         val_missing = val_env_steps
 
@@ -259,6 +259,7 @@ def refine(
     writer = SummaryWriter(log_dir=outdir / "logs")
 
     if trunc_returns:
+        assert trunc_horizon is not None
         q = learn_trunc_returns(
             horizon=trunc_horizon,
             batch_gen=BatchGenerator(env=env, policy=policy),
@@ -313,9 +314,12 @@ def eval_q_rmse(
     device: torch.device,
 ) -> float:
     loss = 0.0
-    for states, actions, rewards in data.trajs(include_incomplete=False):
-        values = q_fn(states[:-1].to(device=device), actions.to(device=device)).detach().cpu()
-        returns = compute_returns(rewards.numpy(), discount_rate)[:-1]
+    for traj in data.trajs(include_incomplete=False):
+        assert traj.states is not None and traj.actions is not None and traj.rewards is not None
+        values = (
+            q_fn(traj.states[:-1].to(device=device), traj.actions.to(device=device)).detach().cpu()
+        )
+        returns = compute_returns(traj.rewards.numpy(), discount_rate)[:-1]
 
         errors = values - returns
         loss += torch.sqrt(torch.mean(errors ** 2)).item()
