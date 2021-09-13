@@ -1,3 +1,4 @@
+import gc
 import pickle as pkl
 from dataclasses import dataclass
 from pathlib import Path
@@ -5,6 +6,7 @@ from typing import List, Literal, Optional, Sequence, Tuple, Union, cast
 
 import fire  # type: ignore
 import numpy as np
+import psutil  # type: ignore
 import torch
 from gym3.extract_dict_ob import ExtractDictObWrapper  # type: ignore
 from gym3.types import ValType  # type: ignore
@@ -13,23 +15,7 @@ from torch.distributions import Categorical
 
 from mrl.envs import Miner
 from mrl.offline_buffer import RlDataset
-from mrl.util import procgen_rollout
-
-TrajF = Union[RlDataset.TrajF, RlDataset.SlimTrajF]
-
-
-@dataclass
-class TrajPreferences:
-    trajs: Sequence[Tuple[TrajF, TrajF]]
-    diffs: torch.Tensor
-
-
-@dataclass
-class StatePreferences:
-    reward_or_value: Literal["reward", "value"]
-    states: Tuple[torch.Tensor, torch.Tensor]  # Raw obs
-    state_features: Tuple[torch.Tensor, torch.Tensor]  # Features
-    diffs: torch.Tensor
+from mrl.util import procgen_rollout_dataset, procgen_rollout_features
 
 
 def noisy_pref(
@@ -109,6 +95,22 @@ def gen_state_preferences(
 
     rng = np.random.default_rng()
 
+    feature = procgen_rollout_features(
+        env=env,
+        policy=policy_a,
+        timesteps=1,
+    )
+    one_step_size = feature.nbytes
+    print(f"one timestep size={one_step_size}")
+    del feature
+
+    gc.collect()
+    free_memory = psutil.virtual_memory().available
+    print(f"Free memory={free_memory}")
+
+    batch_timesteps = int(free_memory / one_step_size * 0.8)
+    print(f"batch_timesteps={batch_timesteps}")
+
     # TODO: Instead of generating states from a policy, we could define a valid latent state space,
     # sample from that, and convert to features. Alternatively, we could define a valid feature
     # space and sample from that directly. Doing direct sampling with produce a very different
@@ -116,94 +118,46 @@ def gen_state_preferences(
     # that the human will actually see. There are some environments where direct sampling is
     # possible, but the real world is not one of them, and so we might be doomed to using policy
     # based distributions.
-    data_a = RlDataset.from_gym3(
-        *procgen_rollout(
+
+    for i in range(timesteps // (n_parallel_envs * batch_timesteps)):
+        features_a = procgen_rollout_features(
             env=env,
             policy=policy_a,
-            timesteps=timesteps // n_parallel_envs,
+            timesteps=batch_timesteps,
             tqdm=True,
-            return_features=True,
         )
-    )
-    data_b = RlDataset.from_gym3(
-        *procgen_rollout(
+
+        features_b = procgen_rollout_features(
             env=env,
             policy=policy_b,
-            timesteps=timesteps // n_parallel_envs,
+            timesteps=batch_timesteps,
             tqdm=True,
-            return_features=True,
         )
-    )
 
-    assert data_a.features is not None
-    assert data_b.features is not None
+        diffs: List[torch.Tensor] = []
+        for i in range(len(features_a)):
+            if temperature is None:
+                diff = features_a[i] - features_b[i]
+                opinion = np.sign(reward @ diff.numpy())
 
-    states = (data_a.states, data_b.states)
-    state_features = (data_a.features, data_b.features)
-    diffs: List[torch.Tensor] = []
-    skips = torch.zeros((timesteps,), dtype=torch.bool)
-    for i in range(timesteps):
-        if temperature is None:
-            diff = state_features[0][i] - state_features[1][i]
-            opinion = np.sign(reward @ diff.numpy())
+                if opinion == 0:
+                    continue
 
-            if opinion == 0:
-                skips[i] = True
-                continue
+                diff *= opinion
+                diffs.append(diff)
+            else:
+                _, diff = noisy_pref(features_a[i], features_b[i], reward, temperature, rng)
+                diffs.append(diff)
 
-            if opinion < 0:
-                # Swap things so the preferred state is first
-                states[0][i], states[1][i] = states[1][i], states[0][i]
-                state_features[0][i], state_features[1][i] = (
-                    state_features[1][i],
-                    state_features[0][i],
-                )
-
-            diff *= opinion
-            diffs.append(diff)
-        else:
-            a_better, diff = noisy_pref(
-                state_features[0][i], state_features[1][i], reward, temperature, rng
-            )
-            diffs.append(diff)
-            if not a_better:
-                states[0][i], states[1][i] = states[1][i], states[0][i]
-                state_features[0][i], state_features[1][i] = (
-                    state_features[1][i],
-                    state_features[0][i],
-                )
-
-    states = (states[0][torch.logical_not(skips)], states[1][torch.logical_not(skips)])
-    state_features = (
-        state_features[0][torch.logical_not(skips)],
-        state_features[1][torch.logical_not(skips)],
-    )
-
-    out = StatePreferences(
-        reward_or_value="value" if use_value else "reward",
-        states=states,
-        state_features=state_features,
-        diffs=torch.stack(diffs),
-    )
-    pkl.dump(out, (outdir / f"{outname}.pkl").open("wb"))
-
-
-def strip_states(path: str) -> None:
-    prefs = cast(TrajPreferences, pkl.load(open(path, "rb")))
-    slim_trajs = [
-        (
-            RlDataset.SlimTrajF(actions=t[0].actions, rewards=t[0].rewards, features=t[0].features),
-            RlDataset.SlimTrajF(actions=t[1].actions, rewards=t[1].rewards, features=t[0].features),
-        )
-        for t in prefs.trajs
-    ]
-    slim_prefs = TrajPreferences(trajs=slim_trajs, diffs=prefs.diffs)
-    pkl.dump(slim_prefs, open(path + ".slim", "wb"))
+        pkl.dump(torch.stack(diffs), (outdir / f"{outname}.{i}.pkl").open("wb"))
+        del features_a
+        del features_b
+        gc.collect()
 
 
 def gen_traj_preferences(
     path: Path,
-    timesteps: int,
+    total_timesteps: int,
     n_parallel_envs: int,
     outname: str,
     temperature: Optional[float] = None,
@@ -223,7 +177,7 @@ def gen_traj_preferences(
         for i in range(offset, replications + offset):
             gen_traj_preferences(
                 path=path / str(i),
-                timesteps=timesteps,
+                total_timesteps=total_timesteps,
                 n_parallel_envs=n_parallel_envs,
                 outname=outname,
                 temperature=temperature,
@@ -245,53 +199,66 @@ def gen_traj_preferences(
 
     rng = np.random.default_rng()
 
-    data_a = RlDataset.from_gym3(
-        *procgen_rollout(
+    datum = procgen_rollout_features(
+        env=env,
+        policy=policy_a,
+        timesteps=1,
+    )
+    one_step_size = datum.nbytes
+    print(f"one timestep size={one_step_size}")
+
+    gc.collect()
+    free_memory = psutil.virtual_memory().available
+    print(f"Free memory: {free_memory}")
+
+    timesteps = total_timesteps // n_parallel_envs
+
+    # How many timesteps can we fit into the available memory?
+    batch_timesteps = min(timesteps, int(free_memory / one_step_size * 0.8))
+    n_batches = (timesteps // batch_timesteps) + 1
+    print(f"batch_timesteps={batch_timesteps}, n_batches={n_batches}")
+
+    for i in range(n_batches):
+        data_a = procgen_rollout_dataset(
             env=env,
             policy=policy_a,
-            timesteps=timesteps // n_parallel_envs,
+            timesteps=batch_timesteps,
+            flags=["feature", "first"],
             tqdm=True,
-            return_features=True,
         )
-    )
-    data_b = RlDataset.from_gym3(
-        *procgen_rollout(
+        data_b = procgen_rollout_dataset(
             env=env,
             policy=policy_b,
-            timesteps=timesteps // n_parallel_envs,
+            timesteps=batch_timesteps,
+            flags=["feature", "first"],
             tqdm=True,
-            return_features=True,
         )
-    )
 
-    trajs: List[Tuple[TrajF, TrajF]] = []
-    diffs: List[torch.Tensor] = []
-    for traj_a, traj_b in zip(
-        data_a.trajs(include_feature=True, keep_states=keep_raw_states),
-        data_b.trajs(include_feature=True, keep_states=keep_raw_states),
-    ):
-        if temperature is None:
-            feature_diff = torch.sum(traj_a.features, dim=0) - torch.sum(traj_b.features, dim=0)
-            opinion = np.sign(reward @ feature_diff.numpy())
-            if opinion == 0:
-                continue  # If there is exactly no preference, then skip the entire pair
+        diffs: List[torch.Tensor] = []
+        for traj_a, traj_b in zip(
+            data_a.trajs(),
+            data_b.trajs(),
+        ):
+            assert traj_a.features is not None and traj_b.features is not None
+            if temperature is None:
+                feature_diff = torch.sum(traj_a.features, dim=0) - torch.sum(traj_b.features, dim=0)
+                opinion = np.sign(reward @ feature_diff.numpy())
+                if opinion == 0:
+                    continue  # If there is exactly no preference, then skip the entire pair
 
-            feature_diff *= opinion
-            a_better = opinion > 0
-        else:
-            a_better, feature_diff = noisy_pref(
-                torch.sum(traj_a.features, dim=0),
-                torch.sum(traj_b.features, dim=0),
-                reward,
-                temperature,
-                rng,
-            )
+                feature_diff *= opinion
+            else:
+                _, feature_diff = noisy_pref(
+                    torch.sum(traj_a.features, dim=0),
+                    torch.sum(traj_b.features, dim=0),
+                    reward,
+                    temperature,
+                    rng,
+                )
 
-        diffs.append(feature_diff)
-        trajs.append((traj_a, traj_b) if a_better > 0 else (traj_b, traj_a))
+            diffs.append(feature_diff)
 
-    out = TrajPreferences(trajs=trajs, diffs=torch.stack(diffs))
-    pkl.dump(out, (outdir / f"{outname}.pkl").open("wb"))
+        pkl.dump(torch.stack(diffs), (outdir / f"{outname}.{i}.pkl").open("wb"))
 
 
 def get_policy(
@@ -321,5 +288,5 @@ class RandomPolicy(PhasicValueModel):
 
 if __name__ == "__main__":
     fire.Fire(
-        {"traj": gen_traj_preferences, "state": gen_state_preferences, "strip": strip_states},
+        {"traj": gen_traj_preferences, "state": gen_state_preferences},
     )

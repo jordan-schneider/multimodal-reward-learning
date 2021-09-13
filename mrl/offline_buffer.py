@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Generator, List, NamedTuple, Optional, Tuple, cast, overload
+from dataclasses import dataclass
+from typing import Dict, Generator, List, Optional, Tuple, cast
 
 import numpy as np
 import torch
@@ -11,10 +12,10 @@ from torch.functional import Tensor
 class RlDataset:
     def __init__(
         self,
-        states: torch.Tensor,
-        actions: torch.Tensor,
-        rewards: torch.Tensor,
-        dones: torch.Tensor,
+        states: Optional[torch.Tensor] = None,
+        actions: Optional[torch.Tensor] = None,
+        rewards: Optional[torch.Tensor] = None,
+        dones: Optional[torch.Tensor] = None,
         features: Optional[torch.Tensor] = None,
     ) -> None:
         self.states = states
@@ -23,85 +24,84 @@ class RlDataset:
         self.dones = dones
         self.features = features
 
-        self.states.requires_grad = False
-        self.actions.requires_grad = False
-        self.rewards.requires_grad = False
-        self.dones.requires_grad = False
-        if self.features is not None:
-            self.features.requires_grad = False
-
-    @staticmethod
-    @overload
-    def process_gym3(
-        states: np.ndarray, actions: np.ndarray, rewards: np.ndarray, firsts: np.ndarray
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        ...
-
-    @staticmethod
-    @overload
-    def process_gym3(
-        states: np.ndarray,
-        actions: np.ndarray,
-        rewards: np.ndarray,
-        firsts: np.ndarray,
-        features: np.ndarray,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        ...
-
     @staticmethod
     def process_gym3(
-        states: np.ndarray,
-        actions: np.ndarray,
-        rewards: np.ndarray,
-        firsts: np.ndarray,
+        *,
+        states: Optional[np.ndarray] = None,
+        actions: Optional[np.ndarray] = None,
+        rewards: Optional[np.ndarray] = None,
+        firsts: Optional[np.ndarray] = None,
         features: Optional[np.ndarray] = None,
-    ):
-        # (T, num, H, W, C) -> (num * T, H, W, C)
-        flat_states = torch.tensor(states).flatten(0, 1)
-        flat_actions = torch.tensor(actions).flatten()  # (num, T) -> (num * T)
-        flat_rewards = torch.tensor(rewards).flatten()  # (num, T) -> (num * T)
-        flat_firsts = torch.tensor(firsts).flatten()  # (num, T) -> (num * T)
-        dones = flat_firsts[1:]
+    ) -> Dict[str, torch.Tensor]:
+        out = {}
 
+        if states is not None:
+            # (T, num, H, W, C) -> (num * T, H, W, C)
+            out["states"] = torch.tensor(states).flatten(0, 1)
+        if actions is not None:
+            out["actions"] = torch.tensor(actions).flatten()  # (num, T) -> (num * T)
+        if rewards is not None:
+            out["rewards"] = torch.tensor(rewards).flatten()  # (num, T) -> (num * T)
+        if firsts is not None:
+            flat_firsts = torch.tensor(firsts).flatten()  # (num, T) -> (num * T)
+            out["dones"] = flat_firsts[1:]
         if features is not None:
-            flat_features = torch.tensor(features).flatten(0, 1)
+            out["features"] = torch.tensor(features).flatten(0, 1)
 
-            return flat_states, flat_actions, flat_rewards, dones, flat_features
-        else:
-            return flat_states, flat_actions, flat_rewards, dones
+        return out
+
+    def __len__(self) -> int:
+        if self.states is not None:
+            return self.states.shape[0]
+        if self.actions is not None:
+            return self.actions.shape[0] + 1
+        if self.rewards is not None:
+            return self.rewards.shape[0]
+        if self.dones is not None:
+            return self.dones.shape[0] + 1
+        if self.features is not None:
+            return self.features.shape[0]
+        raise ValueError("No data in dataset.")
 
     @classmethod
     def from_gym3(
         cls,
-        states: np.ndarray,
-        actions: np.ndarray,
-        rewards: np.ndarray,
-        firsts: np.ndarray,
+        states: Optional[np.ndarray] = None,
+        actions: Optional[np.ndarray] = None,
+        rewards: Optional[np.ndarray] = None,
+        firsts: Optional[np.ndarray] = None,
         features: Optional[np.ndarray] = None,
     ) -> RlDataset:
         """Builds RLDataset from procgen_rollout output arrays"""
-        if features is not None:
-            return cls(*RlDataset.process_gym3(states, actions, rewards, firsts, features))
-        else:
-            return cls(*RlDataset.process_gym3(states, actions, rewards, firsts))
+        return cls(
+            **RlDataset.process_gym3(
+                states=states, actions=actions, rewards=rewards, firsts=firsts, features=features
+            )
+        )
 
     def append_gym3(
         self,
-        states: np.ndarray,
-        actions: np.ndarray,
-        rewards: np.ndarray,
-        firsts: np.ndarray,
+        *,
+        states: Optional[np.ndarray] = None,
+        actions: Optional[np.ndarray] = None,
+        rewards: Optional[np.ndarray] = None,
+        firsts: Optional[np.ndarray] = None,
         features: Optional[np.ndarray] = None,
     ) -> RlDataset:
-        if features is not None and self.features is not None:
-            s, a, r, d, f = RlDataset.process_gym3(states, actions, rewards, firsts, features)
-            self.features = torch.cat((self.features, f), dim=0)
-        else:
-            s, a, r, d = RlDataset.process_gym3(states, actions, rewards, firsts)
-        self.states = torch.cat((self.states, s), dim=0)
-        self.actions = torch.cat((self.actions, a))
-        self.rewards = torch.cat((self.rewards, r))
-        self.dones = torch.cat((self.dones, d))
+        data = RlDataset.process_gym3(
+            states=states, actions=actions, rewards=rewards, firsts=firsts, features=features
+        )
+
+        if self.states is not None and data["states"] is not None:
+            self.states = torch.cat((self.states, data["states"]), dim=0)
+        if self.actions is not None and data["actions"] is not None:
+            self.actions = torch.cat((self.actions, data["actions"]))
+        if self.rewards is not None and data["rewards"] is not None:
+            self.rewards = torch.cat((self.rewards, data["rewards"]))
+        if self.dones is not None and data["dones"] is not None:
+            self.dones = torch.cat((self.dones, data["dones"]))
+        if self.features is not None and data["features"] is not None:
+            self.features = torch.cat((self.features, data["features"]), dim=0)
         return self
 
     @classmethod
@@ -115,101 +115,66 @@ class RlDataset:
         firsts = cast(torch.Tensor, data["first"]).flatten()  # (num, T) -> (num * T)
         dones = firsts[1:]
 
-        return cls(states, actions, rewards, dones)
+        return cls(states=states, actions=actions, rewards=rewards, dones=dones)
 
-    class Traj(NamedTuple):
-        states: torch.Tensor
-        actions: torch.Tensor
-        rewards: torch.Tensor
+    def get_bytes(self) -> int:
+        def get_tensor_bytes(t: Optional[torch.Tensor]) -> int:
+            if t is None:
+                return 0
+            else:
+                return t.numel() * t.element_size()
 
-    class TrajF(NamedTuple):
-        states: Optional[torch.Tensor]
-        actions: torch.Tensor
-        rewards: torch.Tensor
-        features: torch.Tensor
+        return (
+            get_tensor_bytes(self.states)
+            + get_tensor_bytes(self.actions)
+            + get_tensor_bytes(self.rewards)
+            + get_tensor_bytes(self.dones)
+            + get_tensor_bytes(self.features)
+        )
 
-    class SlimTrajF(NamedTuple):
-        features: torch.Tensor
-        actions: torch.Tensor
-        rewards: torch.Tensor
-
-    @overload
-    def trajs(self, *, include_incomplete: bool = False) -> Generator[Traj, None, None]:
-        ...
-
-    @overload
-    def trajs(
-        self, *, include_incomplete: bool = False, include_feature: bool
-    ) -> Generator[SlimTrajF, None, None]:
-        ...
-
-    @overload
-    def trajs(
-        self, *, include_incomplete: bool = False, include_feature: bool, keep_states: bool
-    ) -> Generator[TrajF, None, None]:
-        ...
+    @dataclass
+    class Traj:
+        states: Optional[torch.Tensor] = None
+        features: Optional[torch.Tensor] = None
+        actions: Optional[torch.Tensor] = None
+        rewards: Optional[torch.Tensor] = None
 
     def trajs(
         self,
         *,
         include_incomplete: bool = False,
-        include_feature: bool = False,
-        keep_states: bool = False,
-    ):
+    ) -> Generator[Traj, None, None]:
+        assert self.dones is not None, "Must supply dones to get trajs."
         done_indices = self.dones.nonzero(as_tuple=True)[0] + 1
 
         start = 0
         for done_index in done_indices:
-            if include_feature:
-                assert self.features is not None
-                if keep_states:
-                    yield RlDataset.TrajF(
-                        states=self.states[start:done_index],
-                        actions=self.actions[start : done_index - 1],
-                        rewards=self.rewards[start:done_index],
-                        features=self.features[start:done_index],
-                    )
-                else:
-                    yield RlDataset.SlimTrajF(
-                        actions=self.actions[start : done_index - 1],
-                        rewards=self.rewards[start:done_index],
-                        features=self.features[start:done_index],
-                    )
-            else:
-                yield RlDataset.Traj(
-                    states=self.states[start:done_index],
-                    actions=self.actions[start : done_index - 1],
-                    rewards=self.rewards[start:done_index],
-                )
+            yield RlDataset.Traj(
+                states=self.states[start:done_index] if self.states is not None else None,
+                actions=self.actions[start : done_index - 1] if self.actions is not None else None,
+                rewards=self.rewards[start:done_index] if self.rewards is not None else None,
+                features=self.features[start:done_index] if self.features is not None else None,
+            )
             start = done_index
 
         if include_incomplete:
-            if include_feature:
-                assert self.features is not None
-                if keep_states:
-                    yield RlDataset.TrajF(
-                        states=self.states[start:],
-                        actions=self.actions[start:],
-                        rewards=self.rewards[start:],
-                        features=self.features[start:],
-                    )
-                else:
-                    yield RlDataset.SlimTrajF(
-                        actions=self.actions[start:],
-                        rewards=self.rewards[start:],
-                        features=self.features[start:],
-                    )
-            else:
-                yield RlDataset.Traj(
-                    states=self.states[start:],
-                    actions=self.actions[start:],
-                    rewards=self.rewards[start:],
-                )
+            yield RlDataset.Traj(
+                states=self.states[start:] if self.states is not None else None,
+                actions=self.actions[start:] if self.actions is not None else None,
+                rewards=self.rewards[start:] if self.rewards is not None else None,
+                features=self.features[start:] if self.features is not None else None,
+            )
 
     def truncated_returns(
         self, horizon: int, discount_rate: float
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         assert discount_rate >= 0.0 and discount_rate <= 1.0
+        assert (
+            self.states is not None
+            and self.actions is not None
+            and self.rewards is not None
+            and self.dones is not None
+        )
 
         discounts = torch.pow(
             torch.ones(horizon, dtype=self.rewards.dtype) * discount_rate, torch.arange(horizon)
@@ -270,6 +235,8 @@ class SarsDataset(RlDataset):
         if len(self) < 0:
             raise ValueError("dones cannot be all True")
 
+        assert self.dones is not None
+
         self.index_map = self._compute_index_map(self.dones)
 
     def _compute_index_map(self, dones: torch.Tensor) -> np.ndarray:
@@ -285,9 +252,11 @@ class SarsDataset(RlDataset):
 
     def __len__(self) -> int:
         # Each time we end an episode, the final state cannot be used
+        assert self.states is not None and self.dones is not None
         return len(self.states) - torch.sum(self.dones) - 1
 
     def __getitem__(self, i: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        assert self.states is not None and self.actions is not None and self.rewards is not None
         j = self.index_map[i]
         logging.debug(f"Mapping {i} to {j}")
         return self.states[j], self.actions[j], self.rewards[j], self.states[j + 1]
@@ -303,6 +272,12 @@ class SarsDataset(RlDataset):
 
     @classmethod
     def from_rl_dataset(cls, data: RlDataset) -> SarsDataset:
+        assert (
+            data.states is not None
+            and data.actions is not None
+            and data.rewards is not None
+            and data.dones is not None
+        )
         return cls(data.states, data.actions, data.rewards, data.dones)
 
     @classmethod
@@ -314,10 +289,11 @@ class SarsDataset(RlDataset):
         firsts: np.ndarray,
         features: Optional[np.ndarray] = None,
     ) -> SarsDataset:
-        if features is None:
-            return cls(*RlDataset.process_gym3(states, actions, rewards, firsts))
-        else:
-            return cls(*RlDataset.process_gym3(states, actions, rewards, firsts, features))
+        return cls(
+            **RlDataset.process_gym3(
+                states=states, actions=actions, rewards=rewards, firsts=firsts, features=features
+            )
+        )
 
     def append_gym3(
         self,
@@ -328,9 +304,9 @@ class SarsDataset(RlDataset):
         features: Optional[np.ndarray] = None,
     ) -> SarsDataset:
         """This function exists entirely to fix the return type."""
-        if features is None:
-            return cast(SarsDataset, super().append_gym3(states, actions, rewards, firsts))
-        else:
-            return cast(
-                SarsDataset, super().append_gym3(states, actions, rewards, firsts, features)
-            )
+        return cast(
+            SarsDataset,
+            super().append_gym3(
+                states=states, actions=actions, rewards=rewards, firsts=firsts, features=features
+            ),
+        )
