@@ -9,8 +9,6 @@ import torch
 from numpy.testing import assert_allclose
 from tqdm import tqdm  # type: ignore
 
-from mrl.preferences import StatePreferences, TrajPreferences
-
 
 def make_sphere_cover(n_samples: int, rng: np.random.Generator, dims: int = 5) -> np.ndarray:
     samples = rng.standard_normal(size=(n_samples, dims))
@@ -44,19 +42,16 @@ def find_volumes(diffs: torch.Tensor, reward_samples: int, seed: int, outdir: Pa
     plt.savefig(outdir / "volume_experiment.png")
 
 
-def state_volume(
-    path: Path, outdir: Path, n_prefs: int = -1, reward_samples: int = 10_000, seed: int = 0
+def volume(
+    data_name: Path, outdir: Path, n_prefs: int = -1, reward_samples: int = 10_000, seed: int = 0
 ) -> None:
-    prefs = cast(StatePreferences, pkl.load(open(path, "rb")))
-    find_volumes(prefs.diffs[:n_prefs], reward_samples, seed, Path(outdir))
+    data_name = Path(data_name)
+    diffs = []
+    for f in data_name.parent.glob(f"{data_name.name}.[0-9]*.pkl"):
+        diffs.append(pkl.load(open(f, "rb")))
 
-
-def traj_volume(
-    path: Path, outdir: Path, n_prefs: int = -1, reward_samples: int = 10_000, seed: int = 0
-) -> None:
-    prefs = cast(TrajPreferences, pkl.load(open(path, "rb")))
-    find_volumes(prefs.diffs[:n_prefs], reward_samples, seed, Path(outdir))
+    find_volumes(torch.cat(diffs)[:n_prefs], reward_samples, seed, Path(outdir))
 
 
 if __name__ == "__main__":
-    fire.Fire({"state": state_volume, "traj": traj_volume})
+    fire.Fire(volume)
