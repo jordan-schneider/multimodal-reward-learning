@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, Final, List, Tuple, Union, cast
+from typing import Any, Dict, Final, List, Optional, Tuple, Union, cast
 
 import numpy as np
 from procgen import ProcgenGym3Env  # type: ignore
@@ -52,6 +52,8 @@ class Miner(ProcgenGym3Env):
         self.diamonds = [Miner.diamonds_remaining(state) for state in self.states]
         self.firsts = [True] * num
 
+        self.features: Optional[np.ndarray] = None
+
     def act(self, action: np.ndarray) -> None:
         super().act(action)
         self.last_diamonds = self.diamonds
@@ -73,6 +75,8 @@ class Miner(ProcgenGym3Env):
 
     def get_last_features(self) -> np.ndarray:
         # This is only a function because gym3.Wrapper doens't pass attributres through
+        if self.features is None:
+            self.features = self.make_features()
         return self.features
 
     class MinerState:
