@@ -157,18 +157,17 @@ def gen_state_preferences(
 
 def gen_traj_preferences(
     path: Path,
-    total_timesteps: int,
+    n_trajs: int,
     n_parallel_envs: int,
     outname: str,
     temperature: Optional[float] = None,
-    policy_path_a: Optional[Path] = None,
-    policy_path_b: Optional[Path] = None,
+    policy_path: Optional[Path] = None,
     keep_raw_states: bool = False,
     replications: Optional[int] = None,
 ) -> None:
     path = Path(path)
     if replications is not None:
-        if policy_path_a is not None or policy_path_b is not None:
+        if policy_path is not None:
             raise NotImplementedError(
                 "Replications flag not compatible with specifying a policy path at this time."
             )
@@ -177,7 +176,7 @@ def gen_traj_preferences(
         for i in range(offset, replications + offset):
             gen_traj_preferences(
                 path=path / str(i),
-                total_timesteps=total_timesteps,
+                n_trajs=n_trajs,
                 n_parallel_envs=n_parallel_envs,
                 outname=outname,
                 temperature=temperature,
@@ -194,14 +193,13 @@ def gen_traj_preferences(
     env = Miner(reward_weights=reward, num=n_parallel_envs)
     env = ExtractDictObWrapper(env, "rgb")
 
-    policy_a = get_policy(policy_path_a, actype=env.ac_space, num=n_parallel_envs)
-    policy_b = get_policy(policy_path_b, actype=env.ac_space, num=n_parallel_envs)
+    policy = get_policy(policy_path, actype=env.ac_space, num=n_parallel_envs)
 
     rng = np.random.default_rng()
 
     datum = procgen_rollout_features(
         env=env,
-        policy=policy_a,
+        policy=policy,
         timesteps=1,
     )
     one_step_size = datum.nbytes
@@ -211,34 +209,23 @@ def gen_traj_preferences(
     free_memory = psutil.virtual_memory().available
     print(f"Free memory: {free_memory}")
 
-    timesteps = total_timesteps // n_parallel_envs
-
     # How many timesteps can we fit into the available memory?
-    batch_timesteps = min(timesteps, int(free_memory / one_step_size * 0.8))
-    n_batches = (timesteps // batch_timesteps) + 1
-    print(f"batch_timesteps={batch_timesteps}, n_batches={n_batches}")
+    batch_timesteps = min(int(free_memory / one_step_size * 0.8), n_trajs * 1000 * 2)
+    print(f"batch_timesteps={batch_timesteps}")
 
-    for i in range(n_batches):
-        data_a = procgen_rollout_dataset(
+    current_trajs = 0
+    while current_trajs < n_trajs:
+        data = procgen_rollout_dataset(
             env=env,
-            policy=policy_a,
-            timesteps=batch_timesteps,
-            flags=["feature", "first"],
-            tqdm=True,
-        )
-        data_b = procgen_rollout_dataset(
-            env=env,
-            policy=policy_b,
+            policy=policy,
             timesteps=batch_timesteps,
             flags=["feature", "first"],
             tqdm=True,
         )
 
+        trajs = data.trajs()
         diffs: List[torch.Tensor] = []
-        for traj_a, traj_b in zip(
-            data_a.trajs(),
-            data_b.trajs(),
-        ):
+        for traj_a, traj_b in zip(trajs, trajs):
             assert traj_a.features is not None and traj_b.features is not None
             if temperature is None:
                 feature_diff = torch.sum(traj_a.features, dim=0) - torch.sum(traj_b.features, dim=0)
@@ -259,6 +246,7 @@ def gen_traj_preferences(
             diffs.append(feature_diff)
 
         pkl.dump(torch.stack(diffs), (outdir / f"{outname}.{i}.pkl").open("wb"))
+        current_trajs += len(diffs)
 
 
 def get_policy(
