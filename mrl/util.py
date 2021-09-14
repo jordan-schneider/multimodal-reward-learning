@@ -1,5 +1,7 @@
+import logging
 from pathlib import Path
-from typing import Literal, Optional, Sequence, Tuple, cast, overload
+from typing import (Any, Literal, Optional, Sequence, Tuple, Union, cast,
+                    overload)
 
 import numpy as np
 import torch
@@ -11,116 +13,111 @@ from mrl.envs import Miner
 from mrl.offline_buffer import RlDataset
 
 
-@overload
-def procgen_rollout(
-    env: ProcgenGym3Env,
-    policy: PhasicValueModel,
-    timesteps: int,
-    *,
-    tqdm: bool,
-    return_features: bool,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    ...
-
-
-@overload
-def procgen_rollout(
-    env: ProcgenGym3Env,
-    policy: PhasicValueModel,
-    timesteps: int,
-    *,
-    return_features: bool,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    ...
-
-
-@overload
-def procgen_rollout(
-    env: ProcgenGym3Env,
-    policy: PhasicValueModel,
-    timesteps: int,
-    *,
-    tqdm: bool,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    ...
-
-
-@overload
-def procgen_rollout(
-    env: ProcgenGym3Env,
-    policy: PhasicValueModel,
-    timesteps: int,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    ...
-
-
 def procgen_rollout(
     env: ProcgenGym3Env,
     policy: PhasicValueModel,
     timesteps: int,
     *,
     tqdm: bool = False,
-    return_features: bool = False,
-):
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     state_shape = env.ob_space.shape
 
     states = np.empty((timesteps, env.num, *state_shape))
     actions = np.empty((timesteps - 1, env.num), dtype=np.int64)
     rewards = np.empty((timesteps, env.num))
     firsts = np.empty((timesteps, env.num), dtype=bool)
-    if return_features:
-        features = np.empty((timesteps, env.num, Miner.N_FEATURES))
 
-    def record(t: int, env: ProcgenGym3Env, states, rewards, firsts, features) -> None:
+    def record(t: int, env: ProcgenGym3Env, states, rewards, firsts) -> None:
         reward, state, first = env.observe()
         state = cast(np.ndarray, state)  # env.observe typing dones't account for wrapper
         states[t] = state
         rewards[t] = reward
         firsts[t] = first
-        if return_features:
-            features[t] = env.callmethod("get_last_features")
 
     times = trange(timesteps - 1) if tqdm else range(timesteps - 1)
 
     for t in times:
-        record(t, env, states, rewards, firsts, features)
-        action, _, _ = policy.act(
-            torch.tensor(states[t], device=policy.device), firsts[t], policy.initial_state(env.num)
-        )
+        record(t, env, states, rewards, firsts)
+        state = torch.tensor(states[t], device=policy.device)
+        first = firsts[t]
+        init_state = policy.initial_state(env.num)
+        action, _, _ = policy.act(state, first, init_state)
         action = action.cpu().numpy()
         env.act(action)
         actions[t] = action
-    record(timesteps - 1, env, states, rewards, firsts, features)
+    record(timesteps - 1, env, states, rewards, firsts)
 
-    if return_features:
-        return states, actions, rewards, firsts, features
-    else:
-        return states, actions, rewards, firsts
+    return states, actions, rewards, firsts
+
+
+class ArrayOrList:
+    def __init__(self, val: Union[np.ndarray, list]) -> None:
+        self.val = val
+        self.list = isinstance(val, list)
+
+    def __setitem__(self, key: int, value: Any) -> None:
+        if self.list:
+            assert isinstance(self.val, list)
+            if key == len(self.val):
+                self.val.append(value)
+            elif key > len(self.val):
+                raise IndexError(f"Index {key} is out of range")
+            else:
+                self.val[key] = value
+        else:
+            self.val[key] = value
+
+    def numpy(self) -> np.ndarray:
+        if self.list:
+            return np.array(self.val)
+        else:
+            assert isinstance(self.val, np.ndarray)
+            return self.val
 
 
 def procgen_rollout_features(
-    env: ProcgenGym3Env, policy: PhasicValueModel, timesteps: int, tqdm: bool = False
+    env: ProcgenGym3Env,
+    policy: PhasicValueModel,
+    timesteps: Optional[int] = None,
+    n_trajs: Optional[int] = None,
+    tqdm: bool = False,
 ) -> np.ndarray:
-    features = np.empty((timesteps, env.num, Miner.N_FEATURES))
+    features = ArrayOrList(
+        np.empty((timesteps, env.num, Miner.N_FEATURES)) if timesteps is not None else []
+    )
 
-    times = trange(timesteps - 1) if tqdm else range(timesteps - 1)
-
-    for t in times:
+    def step():
         _, state, first = env.observe()
         features[t] = env.callmethod("get_last_features")
         action, _, _ = policy.act(
             torch.tensor(state, device=policy.device), first, policy.initial_state(env.num)
         )
         env.act(action.cpu().numpy())
+        return state, action, first
 
-    features[timesteps - 1] = env.callmethod("get_last_features")
-    return features
+    if n_trajs is not None:
+        cur_trajs = 0
+        t = 0
+        while cur_trajs < n_trajs and (timesteps is None or t < timesteps):
+            _, _, first = step()
+            cur_trajs += np.sum(first)
+            t += 1
+        features[t] = env.callmethod("get_last_features")
+    elif timesteps is not None:
+        times = trange(timesteps - 1) if tqdm else range(timesteps - 1)
+        for t in times:
+            step()
+        features[timesteps - 1] = env.callmethod("get_last_features")
+    else:
+        raise ValueError("Must specify either timesteps or n_trajs")
+    return features.numpy()
 
 
 def procgen_rollout_dataset(
     env: ProcgenGym3Env,
     policy: PhasicValueModel,
-    timesteps: int,
+    timesteps: int = -1,
+    n_trajs: Optional[int] = None,
     flags: Sequence[Literal["state", "action", "reward", "first", "feature"]] = [
         "state",
         "action",
@@ -132,15 +129,20 @@ def procgen_rollout_dataset(
 ) -> RlDataset:
     state_shape = env.ob_space.shape
 
-    states = np.empty((timesteps, env.num, *state_shape)) if "state" in flags else None
-    actions = np.empty((timesteps - 1, env.num), dtype=np.int64) if "action" in flags else None
-    rewards = np.empty((timesteps, env.num)) if "rewards" in flags else None
-    firsts = np.empty((timesteps, env.num), dtype=bool) if "first" in flags else None
-    features = np.empty((timesteps, env.num, Miner.N_FEATURES)) if "feature" in flags else None
+    def make_array(shape: Tuple[int, ...], name: str, dtype=np.float32) -> Optional[ArrayOrList]:
+        if name in flags:
+            return ArrayOrList(np.empty(shape, dtype=dtype) if timesteps > 0 else [])
+        else:
+            return None
+
+    states = make_array((timesteps, env.num, *state_shape), "state")
+    actions = make_array((timesteps - 1, env.num), "action", dtype=np.uint8)
+    rewards = make_array((timesteps, env.num), "reward")
+    firsts = make_array((timesteps, env.num), "first", dtype=bool)
+    features = make_array((timesteps, env.num, Miner.N_FEATURES), "feature")
 
     def record(t: int, env: ProcgenGym3Env, state, reward, first) -> None:
         if states is not None:
-            state = cast(np.ndarray, state)  # env.observe typing dones't account for wrapper
             states[t] = state
         if rewards is not None:
             rewards[t] = reward
@@ -149,9 +151,7 @@ def procgen_rollout_dataset(
         if features is not None:
             features[t] = env.callmethod("get_last_features")
 
-    times = trange(timesteps - 1) if tqdm else range(timesteps - 1)
-
-    for t in times:
+    def step():
         reward, state, first = env.observe()
         record(t, env, state, reward, first)
         action, _, _ = policy.act(
@@ -161,11 +161,37 @@ def procgen_rollout_dataset(
         env.act(action)
         if actions is not None:
             actions[t] = action
-    reward, state, first = env.observe()
-    record(timesteps - 1, env, state, reward, first)
+        return state, action, reward, first
+
+    if n_trajs is not None:
+        cur_trajs = 0
+        t = 0
+        while cur_trajs < n_trajs and (timesteps < 0 or t < timesteps):
+            state, _, reward, first = step()
+
+            cur_trajs += np.sum(first)
+            t += 1
+        record(timesteps - 1, env, state, reward, first)
+    elif timesteps > 0:
+        times = trange(timesteps - 1) if tqdm else range(timesteps - 1)
+
+        for t in times:
+            step()
+
+        reward, state, first = env.observe()
+        record(timesteps - 1, env, state, reward, first)
+
+    states_arr, actions_arr, rewards_arr, firsts_arr, features_arr = (
+        arr.numpy() if arr is not None else None
+        for arr in (states, actions, rewards, firsts, features)
+    )
 
     return RlDataset.from_gym3(
-        states=states, actions=actions, rewards=rewards, firsts=firsts, features=features
+        states=states_arr,
+        actions=actions_arr,
+        rewards=rewards_arr,
+        firsts=firsts_arr,
+        features=features_arr,
     )
 
 

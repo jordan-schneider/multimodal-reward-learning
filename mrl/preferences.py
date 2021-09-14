@@ -197,12 +197,12 @@ def gen_traj_preferences(
 
     rng = np.random.default_rng()
 
-    datum = procgen_rollout_features(
+    datum = procgen_rollout_dataset(
         env=env,
         policy=policy,
         timesteps=1,
     )
-    one_step_size = datum.nbytes
+    one_step_size = datum.get_bytes()
     print(f"one timestep size={one_step_size}")
 
     gc.collect()
@@ -219,6 +219,7 @@ def gen_traj_preferences(
             env=env,
             policy=policy,
             timesteps=batch_timesteps,
+            n_trajs=2 * (n_trajs - current_trajs),
             flags=["feature", "first"],
             tqdm=True,
         )
