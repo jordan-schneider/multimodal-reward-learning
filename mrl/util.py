@@ -1,10 +1,9 @@
-import logging
 from pathlib import Path
-from typing import (Any, Literal, Optional, Sequence, Tuple, Union, cast,
-                    overload)
+from typing import Any, Literal, Optional, Sequence, Tuple, Union, cast, overload
 
 import numpy as np
 import torch
+from GPUtil import GPUtil
 from phasic_policy_gradient.ppg import PhasicValueModel
 from procgen import ProcgenGym3Env
 from tqdm import trange  # type: ignore
@@ -203,3 +202,8 @@ def find_policy_path(policydir: Path, overwrite: bool = False) -> Tuple[Optional
     latest_model = sorted(models)[-1]
     model_iter = int(str(latest_model)[-6:-3])
     return latest_model, model_iter
+
+
+def find_best_gpu() -> torch.device:
+    device_id = GPUtil.getFirstAvailable(order="load")[0]
+    return torch.device(f"cuda:{device_id}")
