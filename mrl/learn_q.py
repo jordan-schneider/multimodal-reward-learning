@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Callable, Literal, Optional, cast
 
 import fire  # type: ignore
+import GPUtil  # type: ignore
 import numpy as np  # type: ignore
 import torch
 from gym3 import ExtractDictObWrapper  # type: ignore
@@ -73,7 +74,7 @@ class QNetwork(torch.nn.Module):
         return out
 
 
-def train_q_with_v(
+def train_q(
     batch_gen: BatchGenerator,
     n_train_steps: int,
     batch_size: int,
@@ -200,7 +201,9 @@ def get_rollouts(
         if val_data is not None:
             val_data.append_gym3(states=states, actions=actions, rewards=rewards, firsts=firsts)
         else:
-            val_data = RlDataset.from_gym3(states, actions, rewards, firsts)
+            val_data = RlDataset.from_gym3(
+                states=states, actions=actions, rewards=rewards, firsts=firsts
+            )
 
         pkl.dump(val_data, open(datadir / "val_rollouts.pkl", "wb"))
 
@@ -209,7 +212,7 @@ def get_rollouts(
     return val_data
 
 
-def refine(
+def learn_q(
     indir: Path,
     outdir: Path,
     lr: float = 10e-3,
@@ -241,7 +244,10 @@ def refine(
 
     model_outdir = outdir / "value"
     model_outdir.mkdir(parents=True, exist_ok=True)
-    model_path = model_outdir / f"q_model_{policy_iter}.jd"
+    model_name = (
+        f"q_model_{policy_iter}.jd" if not trunc_returns else f"q_model_trunc_{policy_iter}.jd"
+    )
+    model_path = model_outdir / model_name
 
     if model_path.exists():
         logging.info(f"Loading Q model from {model_path}")
@@ -261,7 +267,9 @@ def refine(
     writer = SummaryWriter(log_dir=outdir / "logs")
 
     if trunc_returns:
-        assert trunc_horizon is not None
+        assert (
+            trunc_horizon is not None
+        ), "Must specify a truncation horizon if using truncated returns"
         q = learn_trunc_returns(
             horizon=trunc_horizon,
             batch_gen=BatchGenerator(env=env, policy=policy),
@@ -274,7 +282,7 @@ def refine(
             writer=writer,
         )
     else:
-        q = train_q_with_v(
+        q = train_q(
             batch_gen=BatchGenerator(env=env, policy=policy),
             n_train_steps=train_env_steps,
             batch_size=batch_size,
@@ -372,5 +380,70 @@ def eval(datadir: Path, discount_rate: float = 0.999, env_interactions: int = 1_
     logging.info(f"Loss={loss} over {env_interactions} env timesteps.")
 
 
+def refine_v(
+    indir: Path,
+    outdir: Path,
+    lr: float = 10e-3,
+    discount_rate: float = 0.999,
+    batch_size: int = 64,
+    train_env_steps: int = 10_000_000,
+    val_env_steps: int = 100_000,
+    val_period: int = 2000 * 10,
+    trunc_returns: bool = False,
+    trunc_horizon: Optional[int] = None,
+    overwrite: bool = False,
+    verbosity: Literal["INFO", "DEBUG"] = "INFO",
+):
+    if trunc_returns:
+        assert (
+            trunc_horizon is not None
+        ), f"Must specify a truncation horizon to use truncated returns."
+
+    logging.basicConfig(level=verbosity)
+
+    indir = Path(indir)
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    policy_path, policy_iter = find_policy_path(indir / "models")
+    device_id = GPUtil.getFirstAvailable(order="load")[0]
+    device = torch.device(f"cuda:{device_id}")
+    policy = torch.load(policy_path, map_location=device)
+    policy.device = device
+
+    model_outdir = outdir / "value"
+    model_outdir.mkdir(parents=True, exist_ok=True)
+    model_outname = (
+        f"v_model_{policy_iter}.jd" if not trunc_returns else f"v_model_trunc_{policy_iter}.jd"
+    )
+    outpath = model_outdir / model_outname
+
+    env = ProcgenGym3Env(1, "miner")
+    env = ExtractDictObWrapper(env, "rgb")
+
+    val_data = get_rollouts(
+        env=env,
+        val_env_steps=val_env_steps,
+        policy=policy,
+        datadir=model_outdir,
+        overwrite=overwrite,
+    )
+
+    optim = torch.optim.Adam(policy.parameters(), lr=lr)
+
+    writer = SummaryWriter(log_dir=outdir / "logs")
+
+    if trunc_returns:
+        assert (
+            trunc_horizon is not None
+        ), "Must specify a truncation horizon if using truncated returns"
+        # TODO: learn_trunc_returns for v
+    else:
+        # TODO: learn_q for v
+        pass
+
+    torch.save(policy, outpath)
+
+
 if __name__ == "__main__":
-    fire.Fire({"refine": refine, "eval": eval})
+    fire.Fire({"q": learn_q, "v": refine_v, "eval": eval})
