@@ -15,7 +15,7 @@ from tqdm import trange  # type: ignore
 
 from mrl.offline_buffer import RlDataset
 from mrl.online_batcher import BatchGenerator
-from mrl.util import find_policy_path, procgen_rollout
+from mrl.util import find_best_gpu, find_policy_path, procgen_rollout
 
 
 class QNetwork(torch.nn.Module):
@@ -235,9 +235,11 @@ def refine(
     outdir.mkdir(parents=True, exist_ok=True)
 
     policy_path, policy_iter = find_policy_path(indir / "models")
-    policy = torch.load(policy_path, map_location=torch.device("cuda:0"))
+    device = find_best_gpu()
+    policy = torch.load(policy_path, map_location=device)
+    policy.device = device
 
-    model_outdir = outdir / "models"
+    model_outdir = outdir / "value"
     model_outdir.mkdir(parents=True, exist_ok=True)
     model_path = model_outdir / f"q_model_{policy_iter}.jd"
 
