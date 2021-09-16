@@ -21,6 +21,7 @@ dependencies:
     - arrow
     - tqdm
     - fire
+    - scipy
     # Dev
     - pytest
     - hypothesis
