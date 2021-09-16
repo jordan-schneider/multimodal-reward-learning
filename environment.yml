@@ -7,7 +7,6 @@ dependencies:
   - mpi4py
   - cmake
   - qt=5.12.5
-  - gxx_linux-64
   - pip
   - pip:
     - gym3
@@ -23,6 +22,7 @@ dependencies:
     - tqdm
     - fire
     - scipy
+    - gputil
     # Dev
     - pytest
     - hypothesis
