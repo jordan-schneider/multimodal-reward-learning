@@ -19,17 +19,17 @@ from mrl.util import procgen_rollout_dataset, procgen_rollout_features
 
 
 def noisy_pref(
-    feature_a: torch.Tensor,
-    feature_b: torch.Tensor,
+    feature_a: np.ndarray,
+    feature_b: np.ndarray,
     reward: np.ndarray,
     temperature: float,
     rng: np.random.Generator,
-) -> Tuple[bool, torch.Tensor]:
+) -> Tuple[bool, np.ndarray]:
     """Generates a noisy preference between feature_a and feature_b
 
     Args:
-        feature_a (torch.Tensor): Reward features
-        feature_b (torch.Tensor): Reward features
+        feature_a (np.ndarray): Reward features
+        feature_b (np.ndarray): Reward features
         reward (np.ndarray): Reward weights
         temperature (float): How noisy the preference is. Low temp means preference is more often the non-noisy preference, high temperature is closer to random.
         rng (np.random.Generator): Random number Generator
@@ -38,7 +38,7 @@ def noisy_pref(
         Tuple[bool, torch.Tensor]: If the first feature vector is better than the second, and their signed difference
     """
     diff = feature_a - feature_b
-    strength = reward @ diff.numpy()
+    strength = reward @ diff
     p_correct = 1.0 / (1.0 + np.exp(-strength / temperature))
     a_better = rng.random() < p_correct
     if not a_better:
@@ -108,8 +108,10 @@ def gen_state_preferences(
     free_memory = psutil.virtual_memory().available
     print(f"Free memory={free_memory}")
 
-    batch_timesteps = int(free_memory / one_step_size * 0.8)
+    batch_timesteps = min(timesteps // n_parallel_envs, int(free_memory / one_step_size * 0.8))
     print(f"batch_timesteps={batch_timesteps}")
+
+    n_batches = max(1, timesteps // (n_parallel_envs * batch_timesteps))
 
     # TODO: Instead of generating states from a policy, we could define a valid latent state space,
     # sample from that, and convert to features. Alternatively, we could define a valid feature
@@ -119,26 +121,26 @@ def gen_state_preferences(
     # possible, but the real world is not one of them, and so we might be doomed to using policy
     # based distributions.
 
-    for batch_iter in range(timesteps // (n_parallel_envs * batch_timesteps)):
+    for batch_iter in range(n_batches):
         features_a = procgen_rollout_features(
             env=env,
             policy=policy_a,
             timesteps=batch_timesteps,
             tqdm=True,
-        )
+        ).reshape(-1, 5)
 
         features_b = procgen_rollout_features(
             env=env,
             policy=policy_b,
             timesteps=batch_timesteps,
             tqdm=True,
-        )
+        ).reshape(-1, 5)
 
-        diffs: List[torch.Tensor] = []
+        diffs: List[np.ndarray] = []
         for i in range(len(features_a)):
             if temperature is None:
                 diff = features_a[i] - features_b[i]
-                opinion = np.sign(reward @ diff.numpy())
+                opinion = np.sign(reward @ diff)
 
                 if opinion == 0:
                     continue
@@ -149,7 +151,7 @@ def gen_state_preferences(
                 _, diff = noisy_pref(features_a[i], features_b[i], reward, temperature, rng)
                 diffs.append(diff)
 
-        pkl.dump(torch.stack(diffs), (outdir / f"{outname}.{batch_iter}.pkl").open("wb"))
+        np.save(outdir / f"{outname}.{batch_iter}.npy", np.stack(diffs))
         del features_a
         del features_b
         gc.collect()
@@ -227,20 +229,22 @@ def gen_traj_preferences(
         )
 
         trajs = data.trajs()
-        diffs: List[torch.Tensor] = []
+        diffs: List[np.ndarray] = []
         for traj_a, traj_b in zip(trajs, trajs):
             assert traj_a.features is not None and traj_b.features is not None
             if temperature is None:
-                feature_diff = torch.sum(traj_a.features, dim=0) - torch.sum(traj_b.features, dim=0)
-                opinion = np.sign(reward @ feature_diff.numpy())
+                feature_diff = (
+                    torch.sum(traj_a.features, dim=0) - torch.sum(traj_b.features, dim=0)
+                ).numpy()
+                opinion = np.sign(reward @ feature_diff)
                 if opinion == 0:
                     continue  # If there is exactly no preference, then skip the entire pair
 
                 feature_diff *= opinion
             else:
                 _, feature_diff = noisy_pref(
-                    torch.sum(traj_a.features, dim=0),
-                    torch.sum(traj_b.features, dim=0),
+                    torch.sum(traj_a.features, dim=0).numpy(),
+                    torch.sum(traj_b.features, dim=0).numpy(),
                     reward,
                     temperature,
                     rng,
@@ -248,7 +252,7 @@ def gen_traj_preferences(
 
             diffs.append(feature_diff)
 
-        pkl.dump(torch.stack(diffs), (outdir / f"{outname}.{i}.pkl").open("wb"))
+        np.save(outdir / f"{outname}.{i}.npy", np.stack(diffs))
         current_trajs += len(diffs)
         del data
         del trajs
