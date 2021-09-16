@@ -12,6 +12,7 @@ dependencies:
   - pip:
     - gym3
     - torch
+    - psutil
     - pandas
     - matplotlib
     - numpy>=1.21
