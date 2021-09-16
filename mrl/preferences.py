@@ -61,13 +61,13 @@ def gen_state_preferences(
     path = Path(path)
     if replications is not None:
         offset = 0 if (path / "0").exists() else 1
-        for i in range(offset, replications + offset):
+        for batch_iter in range(offset, replications + offset):
             if policy_path_a is not None or policy_path_b is not None or use_value:
                 raise NotImplementedError(
                     "Specifying policies and value networks with replications not supported at this time."
                 )
             gen_state_preferences(
-                path=path / str(i),
+                path=path / str(batch_iter),
                 timesteps=timesteps,
                 n_parallel_envs=n_parallel_envs,
                 outname=outname,
@@ -119,7 +119,7 @@ def gen_state_preferences(
     # possible, but the real world is not one of them, and so we might be doomed to using policy
     # based distributions.
 
-    for i in range(timesteps // (n_parallel_envs * batch_timesteps)):
+    for batch_iter in range(timesteps // (n_parallel_envs * batch_timesteps)):
         features_a = procgen_rollout_features(
             env=env,
             policy=policy_a,
@@ -149,7 +149,7 @@ def gen_state_preferences(
                 _, diff = noisy_pref(features_a[i], features_b[i], reward, temperature, rng)
                 diffs.append(diff)
 
-        pkl.dump(torch.stack(diffs), (outdir / f"{outname}.{i}.pkl").open("wb"))
+        pkl.dump(torch.stack(diffs), (outdir / f"{outname}.{batch_iter}.pkl").open("wb"))
         del features_a
         del features_b
         gc.collect()
@@ -214,7 +214,9 @@ def gen_traj_preferences(
     print(f"batch_timesteps={batch_timesteps}")
 
     current_trajs = 0
+    i = 0
     while current_trajs < n_trajs:
+        i += 1
         data = procgen_rollout_dataset(
             env=env,
             policy=policy,
@@ -248,6 +250,10 @@ def gen_traj_preferences(
 
         pkl.dump(torch.stack(diffs), (outdir / f"{outname}.{i}.pkl").open("wb"))
         current_trajs += len(diffs)
+        del data
+        del trajs
+        del diffs
+        gc.collect()
 
 
 def get_policy(
