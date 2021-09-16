@@ -203,6 +203,7 @@ def compare_modalities(
     plt.xlabel("Human preferences")
     plt.ylabel("Mean dispersion")
     plt.title("Concentration of posterior for different modalities")
+    plt.legend()
     plt.savefig(outdir / "comparison.png")
     plt.close()
 
