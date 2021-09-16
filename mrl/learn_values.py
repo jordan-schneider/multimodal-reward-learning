@@ -126,7 +126,7 @@ def train_q(
     return q
 
 
-def learn_trunc_returns(
+def train_q_trunc_returns(
     horizon: int,
     batch_gen: BatchGenerator,
     n_train_steps: int,
@@ -270,7 +270,7 @@ def learn_q(
         assert (
             trunc_horizon is not None
         ), "Must specify a truncation horizon if using truncated returns"
-        q = learn_trunc_returns(
+        q = train_q_trunc_returns(
             horizon=trunc_horizon,
             batch_gen=BatchGenerator(env=env, policy=policy),
             n_train_steps=train_env_steps,
@@ -360,7 +360,7 @@ def eval_q_partial_rmse(
     return loss
 
 
-def eval(datadir: Path, discount_rate: float = 0.999, env_interactions: int = 1_000_000) -> None:
+def eval_q(datadir: Path, discount_rate: float = 0.999, env_interactions: int = 1_000_000) -> None:
     datadir = Path(datadir)
     policy_path, iter = find_policy_path(datadir / "models")
     q_path = datadir / f"q_model_{iter}.jd"
@@ -411,6 +411,12 @@ def refine_v(
     policy = torch.load(policy_path, map_location=device)
     policy.device = device
 
+    # Freeze the non-value parameters
+    for param in policy.get_encoder("pi").cnn.parameters():
+        param.requires_grad = False
+    for param in policy.pi_head.parameters():
+        param.requires_grad = False
+    
     model_outdir = outdir / "value"
     model_outdir.mkdir(parents=True, exist_ok=True)
     model_outname = (
@@ -437,13 +443,179 @@ def refine_v(
         assert (
             trunc_horizon is not None
         ), "Must specify a truncation horizon if using truncated returns"
-        # TODO: learn_trunc_returns for v
+        policy = train_v_trunc_returns(
+            horizon=trunc_horizon,
+            batch_gen=BatchGenerator(env=env, policy=policy),
+            n_train_steps=train_env_steps,
+            batch_size=batch_size,
+            val_data=val_data,
+            val_period=val_period,
+            v=policy,
+            discount_rate=discount_rate,
+            optim=optim,
+            writer=writer,
+        )
     else:
-        # TODO: learn_q for v
-        pass
+        policy = train_v(
+            batch_gen=BatchGenerator(env=env, policy=policy),
+            n_train_steps=train_env_steps,
+            batch_size=batch_size,
+            val_data=val_data,
+            val_period=val_period,
+            v=policy,
+            discount_rate=discount_rate,
+            optim=optim,
+            writer=writer,
+        )
 
     torch.save(policy, outpath)
 
 
+def train_v_trunc_returns(
+    horizon: int,
+    batch_gen: BatchGenerator,
+    n_train_steps: int,
+    batch_size: int,
+    val_data: RlDataset,
+    val_period: int,
+    v: PhasicValueModel,
+    discount_rate: float,
+    optim: torch.optim.Optimizer,
+    writer: SummaryWriter,
+) -> PhasicValueModel:
+    val_counter = 0
+    val_step = 0
+    train_step = 0
+    n_batches = n_train_steps // batch_size
+    for _ in trange(n_batches):
+        states, _, partial_returns = batch_gen.make_trunc_return_batch(
+            timesteps=batch_size, horizon=horizon, discount_rate=discount_rate
+        )
+
+        # n is not batch_size because batch_size actions generate batch_size - # dones - 1
+        # usable transitions
+        n = len(states)
+
+        optim.zero_grad()
+        v_pred = v.value(states.to(device=v.device)).cpu()
+        assert v_pred.shape == (n,), f"v_pred={v_pred.shape} not expected ({n})"
+        loss = torch.sum((v_pred - partial_returns) ** 2)
+
+        writer.add_scalar("train/loss", loss, global_step=train_step)
+
+        loss.backward()
+        optim.step()
+
+        train_step += 1
+        val_counter += n
+
+        if val_counter > val_period:
+            val_counter = 0
+            val_loss = eval_v_partial_rmse(
+                v_fn=v.value,
+                data=val_data,
+                k=horizon,
+                discount_rate=discount_rate,
+                device=v.device,
+            )
+            writer.add_scalar("val/rmse", val_loss, global_step=val_step)
+            val_step += 1
+
+    return v
+
+
+@torch.no_grad()
+def eval_v_partial_rmse(
+    v_fn: Callable[[torch.Tensor], torch.Tensor],
+    data: RlDataset,
+    k: int,
+    discount_rate: float,
+    device: torch.device,
+) -> float:
+    states, _, partial_returns = data.truncated_returns(horizon=k, discount_rate=discount_rate)
+
+    loss = 0.0
+    for state_batch, return_batch in zip(
+        np.array_split(states, len(states) // 100),
+        np.array_split(partial_returns, len(partial_returns) // 100),
+    ):
+        values = v_fn(state_batch.to(device=device)).detach().cpu()
+        errors = values - return_batch
+        loss += torch.sqrt(torch.mean(errors ** 2)).item()
+    return loss
+
+
+def train_v(
+    batch_gen: BatchGenerator,
+    n_train_steps: int,
+    batch_size: int,
+    val_data: RlDataset,
+    val_period: int,
+    v: PhasicValueModel,
+    discount_rate: float,
+    optim: torch.optim.Optimizer,
+    writer: SummaryWriter,
+) -> PhasicValueModel:
+    val_counter = 0
+    val_step = 0
+    train_step = 0
+    n_batches = n_train_steps // batch_size
+    for _ in trange(n_batches):
+        states, _, rewards, next_states = batch_gen.make_sars_batch(timesteps=batch_size)
+
+        # n is not batch_size because batch_size actions generate batch_size - # dones - 1
+        # usable transitions
+        n = len(states)
+
+        optim.zero_grad()
+        v_pred = v.value(states.to(device=v.device)).cpu()
+
+        with torch.no_grad():
+            v_next = v.value(next_states.to(v.device)).cpu()
+        v_targ = rewards + discount_rate * v_next
+        assert v_pred.shape == (n,), f"v_pred={v_pred.shape} not expected ({n})"
+        assert v_targ.shape == (n,), f"v_targ={v_targ.shape} not expected ({n})"
+        loss = torch.sum((v_pred - v_targ) ** 2)
+
+        writer.add_scalar("train/loss", loss, global_step=train_step)
+
+        loss.backward()
+        optim.step()
+
+        train_step += 1
+        val_counter += n
+
+        if val_counter > val_period:
+            val_counter = 0
+            val_loss = eval_v_rmse(
+                v_fn=v.value,
+                data=val_data,
+                discount_rate=discount_rate,
+                device=v.device,
+            )
+            writer.add_scalar("val/rmse", val_loss, global_step=val_step)
+            val_step += 1
+
+    return v
+
+
+@torch.no_grad()
+def eval_v_rmse(
+    v_fn: Callable[[torch.Tensor], torch.Tensor],
+    data: RlDataset,
+    discount_rate: float,
+    device: torch.device,
+) -> float:
+    loss = 0.0
+    for traj in data.trajs(include_incomplete=False):
+        assert traj.states is not None and traj.rewards is not None
+        values = v_fn(traj.states[:-1].to(device=device)).detach().cpu()
+        returns = compute_returns(traj.rewards.numpy(), discount_rate)[:-1]
+
+        errors = values - returns
+        loss += torch.sqrt(torch.mean(errors ** 2)).item()
+    return loss
+
+
 if __name__ == "__main__":
-    fire.Fire({"q": learn_q, "v": refine_v, "eval": eval})
+    fire.Fire({"q": learn_q, "v": refine_v, "eval": eval_q})
