@@ -16,23 +16,35 @@ from tqdm import trange  # type: ignore
 
 from mrl.offline_buffer import RlDataset
 from mrl.online_batcher import BatchGenerator
-from mrl.util import find_best_gpu, find_policy_path, procgen_rollout
+from mrl.util import (find_best_gpu, find_policy_path, make_env,
+                      procgen_rollout, reinit)
 
 
 class QNetwork(torch.nn.Module):
-    def __init__(self, policy: PhasicValueModel, n_actions: int, discount_rate: float):
+    def __init__(
+        self,
+        policy: PhasicValueModel,
+        n_actions: int,
+        discount_rate: float,
+        value_init: bool = False,
+        device: Optional[torch.device] = None,
+    ):
         super().__init__()
         assert discount_rate >= 0.0 and discount_rate <= 1.0
         self.discount_rate = discount_rate
 
         self.enc = deepcopy(policy.get_encoder(policy.true_vf_key))
+        if not value_init:
+            reinit(self.enc)
 
-        # TODO: Try random initialization to see if we're getting negative transfer here.
         self.head = self.add_action_heads(
-            n_actions=n_actions, value_head=policy.get_vhead(policy.true_vf_key)
+            n_actions=n_actions,
+            value_head=policy.get_vhead(policy.true_vf_key),
+            copy_weights=value_init,
         )
 
-        self.device = policy.device
+        self.device = policy.device if device is None else device
+        self.to(device=self.device)
 
     def forward(self, obs: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         obs = obs.to(device=self.device)
@@ -58,7 +70,9 @@ class QNetwork(torch.nn.Module):
         return v
 
     @staticmethod
-    def add_action_heads(n_actions: int, value_head: torch.nn.Linear) -> torch.nn.Linear:
+    def add_action_heads(
+        n_actions: int, value_head: torch.nn.Linear, copy_weights: bool = False
+    ) -> torch.nn.Linear:
         """Takes a state value head and copies it to n_action state-action value heads.
 
         Args:
@@ -71,8 +85,8 @@ class QNetwork(torch.nn.Module):
         assert value_head.out_features == 1
 
         out = type(value_head)(value_head.in_features, n_actions)
-        out.weight.data[:] = value_head.weight
-        out = out.to(value_head.weight.device)
+        if copy_weights:
+            out.weight.data[:] = value_head.weight
 
         return out
 
@@ -100,17 +114,22 @@ def train_q(
         n = len(states)
 
         optim.zero_grad()
-        q_pred = q.forward(states, actions).cpu()
+        loss = torch.zeros(1)
 
-        v_next = q.state_value(next_states).cpu()
-        q_targ = rewards + q.discount_rate * v_next
-        assert q_pred.shape == (n,), f"q_pred={q_pred.shape} not expected ({n})"
-        assert q_targ.shape == (n,), f"q_targ={q_targ.shape} not expected ({n})"
-        loss = torch.sum((q_pred - q_targ) ** 2)
+        if n > 0:
+            q_pred = q.forward(states, actions).cpu()
 
-        q_pred_final = q.state_value(batch.states[batch.dones]).cpu()
-        q_targ_final = batch.rewards[batch.dones]
-        loss += torch.sum((q_pred_final - q_targ_final) ** 2)
+            v_next = q.state_value(next_states).cpu()
+            q_targ = rewards + q.discount_rate * v_next
+            assert q_pred.shape == (n,), f"q_pred={q_pred.shape} not expected ({n})"
+            assert q_targ.shape == (n,), f"q_targ={q_targ.shape} not expected ({n})"
+            loss += torch.sum((q_pred - q_targ) ** 2)
+
+        final_states = batch.states[1:][batch.dones]
+        if len(final_states) > 0:
+            q_pred_final = q.state_value(final_states).cpu()
+            q_targ_final = batch.rewards[1:][batch.dones]
+            loss += torch.sum((q_pred_final - q_targ_final) ** 2)
 
         writer.add_scalar("train/loss", loss, global_step=train_step)
 
@@ -223,6 +242,8 @@ def get_rollouts(
 def learn_q(
     indir: Path,
     outdir: Path,
+    env_name: Literal["miner", "probe"] = "miner",
+    value_init: bool = False,
     lr: float = 10e-3,
     discount_rate: float = 0.999,
     decay_rate: float = 0.01,
@@ -259,15 +280,18 @@ def learn_q(
     )
     model_path = model_outdir / model_name
 
+    env = make_env(env_name, num=1)
+
     if not overwrite_model and model_path.exists():
         logging.info(f"Loading Q model from {model_path}")
         q = cast(QNetwork, torch.load(model_path))
     else:
-        q = QNetwork(policy, n_actions=16, discount_rate=discount_rate)
-
-    # TODO(joschnei): Add switches to use probe environments here.
-    env = ProcgenGym3Env(1, "miner")
-    env = ExtractDictObWrapper(env, "rgb")
+        q = QNetwork(
+            policy,
+            n_actions=env.ac_space.eltype.n,
+            discount_rate=discount_rate,
+            value_init=value_init,
+        )
 
     val_data = get_rollouts(
         env=env,
@@ -385,6 +409,7 @@ def eval_q(datadir: Path, discount_rate: float = 0.999, env_interactions: int = 
 
     env = ProcgenGym3Env(1, "miner")
     env = ExtractDictObWrapper(env, "rgb")
+
     logging.info("Gathering environment interactions")
     data = RlDataset.from_gym3(*procgen_rollout(env, policy, env_interactions, tqdm=True))
     pkl.dump(data, open(datadir / "eval_rollouts.pkl", "wb"))
@@ -398,6 +423,7 @@ def eval_q(datadir: Path, discount_rate: float = 0.999, env_interactions: int = 
 def refine_v(
     indir: Path,
     outdir: Path,
+    env_name: Literal["miner", "probe"] = "miner",
     lr: float = 10e-3,
     discount_rate: float = 0.999,
     batch_size: int = 64,
@@ -439,8 +465,7 @@ def refine_v(
     )
     outpath = model_outdir / model_outname
 
-    env = ProcgenGym3Env(1, "miner")
-    env = ExtractDictObWrapper(env, "rgb")
+    env = make_env(env_name, 1)
 
     val_data = get_rollouts(
         env=env,
