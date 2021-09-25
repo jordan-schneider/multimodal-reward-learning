@@ -1,15 +1,38 @@
 from pathlib import Path
-from typing import Any, Literal, Optional, Sequence, Tuple, Union, cast, overload
+from typing import Any, Dict, Literal, Optional, Sequence, Tuple, Union, cast
 
 import numpy as np
 import torch
-from GPUtil import GPUtil
+from GPUtil import GPUtil  # type: ignore
+from gym3 import ExtractDictObWrapper
 from phasic_policy_gradient.ppg import PhasicValueModel
 from procgen import ProcgenGym3Env
 from tqdm import trange  # type: ignore
 
 from mrl.envs import Miner
+from mrl.envs.probe_envs import OneActionNoObsOneTimestepOneReward as Probe
 from mrl.offline_buffer import RlDataset
+
+
+def reinit(n: torch.nn.Module) -> None:
+    def _init(m):
+        if hasattr(m, "reset_parameters") and callable(m.reset_parameters):
+            m.reset_parameters()
+
+    n.apply(_init)
+
+
+def make_env(name: Literal["miner", "miner_reward", "probe"], num: int, **kwargs) -> ProcgenGym3Env:
+    if name == "miner":
+        env = ProcgenGym3Env(num=1, env_name="miner")
+    elif name == "miner_reward":
+        assert "reward_weights" in kwargs.keys(), "Must supply reward_weights to Miner reward env."
+        env = Miner(num=num, **kwargs)
+    elif name == "probe":
+        env = Probe(num=num, **kwargs)
+
+    env = ExtractDictObWrapper(env, "rgb")
+    return env
 
 
 def procgen_rollout(
@@ -18,6 +41,7 @@ def procgen_rollout(
     timesteps: int,
     *,
     tqdm: bool = False,
+    check_occupancies: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     state_shape = env.ob_space.shape
 
@@ -26,7 +50,12 @@ def procgen_rollout(
     rewards = np.empty((timesteps, env.num))
     firsts = np.empty((timesteps, env.num), dtype=bool)
 
+    if check_occupancies:
+        timesteps_written_to: Dict[int, int] = {}
+
     def record(t: int, env: ProcgenGym3Env, states, rewards, firsts) -> None:
+        if check_occupancies:
+            timesteps_written_to[t] = timesteps_written_to.get(t, 0) + 1
         reward, state, first = env.observe()
         state = cast(np.ndarray, state)  # env.observe typing dones't account for wrapper
         states[t] = state
@@ -45,6 +74,9 @@ def procgen_rollout(
         env.act(action)
         actions[t] = action
     record(timesteps - 1, env, states, rewards, firsts)
+
+    if check_occupancies:
+        assert timesteps_written_to == {key: 1 for key in range(timesteps)}
 
     return states, actions, rewards, firsts
 
