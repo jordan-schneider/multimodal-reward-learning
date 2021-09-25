@@ -118,22 +118,23 @@ def reward_prop_likelihood(
     Returns:
         np.ndarray: (Batch of) proportional likelihoods of each reward.
     """
-    if counts is None:
+    single_reward = len(reward.shape) == 1
+    if not single_reward and counts is None:
         counts = np.ones(diffs.shape[0])
     assert len(diffs) > 0
 
     # Do final product over likelihood in log space for numerical stability
     # (n_diffs, n_rewards)
     likelihoods = -np.log1p(np.exp(-reward @ diffs.T)).T
-    if len(reward.shape) == 2:
+    if not single_reward:
         assert likelihoods.shape == (len(diffs), len(reward))
-    else:
-        assert likelihoods.shape == (len(diffs),)
-    total_likelihoods = np.exp(np.sum((counts * likelihoods.T), axis=1))
-    if len(reward.shape) == 2:
+        total_likelihoods = np.exp(np.sum((counts * likelihoods.T), axis=1))
         assert total_likelihoods.shape == (len(reward),)
     else:
+        assert likelihoods.shape == (len(diffs),)
+        total_likelihoods = np.exp(np.sum(likelihoods))
         assert total_likelihoods.shape == ()
+
     return total_likelihoods
 
 

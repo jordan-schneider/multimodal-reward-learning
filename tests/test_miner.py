@@ -1,4 +1,4 @@
-from typing import Final, List, Literal, Optional, Tuple, Union, cast
+from typing import Final, List, Literal, Optional, Sequence, Tuple, Union, cast
 
 import numpy as np
 from hypothesis import given, settings
@@ -10,11 +10,32 @@ UP: Final = 5
 DOWN: Final = 3
 LEFT: Final = 1
 RIGHT: Final = 7
+NONE: Final = 4
 Action = Literal[1, 3, 5, 7]
 
 DANGEROUS_OBJECTS: Final = (1, 2, 3, 4)
 PATHABLE_OBJECTS: Final = (9, 100)
 DIAMONDS = (1, 3)
+
+
+@settings(deadline=3000)
+@given(seed=integers(0, 2 ** 31 - 1))
+def test_first(seed: int) -> None:
+    env = Miner(reward_weights=np.zeros(Miner.N_FEATURES), num=1, rand_seed=seed)
+    _, _, first = env.observe()
+    assert first
+
+    path = find_dangerous_path_above(state=env.make_latent_states()[0])
+    if path is not None:
+        success = follow_path(env, path)
+        if not success:
+            pass
+
+        go_down(env)
+
+        env.act(np.array([NONE]))
+        _, _, first = env.observe()
+        assert first, "Not first after death"
 
 
 @settings(deadline=3000)
@@ -284,25 +305,11 @@ def test_in_danger(seed):
     if path is None:
         return
 
-    old_agent_pos = start_state.agent_pos
+    success = follow_path(env, path)
+    if not success:
+        pass
 
-    for action in path:
-        env.act(np.array([action]))
-        state = env.make_latent_states()[0]
-        if state.agent_pos[0] == old_agent_pos[0] and state.agent_pos[1] == old_agent_pos[1]:
-            # We tried to path through an immobile rock, I'm not going to deal with this case
-            pass
-
-    old_agent_pos = env.make_latent_states()[0].agent_pos
-    agent_pos = old_agent_pos
-
-    # We're in a dangerous position, keep trying to go down.
-    # Occassionally we can't do this the first timestep because something is in the process of
-    # falling below us.
-    while agent_pos[0] == old_agent_pos[0] and agent_pos[1] == old_agent_pos[1]:
-        old_agent_pos = agent_pos
-        env.act(np.array([DOWN]))
-        agent_pos = env.make_latent_states()[0].agent_pos
+    go_down(env)
 
     state = env.make_latent_states()[0]
     agent_x, agent_y = state.agent_pos
@@ -318,6 +325,30 @@ def test_in_danger(seed):
         assert (
             not danger
         ), f"Bad path. There isn't danger but we think there is at t={t}, grid=\n{state.grid}\n from start=\n{start_state.grid} "
+
+
+def go_down(env: Miner) -> None:
+    old_agent_pos = env.make_latent_states()[0].agent_pos
+    agent_pos = old_agent_pos
+
+    # We're in a dangerous position, keep trying to go down.
+    # Occassionally we can't do this the first timestep because something is in the process of
+    # falling below us.
+    while agent_pos[0] == old_agent_pos[0] and agent_pos[1] == old_agent_pos[1]:
+        old_agent_pos = agent_pos
+        env.act(np.array([DOWN]))
+        agent_pos = env.make_latent_states()[0].agent_pos
+
+
+def follow_path(env: Miner, path: Sequence[Action]) -> bool:
+    old_agent_pos = env.make_latent_states()[0].agent_pos
+    for action in path:
+        env.act(np.array([action]))
+        state = env.make_latent_states()[0]
+        if state.agent_pos[0] == old_agent_pos[0] and state.agent_pos[1] == old_agent_pos[1]:
+            # We tried to path through an immobile rock, I'm not going to deal with this case
+            return False
+    return True
 
 
 @settings(deadline=3000)

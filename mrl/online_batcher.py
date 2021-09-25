@@ -15,11 +15,8 @@ class BatchGenerator:
         self.env = env
         self.policy = policy
 
-    def make_sars_batch(
-        self, timesteps: int
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        data = SarsDataset.from_gym3(*procgen_rollout(self.env, self.policy, timesteps))
-        return data.make_sars()
+    def make_sars_batch(self, timesteps: int) -> SarsDataset:
+        return SarsDataset.from_gym3(*procgen_rollout(self.env, self.policy, timesteps))
 
     def make_trunc_return_batch(
         self, horizon: int, timesteps: int, discount_rate: float
