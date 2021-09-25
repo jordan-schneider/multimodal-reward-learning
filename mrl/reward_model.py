@@ -165,7 +165,7 @@ def get_dispersions(diffs: np.ndarray, n_samples: int) -> np.ndarray:
 
 def plot_dispersion(in_path: Path, outdir: Path, n_samples: int = 1000) -> None:
     in_path, outdir = Path(in_path), Path(outdir)
-    diffs = cast(torch.Tensor, pkl.load(in_path.open("rb"))).numpy()
+    diffs = np.load(in_path)
     dispersion = get_dispersions(diffs, n_samples)
 
     np.save(outdir / "dispersion.npy", dispersion)
@@ -193,10 +193,7 @@ def compare_modalities(
     if action_path is not None:
         paths["action"] = Path(action_path)
 
-    diffs = {
-        key: cast(torch.Tensor, pkl.load(in_path.open("rb"))).numpy()
-        for key, in_path in paths.items()
-    }
+    diffs = {key: np.load(in_path) for key, in_path in paths.items()}
     dispersions = {key: get_dispersions(diff, n_samples) for key, diff in diffs.items()}
     pkl.dump(dispersions, (outdir / "dispersions.pkl").open("wb"))
     for name, dispersion in dispersions.items():
