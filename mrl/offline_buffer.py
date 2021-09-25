@@ -222,6 +222,11 @@ class RlDataset:
 
 
 class SarsDataset(RlDataset):
+    states: torch.Tensor
+    actions: torch.Tensor
+    rewards: torch.Tensor
+    dones: torch.Tensor
+
     def __init__(
         self,
         states: torch.Tensor,
@@ -232,12 +237,11 @@ class SarsDataset(RlDataset):
     ) -> None:
         super().__init__(states, actions, rewards, dones, features)
 
-        if len(self) < 0:
-            raise ValueError("dones cannot be all True")
-
-        assert self.dones is not None
-
-        self.index_map = self._compute_index_map(self.dones)
+        if len(self) == 0 and len(states) > 0:
+            logging.warning("Every timestep is done")
+            self.index_map = np.empty(0, dtype=int)
+        else:
+            self.index_map = self._compute_index_map(self.dones)
 
     def _compute_index_map(self, dones: torch.Tensor) -> np.ndarray:
         index_map = np.empty((len(self)), dtype=int)

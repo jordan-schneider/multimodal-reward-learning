@@ -35,6 +35,8 @@ class QNetwork(torch.nn.Module):
         self.device = policy.device
 
     def forward(self, obs: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+        obs = obs.to(device=self.device)
+        action = action.to(device=self.device)
         q_values = self.get_action_values(obs)
         out = q_values.gather(dim=1, index=action.view(-1, 1)).reshape(-1)
         return out
@@ -50,6 +52,7 @@ class QNetwork(torch.nn.Module):
         return q_values
 
     def state_value(self, obs: torch.Tensor) -> torch.Tensor:
+        obs = obs.to(device=self.device)
         q_values = self.get_action_values(obs)
         v, _ = q_values.max(dim=1)
         return v
@@ -89,20 +92,25 @@ def train_q(
     train_step = 0
     n_batches = n_train_steps // batch_size
     for _ in trange(n_batches):
-        states, actions, rewards, next_states = batch_gen.make_sars_batch(timesteps=batch_size)
+        batch = batch_gen.make_sars_batch(timesteps=batch_size)
 
+        states, actions, rewards, next_states = batch.make_sars()
         # n is not batch_size because batch_size actions generate batch_size - # dones - 1
         # usable transitions
         n = len(states)
 
         optim.zero_grad()
-        q_pred = q.forward(states.to(device=q.device), actions.to(device=q.device)).cpu()
+        q_pred = q.forward(states, actions).cpu()
 
-        v_next = q.state_value(next_states.to(q.device)).cpu()
+        v_next = q.state_value(next_states).cpu()
         q_targ = rewards + q.discount_rate * v_next
         assert q_pred.shape == (n,), f"q_pred={q_pred.shape} not expected ({n})"
         assert q_targ.shape == (n,), f"q_targ={q_targ.shape} not expected ({n})"
         loss = torch.sum((q_pred - q_targ) ** 2)
+
+        q_pred_final = q.state_value(batch.states[batch.dones]).cpu()
+        q_targ_final = batch.rewards[batch.dones]
+        loss += torch.sum((q_pred_final - q_targ_final) ** 2)
 
         writer.add_scalar("train/loss", loss, global_step=train_step)
 
@@ -217,13 +225,15 @@ def learn_q(
     outdir: Path,
     lr: float = 10e-3,
     discount_rate: float = 0.999,
+    decay_rate: float = 0.01,
     batch_size: int = 64,
     train_env_steps: int = 10_000_000,
     val_env_steps: int = 100_000,
     val_period: int = 2000 * 10,
     trunc_returns: bool = False,
     trunc_horizon: Optional[int] = None,
-    overwrite: bool = False,
+    overwrite_validation: bool = False,
+    overwrite_model: bool = False,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> None:
     if trunc_returns:
@@ -249,22 +259,27 @@ def learn_q(
     )
     model_path = model_outdir / model_name
 
-    if model_path.exists():
+    if not overwrite_model and model_path.exists():
         logging.info(f"Loading Q model from {model_path}")
         q = cast(QNetwork, torch.load(model_path))
     else:
         q = QNetwork(policy, n_actions=16, discount_rate=discount_rate)
 
+    # TODO(joschnei): Add switches to use probe environments here.
     env = ProcgenGym3Env(1, "miner")
     env = ExtractDictObWrapper(env, "rgb")
 
     val_data = get_rollouts(
-        env=env, val_env_steps=val_env_steps, policy=policy, datadir=outdir, overwrite=overwrite
+        env=env,
+        val_env_steps=val_env_steps,
+        policy=policy,
+        datadir=outdir,
+        overwrite=overwrite_validation,
     )
 
-    optim = torch.optim.Adam(q.parameters(), lr=lr)
+    optim = torch.optim.Adam(q.parameters(), lr=lr, weight_decay=decay_rate)
 
-    writer = SummaryWriter(log_dir=outdir / "logs")
+    writer = SummaryWriter(log_dir=outdir / "logs" / "refine_q")
 
     if trunc_returns:
         assert (
@@ -416,7 +431,7 @@ def refine_v(
         param.requires_grad = False
     for param in policy.pi_head.parameters():
         param.requires_grad = False
-    
+
     model_outdir = outdir / "value"
     model_outdir.mkdir(parents=True, exist_ok=True)
     model_outname = (
@@ -561,21 +576,27 @@ def train_v(
     train_step = 0
     n_batches = n_train_steps // batch_size
     for _ in trange(n_batches):
-        states, _, rewards, next_states = batch_gen.make_sars_batch(timesteps=batch_size)
+        batch = batch_gen.make_sars_batch(timesteps=batch_size)
+
+        states, _, rewards, next_states = batch.make_sars()
 
         # n is not batch_size because batch_size actions generate batch_size - # dones - 1
         # usable transitions
         n = len(states)
 
         optim.zero_grad()
-        v_pred = v.value(states.to(device=v.device)).cpu()
+        v_pred = v.value(states).cpu()
 
         with torch.no_grad():
-            v_next = v.value(next_states.to(v.device)).cpu()
+            v_next = v.value(next_states).cpu()
         v_targ = rewards + discount_rate * v_next
         assert v_pred.shape == (n,), f"v_pred={v_pred.shape} not expected ({n})"
         assert v_targ.shape == (n,), f"v_targ={v_targ.shape} not expected ({n})"
         loss = torch.sum((v_pred - v_targ) ** 2)
+
+        v_pred_final = v.value(batch.states[batch.dones]).cpu()
+        v_targ_final = batch.rewards[batch.dones].cpu()
+        loss += torch.sum((v_pred_final - v_targ_final) ** 2)
 
         writer.add_scalar("train/loss", loss, global_step=train_step)
 
