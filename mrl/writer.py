@@ -21,7 +21,7 @@ class SequentialWriter:
         "tensorflow", "auto", "fd", "doane", "scott", "stone", "rice", "sturges", "sqrt"
     ]
 
-    def add_histogram(self, tag: str, values: Value, bins: BinMethod) -> None:
+    def add_histogram(self, tag: str, values: Value, bins: BinMethod = "tensorflow") -> None:
         global_step = self.counters.get(tag, 0)
         self.writer.add_histogram(tag, values, global_step, bins=bins)
         self.counters[tag] = global_step + 1
