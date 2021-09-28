@@ -145,13 +145,22 @@ class RlDataset:
         include_incomplete: bool = False,
     ) -> Generator[Traj, None, None]:
         assert self.dones is not None, "Must supply dones to get trajs."
+
+        if len(self.dones) == 0:
+            # Only one timestep provided
+            yield self.Traj(states=self.states, actions=self.actions, rewards=self.rewards)
+            return
+
+        # We want to include the state for which done=True, and slicing logic requires that we add an additional one
+        # We've also trimmed the first timestep from dones, so we net only add one. See test_trajs()
+        # in test_dataset.py for proof.
         done_indices = self.dones.nonzero(as_tuple=True)[0] + 1
 
         start = 0
         for done_index in done_indices:
             yield RlDataset.Traj(
                 states=self.states[start:done_index] if self.states is not None else None,
-                actions=self.actions[start : done_index - 1] if self.actions is not None else None,
+                actions=self.actions[start:done_index] if self.actions is not None else None,
                 rewards=self.rewards[start:done_index] if self.rewards is not None else None,
                 features=self.features[start:done_index] if self.features is not None else None,
             )

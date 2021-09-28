@@ -16,8 +16,8 @@ from tqdm import trange  # type: ignore
 
 from mrl.offline_buffer import RlDataset
 from mrl.online_batcher import BatchGenerator
-from mrl.util import (find_best_gpu, find_policy_path, make_env,
-                      procgen_rollout, reinit)
+from mrl.util import EnvName, find_best_gpu, find_policy_path, make_env, procgen_rollout, reinit
+from writer import SequentialWriter
 
 
 class QNetwork(torch.nn.Module):
@@ -50,6 +50,9 @@ class QNetwork(torch.nn.Module):
         obs = obs.to(device=self.device)
         action = action.to(device=self.device)
         q_values = self.get_action_values(obs)
+        if q_values.shape[1] == 1:
+            # Gather freaks out if the length of the dim you're gathering along is 1
+            return q_values
         out = q_values.gather(dim=1, index=action.view(-1, 1)).reshape(-1)
         return out
 
@@ -97,15 +100,17 @@ def train_q(
     batch_size: int,
     val_data: RlDataset,
     val_period: int,
+    target_mixing_coeff: float,
     q: QNetwork,
     optim: torch.optim.Optimizer,
-    writer: SummaryWriter,
+    writer: SequentialWriter,
 ) -> QNetwork:
+    q_target = deepcopy(q)
+    q_target.eval()
+
     val_counter = 0
-    val_step = 0
-    train_step = 0
-    n_batches = n_train_steps // batch_size
-    for _ in trange(n_batches):
+    val_log_step = 0
+    for _ in trange(n_train_steps // batch_size):
         batch = batch_gen.make_sars_batch(timesteps=batch_size)
 
         states, actions, rewards, next_states = batch.make_sars()
@@ -117,38 +122,49 @@ def train_q(
         loss = torch.zeros(1)
 
         if n > 0:
+            logging.debug("Processing non-final states")
             q_pred = q.forward(states, actions).cpu()
+            writer.add_histogram("train/q_pred", q_pred)
 
-            v_next = q.state_value(next_states).cpu()
-            q_targ = rewards + q.discount_rate * v_next
+            with torch.no_grad():
+                v_next = q_target.state_value(next_states).cpu()
+                q_targ = rewards + q.discount_rate * v_next
+                writer.add_histogram("train/q_targ", q_targ)
             assert q_pred.shape == (n,), f"q_pred={q_pred.shape} not expected ({n})"
             assert q_targ.shape == (n,), f"q_targ={q_targ.shape} not expected ({n})"
             loss += torch.sum((q_pred - q_targ) ** 2)
 
-        final_states = batch.states[1:][batch.dones]
+        final_states = batch.states[:-1][batch.dones]
         if len(final_states) > 0:
+            logging.debug("Processing final states")
             q_pred_final = q.state_value(final_states).cpu()
-            q_targ_final = batch.rewards[1:][batch.dones]
+            writer.add_histogram("train/q_pred_final", q_pred_final)
+            q_targ_final = batch.rewards[:-1][batch.dones]
+            writer.add_histogram("train/q_targ_final", q_targ_final)
             loss += torch.sum((q_pred_final - q_targ_final) ** 2)
 
-        writer.add_scalar("train/loss", loss, global_step=train_step)
+        writer.add_scalar("train/loss", loss)
 
         loss.backward()
         optim.step()
 
-        train_step += 1
-        val_counter += n
+        val_counter += len(batch.states)
 
         if val_counter > val_period:
             val_counter = 0
             val_loss = eval_q_rmse(
-                q_fn=q.forward,
-                data=val_data,
-                discount_rate=q.discount_rate,
-                device=q.device,
+                q_fn=q.forward, data=val_data, discount_rate=q.discount_rate, writer=writer
             )
-            writer.add_scalar("val/rmse", val_loss, global_step=val_step)
-            val_step += 1
+            writer.add_scalar("val/rmse", val_loss)
+            val_log_step += 1
+
+        with torch.no_grad():
+            # Stolen from OpenAI spinning up SAC implementation
+            for p, p_targ in zip(q.parameters(), q_target.parameters()):
+                # NB: We use an in-place operations "mul_", "add_" to update target
+                # params, as opposed to "mul" and "add", which would make new tensors.
+                p_targ.data.mul_(target_mixing_coeff)
+                p_targ.data.add_((1 - target_mixing_coeff) * p.data)
 
     return q
 
@@ -179,6 +195,7 @@ def train_q_trunc_returns(
 
         optim.zero_grad()
         q_pred = q.forward(states.to(device=q.device), actions.to(device=q.device)).cpu()
+        logging.debug(f"q_pred={q_pred}")
         assert q_pred.shape == (n,), f"q_pred={q_pred.shape} not expected ({n})"
         loss = torch.sum((q_pred - partial_returns) ** 2)
 
@@ -242,7 +259,7 @@ def get_rollouts(
 def learn_q(
     indir: Path,
     outdir: Path,
-    env_name: Literal["miner", "probe"] = "miner",
+    env_name: EnvName = "miner",
     value_init: bool = False,
     lr: float = 10e-3,
     discount_rate: float = 0.999,
@@ -251,6 +268,7 @@ def learn_q(
     train_env_steps: int = 10_000_000,
     val_env_steps: int = 100_000,
     val_period: int = 2000 * 10,
+    target_mixing_coeff: float = 0.999,
     trunc_returns: bool = False,
     trunc_horizon: Optional[int] = None,
     overwrite_validation: bool = False,
@@ -303,7 +321,7 @@ def learn_q(
 
     optim = torch.optim.Adam(q.parameters(), lr=lr, weight_decay=decay_rate)
 
-    writer = SummaryWriter(log_dir=outdir / "logs" / "refine_q")
+    writer = SequentialWriter(SummaryWriter(log_dir=outdir / "logs" / "refine_q"))
 
     if trunc_returns:
         assert (
@@ -327,6 +345,7 @@ def learn_q(
             batch_size=batch_size,
             val_data=val_data,
             val_period=val_period,
+            target_mixing_coeff=target_mixing_coeff,
             q=q,
             optim=optim,
             writer=writer,
@@ -360,18 +379,27 @@ def eval_q_rmse(
     q_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
     data: RlDataset,
     discount_rate: float,
-    device: torch.device,
+    writer: SequentialWriter,
 ) -> float:
     loss = 0.0
     for traj in data.trajs(include_incomplete=False):
         assert traj.states is not None and traj.actions is not None and traj.rewards is not None
-        values = (
-            q_fn(traj.states[:-1].to(device=device), traj.actions.to(device=device)).detach().cpu()
-        )
-        returns = compute_returns(traj.rewards.numpy(), discount_rate)[:-1]
+        assert len(traj.states) > 0, "0 states in this traj"
+        assert len(traj.actions) > 0, "0 actions in this traj"
+        assert len(traj.rewards) > 0, "0 rewards in this traj"
+        values = q_fn(traj.states, traj.actions).detach().cpu()
+        writer.add_histogram("val/q_pred", values)
+        returns = compute_returns(traj.rewards.numpy(), discount_rate)
+        writer.add_histogram("val/returns", returns)
 
         errors = values - returns
+        writer.add_histogram("val/q_error", errors)
         loss += torch.sqrt(torch.mean(errors ** 2)).item()
+        if not np.isfinite(loss):
+            logging.warning(
+                f"NaN validation loss. values={values}, returns={returns}, errors={errors}, rewards{traj.rewards}, actions={traj.actions}"
+            )
+            raise ValueError("NaN validation loss")
     return loss
 
 
@@ -415,7 +443,7 @@ def eval_q(datadir: Path, discount_rate: float = 0.999, env_interactions: int = 
     pkl.dump(data, open(datadir / "eval_rollouts.pkl", "wb"))
 
     logging.info("Evaluating loss")
-    loss = eval_q_rmse(q.forward, data, discount_rate, device=q.device)
+    loss = eval_q_rmse(q.forward, data, discount_rate)
 
     logging.info(f"Loss={loss} over {env_interactions} env timesteps.")
 
