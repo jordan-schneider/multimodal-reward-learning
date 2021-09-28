@@ -233,7 +233,7 @@ def procgen_rollout_dataset(
 
 
 def find_policy_path(policydir: Path, overwrite: bool = False) -> Tuple[Optional[Path], int]:
-    models = list(policydir.glob("model[0-9][0-9][0-9].jd"))
+    models = list(policydir.glob("model[0-9]*.jd"))
     if len(models) == 0 or overwrite:
         return None, 0
 
