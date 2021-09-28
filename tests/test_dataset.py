@@ -6,7 +6,7 @@ import torch
 from hypothesis import given
 from hypothesis.extra.numpy import arrays
 from hypothesis.strategies import booleans, floats, integers, just, shared, tuples
-from mrl.offline_buffer import SarsDataset
+from mrl.offline_buffer import RlDataset, SarsDataset
 from torch.testing import assert_equal
 
 
@@ -69,3 +69,21 @@ def test_sars_dataset_index(
         )
 
         raw_index += 1
+
+
+@given(timesteps=integers(min_value=1, max_value=1000), n_envs=integers(min_value=1, max_value=10))
+def test_trajs(timesteps: int, n_envs: int) -> None:
+    states = np.empty((timesteps, n_envs, 64, 64, 3))
+    actions = np.empty((timesteps, n_envs), dtype=np.int8)
+    rewards = np.empty((timesteps, n_envs))
+    firsts = np.ones((timesteps, n_envs), dtype=bool)
+
+    data = RlDataset.from_gym3(states=states, actions=actions, rewards=rewards, firsts=firsts)
+    n_trajs = 0
+    for traj in data.trajs(include_incomplete=True):
+        n_trajs += 1
+        assert traj.states.shape == (1, 64, 64, 3)
+        assert traj.actions.shape == (1,)
+        assert traj.rewards.shape == (1,)
+
+    assert n_trajs == timesteps * n_envs

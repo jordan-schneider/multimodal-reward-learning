@@ -4,13 +4,14 @@ from typing import Any, Dict, Literal, Optional, Sequence, Tuple, Union, cast
 import numpy as np
 import torch
 from GPUtil import GPUtil  # type: ignore
-from gym3 import ExtractDictObWrapper
+from gym3 import ExtractDictObWrapper  # type: ignore
 from phasic_policy_gradient.ppg import PhasicValueModel
 from procgen import ProcgenGym3Env
 from tqdm import trange  # type: ignore
 
 from mrl.envs import Miner
-from mrl.envs.probe_envs import OneActionNoObsOneTimestepOneReward as Probe
+from mrl.envs.probe_envs import OneActionNoObsOneTimestepOneReward as Probe1
+from mrl.envs.probe_envs import OneActionTwoObsOneTimestepDeterministicReward as Probe2
 from mrl.offline_buffer import RlDataset
 
 
@@ -22,14 +23,19 @@ def reinit(n: torch.nn.Module) -> None:
     n.apply(_init)
 
 
-def make_env(name: Literal["miner", "miner_reward", "probe"], num: int, **kwargs) -> ProcgenGym3Env:
+EnvName = Literal["miner", "miner_reward", "probe-1", "probe-2"]
+
+
+def make_env(name: EnvName, num: int, **kwargs) -> ProcgenGym3Env:
     if name == "miner":
         env = ProcgenGym3Env(num=1, env_name="miner")
     elif name == "miner_reward":
         assert "reward_weights" in kwargs.keys(), "Must supply reward_weights to Miner reward env."
         env = Miner(num=num, **kwargs)
-    elif name == "probe":
-        env = Probe(num=num, **kwargs)
+    elif name == "probe-1":
+        env = Probe1(num=num, **kwargs)
+    elif name == "probe-2":
+        env = Probe2(num=num, **kwargs)
 
     env = ExtractDictObWrapper(env, "rgb")
     return env
