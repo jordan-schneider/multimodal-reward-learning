@@ -1,4 +1,5 @@
 import gc
+import logging
 import pickle as pkl
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,7 +58,9 @@ def gen_state_preferences(
     use_value: bool = False,
     value_path: Optional[Path] = None,
     replications: Optional[int] = None,
+    verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> None:
+    logging.basicConfig(level=verbosity)
     path = Path(path)
     if replications is not None:
         offset = 0 if (path / "0").exists() else 1
@@ -78,6 +81,7 @@ def gen_state_preferences(
     if not reward_path.exists():
         raise ValueError(f"Reward does not exist at {reward_path}")
     reward = np.load(reward_path)
+    logging.info(f"reward={reward}")
     outdir.mkdir(parents=True, exist_ok=True)
 
     if use_value:
@@ -101,17 +105,18 @@ def gen_state_preferences(
         timesteps=1,
     )
     one_step_size = feature.nbytes
-    print(f"one timestep size={one_step_size}")
+    logging.info(f"one timestep size={one_step_size}")
     del feature
 
     gc.collect()
     free_memory = psutil.virtual_memory().available
-    print(f"Free memory={free_memory}")
+    logging.info(f"Free memory={free_memory}")
 
     batch_timesteps = min(timesteps // n_parallel_envs, int(free_memory / one_step_size * 0.8))
-    print(f"batch_timesteps={batch_timesteps}")
+    logging.info(f"batch_timesteps={batch_timesteps}")
 
     n_batches = max(1, timesteps // (n_parallel_envs * batch_timesteps))
+    logging.info(f"n_batches={n_batches}")
 
     # TODO: Instead of generating states from a policy, we could define a valid latent state space,
     # sample from that, and convert to features. Alternatively, we could define a valid feature
@@ -143,6 +148,9 @@ def gen_state_preferences(
                 opinion = np.sign(reward @ diff)
 
                 if opinion == 0:
+                    logging.debug(
+                        f"No difference of opinion for diff={diff} from {features_a[i]} and {features_b[i]}"
+                    )
                     continue
 
                 diff *= opinion
@@ -151,6 +159,7 @@ def gen_state_preferences(
                 _, diff = noisy_pref(features_a[i], features_b[i], reward, temperature, rng)
                 diffs.append(diff)
 
+        logging.info(f"Saving {len(diffs)} state comparisons in batch {batch_iter}")
         np.save(outdir / f"{outname}.{batch_iter}.npy", np.stack(diffs))
         del features_a
         del features_b
@@ -166,7 +175,9 @@ def gen_traj_preferences(
     policy_path: Optional[Path] = None,
     keep_raw_states: bool = False,
     replications: Optional[int] = None,
+    verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> None:
+    logging.basicConfig(level=verbosity)
     path = Path(path)
     if replications is not None:
         if policy_path is not None:
@@ -205,15 +216,15 @@ def gen_traj_preferences(
         timesteps=1,
     )
     one_step_size = datum.get_bytes()
-    print(f"one timestep size={one_step_size}")
+    logging.info(f"one timestep size={one_step_size}")
 
     gc.collect()
     free_memory = psutil.virtual_memory().available
-    print(f"Free memory: {free_memory}")
+    logging.info(f"Free memory: {free_memory}")
 
     # How many timesteps can we fit into the available memory?
     batch_timesteps = min(int(free_memory / one_step_size * 0.8), n_trajs * 1000 * 2)
-    print(f"batch_timesteps={batch_timesteps}")
+    logging.info(f"batch_timesteps={batch_timesteps}")
 
     current_trajs = 0
     i = 0
