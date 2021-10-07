@@ -1,6 +1,5 @@
-import pickle as pkl
 from pathlib import Path
-from typing import cast
+from typing import Optional
 
 import fire  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
@@ -18,14 +17,14 @@ def make_sphere_cover(n_samples: int, rng: np.random.Generator, dims: int = 5) -
     return samples
 
 
-def find_volumes(diffs: torch.Tensor, reward_samples: int, seed: int, outdir: Path) -> None:
+def find_volumes(diffs: np.ndarray, reward_samples: int, seed: int, outdir: Path) -> None:
     rng = np.random.default_rng(seed)
     rewards = make_sphere_cover(reward_samples, rng)
 
     internal_rewards = np.ones(len(rewards), dtype=bool)
     volumes = np.empty(len(diffs))
     for i in tqdm(range(len(diffs))):
-        internal_rewards &= rewards @ diffs[i].numpy() > 0
+        internal_rewards &= rewards @ diffs[i] > 0
         volumes[i] = np.mean(internal_rewards)
 
     print(f"Final volume is {volumes[-1]}")
@@ -42,15 +41,34 @@ def find_volumes(diffs: torch.Tensor, reward_samples: int, seed: int, outdir: Pa
     plt.savefig(outdir / "volume_experiment.png")
 
 
+def collect_diffs(path: Path) -> np.ndarray:
+    diffs = []
+    for f in path.parent.glob(f"{path.name}.[0-9]*.npy"):
+        diffs.append(np.load(f))
+
+    return np.concatenate(diffs)
+
+
 def volume(
-    data_name: Path, outdir: Path, n_prefs: int = -1, reward_samples: int = 10_000, seed: int = 0
+    data_name: Path,
+    outdir: Path,
+    n_prefs: int = -1,
+    reward_samples: int = 10_000,
+    seed: int = 0,
+    reward_path: Optional[Path] = None,
 ) -> None:
     data_name = Path(data_name)
-    diffs = []
-    for f in data_name.parent.glob(f"{data_name.name}.[0-9]*.pkl"):
-        diffs.append(pkl.load(open(f, "rb")))
+    diffs = collect_diffs(data_name)[:n_prefs]
 
-    find_volumes(torch.cat(diffs)[:n_prefs], reward_samples, seed, Path(outdir))
+    if reward_path is not None:
+        reward = np.load(reward_path)
+        inside = np.all(reward.T @ diffs.T > 0)
+        if inside:
+            print("True reward in volume")
+        else:
+            print("True reward outside volume")
+
+    find_volumes(diffs, reward_samples, seed, Path(outdir))
 
 
 if __name__ == "__main__":
