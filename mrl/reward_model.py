@@ -1,7 +1,7 @@
 import logging
 import pickle as pkl
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple, cast
+from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 import fire  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
@@ -38,7 +38,9 @@ def dedup(normals: np.ndarray, precision: float = 0.001) -> Tuple[np.ndarray, np
 
 # TODO: at some point should probably use something better than scipy, do we have a license for
 # ibm's cplex solver?
-def is_redundant_constraint(halfspace: np.ndarray, halfspaces: np.ndarray, epsilon=0.0001) -> bool:
+def is_redundant_constraint(
+    halfspace: np.ndarray, halfspaces: np.ndarray, epsilon: float = 0.0001
+) -> bool:
     if len(halfspaces) == 0:
         return False
 
@@ -111,11 +113,19 @@ def log_normalize_logs(x: np.ndarray) -> np.ndarray:
     logging.debug(f"min={np.min(x)}, max={np.max(x)}, ratio={np.max(x) - np.min(x)}")
     denom = logsumexp(x, axis=0)
     logging.debug(f"min denom={np.min(denom)}, max={np.max(denom)}")
-    return x - denom
+    out = x - denom
+    if np.any(np.isneginf(out)):
+        logging.warning("Some counted halfplanes have -inf log likelihood")
+    if np.any(np.exp(out) == 0):
+        logging.warning("Some counted halfplanes have 0 likelihood")
+    return out
 
 
 def reward_prop_likelihood_by_diff(
-    reward: np.ndarray, diffs: np.ndarray, counts: Optional[np.ndarray] = None
+    reward: np.ndarray,
+    diffs: np.ndarray,
+    temperature: float = 1.0,
+    approximate: bool = False,
 ) -> np.ndarray:
     """Return the proportional likelihood of a reward given a set of reward feature differences.
 
@@ -129,8 +139,6 @@ def reward_prop_likelihood_by_diff(
     """
     if len(reward.shape) == 1:
         reward = reward.reshape(1, -1)
-    if counts is None:
-        counts = np.ones(diffs.shape[0])
     assert len(diffs) > 0
 
     # This function assumes that the reward posterior is defined on the unit sphere by restricting
@@ -138,54 +146,119 @@ def reward_prop_likelihood_by_diff(
     # the likelihood for all rewards on every ray to their unit length point. If I ever want to do
     # that instead, the likelihood is |w| * log(1/2 * (1 + exp(w @ diffs))) / (w @ diffs) in general
     # and (log(1/2) + log1p(exp(w @ diffs))) / (w @ diffs) in our case, as |w|=1.
+    strengths = temperature * (reward @ diffs.T).T
+    if approximate:
+        log_likelihoods = strengths
+    else:
+        exp_strengths = np.exp(-strengths)
 
-    strengths = -reward @ diffs.T
-    exp_strengths = np.exp(strengths)
+        infs = np.isinf(exp_strengths)
+        not_infs = np.logical_not(infs)
 
-    infs = np.isinf(exp_strengths)
-    not_infs = np.logical_not(infs)
+        log_likelihoods = np.empty((len(diffs), len(reward)))
 
-    log_likelihoods = np.empty((len(diffs), len(reward)))
+        # If np.exp(...) is inf, then 1 + np.exp(...) is approximately np.exp(...)
+        # so log1p(exp(-reward @ diffs))) \approx rewards @ diffs
+        log_likelihoods[infs] = strengths[infs]
+        log_likelihoods[not_infs] = -np.log1p(exp_strengths[not_infs])
 
-    # If np.exp(...) is inf, then 1 + np.exp(...) is approximately np.exp(...)
-    # so log1p(exp(-reward @ diffs))) \approx rewards @ diffs
-    log_likelihoods[infs.T] = -strengths[infs].T
-    log_likelihoods[not_infs.T] = -np.log1p(exp_strengths[not_infs])
-
-    # Duplicate halfplanes result in likelihoods^count terms, which is multiplication in log space
-    log_likelihoods = counts * log_likelihoods.T
+    log_likelihoods = log_likelihoods.T
     assert log_likelihoods.shape == (len(reward), len(diffs))
-
-    return log_likelihoods
-
-
-def mean_l2_dispersions(
-    diffs: np.ndarray, counts: Optional[np.ndarray] = None, n_samples: int = 100_000
-) -> np.ndarray:
-    # Get reward sampled uniformly on the unit sphere
-    reward_samples = np.random.standard_normal(size=(n_samples, diffs.shape[1]))
-    reward_samples = (reward_samples.T / np.linalg.norm(reward_samples, axis=1)).T
-
-    assert np.allclose(np.linalg.norm(reward_samples, axis=1), 1.0)
-
-    log_likelihoods = reward_prop_likelihood_by_diff(reward_samples, diffs, counts)
 
     if np.any(np.isneginf(log_likelihoods)):
         logging.warning("Some counted halfplanes have -inf log likelihood")
     if np.any(np.exp(log_likelihoods) == 0):
         logging.warning("Some counted halfplanes have 0 likelihood")
 
+    return log_likelihoods
+
+
+def cover_sphere(n_samples: int, ndims: int, rng: np.random.Generator) -> np.ndarray:
+    samples = rng.multivariate_normal(mean=np.zeros(ndims), cov=np.eye(ndims), size=(n_samples))
+    samples = (samples.T / np.linalg.norm(samples, axis=1)).T
+    assert np.allclose(np.linalg.norm(samples, axis=1), 1.0)
+    return samples
+
+
+def reward_likelihoods(
+    reward_samples: np.ndarray,
+    diffs: np.ndarray,
+    temperature: float = 1.0,
+    approximate: bool = False,
+):
+    log_likelihoods = reward_prop_likelihood_by_diff(
+        reward_samples, diffs, temperature, approximate
+    )
+
     log_total_likelihoods = np.cumsum(log_likelihoods, axis=1)
-    assert log_total_likelihoods.shape == (n_samples, len(diffs))
+    assert log_total_likelihoods.shape == (len(reward_samples), len(diffs))
 
     if np.any(np.isneginf(log_total_likelihoods)):
         logging.warning("Some rewards have -inf log total likelihood")
-
     if np.any(np.exp(log_total_likelihoods) == 0):
         logging.warning("Some rewards have 0 total unnormalized likelihood")
 
     log_total_likelihoods = log_normalize_logs(log_total_likelihoods)
 
+    log_total_likelihoods = log_shift(log_total_likelihoods)
+
+    total_likelihoods = np.exp(log_total_likelihoods)
+    assert total_likelihoods.shape == (len(reward_samples), len(diffs))
+
+    if np.any(total_likelihoods == 0):
+        logging.warning("Some rewards have 0 total likelihood")
+    assert np.all(np.isfinite(total_likelihoods))
+    return total_likelihoods
+
+
+def mean_l2_dispersions(
+    reward_samples: np.ndarray,
+    likelihoods: np.ndarray,
+    target_rewards: np.ndarray,
+) -> np.ndarray:
+    # Arc length is angle times radius, and the radius is 1, so the arc length between the mean
+    # reward and each sample is just the angle between them, which you can get using the standard
+    # cos(theta) = a @ b / (|a| * |b|) trick, and the norm of all vectors is 1.
+    dots = reward_samples @ target_rewards.T
+    dots[dots < -1.0] = -1.0
+    dots[dots > 1.0] = 1.0
+
+    # TODO: Try entropy or exp entropy or something
+
+    dists = np.arccos(dots)
+    logging.debug(
+        f"samples {reward_samples.shape} likelihoods {likelihoods.shape} targets {target_rewards.shape} dists {dists.shape}"
+    )
+    assert dists.shape == (
+        len(reward_samples),
+        len(target_rewards),
+    ), f"dists shape={dists.shape}, expected {(len(reward_samples), len(target_rewards))}"
+    assert not np.any(np.all(dists == 0.0, axis=0))
+
+    weighted_dists = np.zeros((len(target_rewards),))
+    for i in range(len(target_rewards)):
+        # TODO: There might be a less terrible way to do this, but np.average can't handle it
+        weighted_dists[i] = np.average(dists[:, i], weights=likelihoods[:, i], axis=0)
+
+    return weighted_dists
+
+
+def find_means(reward_samples: np.ndarray, likelihoods: np.ndarray) -> np.ndarray:
+    mean_rewards = np.stack(
+        [
+            np.average(reward_samples, weights=likelihoods[:, i], axis=0)
+            for i in range(likelihoods.shape[1])
+        ]
+    )
+    assert mean_rewards.shape == (
+        likelihoods.shape[1],
+        reward_samples.shape[1],
+    ), f"mean_rewards shape={mean_rewards.shape}, expected {(likelihoods.shape[1],reward_samples.shape[1])}"
+    assert np.all(np.isfinite(mean_rewards))
+    return mean_rewards
+
+
+def log_shift(log_total_likelihoods: np.ndarray) -> np.ndarray:
     smallest_meaningful_log = np.log(np.finfo(np.float64).tiny)
     largest_meainingful_log = np.log(np.finfo(np.float64).max)
     max_log_shift = largest_meainingful_log - np.max(log_total_likelihoods) - 100
@@ -195,106 +268,159 @@ def mean_l2_dispersions(
     logging.info(f"ideal_log_shift={ideal_log_shift}, max_log_shift={max_log_shift}")
     log_total_likelihoods += log_shift
 
-    total_likelihoods = np.exp(log_total_likelihoods)
-    assert total_likelihoods.shape == (n_samples, len(diffs))
-    np.sum(total_likelihoods, axis=1)
-
-    if np.any(total_likelihoods == 0):
-        logging.warning("Some rewards have 0 total likelihood")
-    assert np.all(np.isfinite(total_likelihoods))
-
-    bad_timesteps = np.sum(total_likelihoods, axis=0) == 0
-    if np.any(bad_timesteps):
-        logging.warning("Some timesteps have 0 total likelihood for all rewards")
-        last_good_timestep = np.argmax(bad_timesteps).item()
-    else:
-        last_good_timestep = len(diffs)
-
-    logging.info(f"last_good_timestep={last_good_timestep}")
-
-    mean_rewards = np.stack(
-        np.average(reward_samples, weights=total_likelihoods[:, i], axis=0)
-        for i in range(last_good_timestep)
-    ).T
-    assert mean_rewards.shape == (
-        reward_samples.shape[1],
-        last_good_timestep,
-    ), f"mean_rewards shape={mean_rewards.shape}, expected {(reward_samples.shape[1], last_good_timestep)}"
-    assert np.all(np.isfinite(mean_rewards))
-    mean_rewards = mean_rewards / np.linalg.norm(mean_rewards, axis=0)
-    assert np.all(np.isfinite(mean_rewards))
-
-    lengths = np.linalg.norm(mean_rewards, axis=0)
-    if not np.allclose(lengths, 1.0):
-        error = np.abs(lengths - 1.0)
-        worst_error = np.max(error)
-        worst_index = np.argmax(error)
-        logging.error(
-            f"mean reward vector with length={lengths[worst_index]} error={worst_error}, mean reward={mean_rewards[worst_index]}"
+    if __debug__:
+        total_likelihoods = np.sum(np.exp(log_total_likelihoods), axis=0)
+        good_indices = np.logical_or(
+            np.isclose(total_likelihoods, np.exp(log_shift)), np.isclose(total_likelihoods, 0)
         )
-        exit()
-    assert mean_rewards.shape == (reward_samples.shape[1], last_good_timestep)
+        bad_indices = np.logical_not(good_indices)
+        if np.any(bad_indices):
+            logging.warning(
+                f"Some likelihoods don't add up to {np.exp(log_shift)} or 0:{total_likelihoods[bad_indices]}"
+            )
 
-    # Arc length is angle times radius, and the radius is 1, so the arc length between the mean
-    # reward and each sample is just the angle between them, which you can get using the standard
-    # cos(theta) = a @ b / (|a| * |b|) trick, and the norm of all vectors is 1.
-    # einsum magic is just taking dot product row-wise
-    dots = reward_samples @ mean_rewards
-    dots[dots < -1.0] = -1.0
-    dots[dots > 1.0] = 1.0
-
-    dists = np.arccos(dots)
-    assert dists.shape == (
-        n_samples,
-        last_good_timestep,
-    ), f"dists shape={dists.shape}, expected {(n_samples, last_good_timestep,)}"
-
-    assert not np.any(np.all(dists == 0.0, axis=0))
-
-    weighted_dists = np.zeros((len(diffs),))
-    for i in range(last_good_timestep):
-        # TODO: There might be a less terrible way to do this, but np.average can't handle it
-        weighted_dists[i] = np.average(dists[:, i], weights=total_likelihoods[:, i], axis=0)
-
-    if logging.getLogger().isEnabledFor(logging.DEBUG):
-        exit()
-
-    zero_dispersion_timesteps = weighted_dists == 0.0
-    nonzero_counts_by_timestep = np.sum(total_likelihoods > 0.0, axis=0)
-
-    if not np.all(nonzero_counts_by_timestep[zero_dispersion_timesteps] == 1):
-        logging.warning("Some zero dispersion timesteps have multiple nonzero likelihoods")
-        logging.warning(nonzero_counts_by_timestep[zero_dispersion_timesteps])
-
-    return weighted_dists
+    return log_total_likelihoods
 
 
-def plot_dispersion(
-    in_path: Path, outdir: Path, n_samples: int = 1000, verbosity: Literal["INFO", "DEBUG"] = "INFO"
+def one_modality_analysis(
+    in_path: Path,
+    outdir: Path,
+    n_samples: int = 1000,
+    max_preferences: int = 1000,
+    temperature: float = 1.0,
+    approximate: bool = False,
+    reward_path: Optional[Path] = None,
+    verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> None:
     logging.basicConfig(level=verbosity)
 
+    rng = np.random.default_rng()
+
     in_path, outdir = Path(in_path), Path(outdir)
-    diffs = np.load(in_path)[:1000]
-    dispersion = mean_l2_dispersions(diffs, n_samples=n_samples)
+    diffs = np.load(in_path)[:max_preferences]
+    true_reward = np.load(reward_path) if reward_path is not None else None
 
-    np.save(outdir / "dispersion.npy", dispersion)
+    samples = cover_sphere(n_samples=n_samples, ndims=diffs.shape[1], rng=rng)
 
-    plt.plot(dispersion)
+    if true_reward is not None:
+        samples = np.concatenate((samples, true_reward.reshape(1, -1)))
+
+    likelihoods = reward_likelihoods(
+        reward_samples=samples,
+        diffs=diffs,
+        temperature=temperature,
+        approximate=approximate,
+    )
+
+    plot_counts(outdir, counts=np.sum(likelihoods > 0.0, axis=0))
+
+    map_rewards = samples[np.argmax(likelihoods, axis=0)]
+    plot_rewards(map_rewards, outdir, name="map_reward")
+
+    if true_reward is not None:
+        plot_gt_likelihood(outdir, likelihoods)
+
+        true_reward_copies = np.tile(true_reward, (len(diffs), 1))
+        dispersions_gt = mean_l2_dispersions(
+            reward_samples=samples,
+            likelihoods=likelihoods,
+            target_rewards=true_reward_copies,
+        )
+        np.save(outdir / "dispersion_gt.npy", dispersions_gt)
+        plot_dispersions(outdir, dispersions_gt, name="dispersion_gt")
+
+    mean_rewards = find_means(reward_samples=samples, likelihoods=likelihoods)
+    proj_mean_rewards = (mean_rewards.T / np.linalg.norm(mean_rewards, axis=1)).T
+
+    plot_rewards(mean_rewards, outdir, name="mean_reward")
+    plot_rewards(proj_mean_rewards, outdir, name="proj_mean_reward")
+
+    log_big_shifts(diffs, mean_rewards)
+
+    # TODO: Try not exponetiation and using logits as raw probabilities
+    dispersions_mean = mean_l2_dispersions(
+        reward_samples=samples,
+        likelihoods=likelihoods,
+        target_rewards=proj_mean_rewards,
+    )
+
+    np.save(outdir / "dispersion_mean.npy", dispersions_mean)
+    plot_dispersions(outdir, dispersions_mean, name="dispersion_mean")
+
+
+def log_big_shifts(diffs: np.ndarray, mean_rewards: np.ndarray) -> None:
+    delta_mean_reward = np.max(np.abs(mean_rewards[:-1] - mean_rewards[1:]), axis=1)
+    assert delta_mean_reward.shape == (
+        len(diffs) - 1,
+    ), f"delta mean rewards is {delta_mean_reward.shape} expected {(len(diffs) - 1,)}"
+    big_shift = np.concatenate(([False], delta_mean_reward > 0.01))
+    if np.any(big_shift):
+        logging.info(
+            f"There are some big one timestep shifts. The following are the preferences that caused them:\n{diffs[big_shift]}\nat {np.where(big_shift)}"
+        )
+        logging.info(
+            f"For comparison, here are some small shifts:\n{diffs[np.logical_not(big_shift)][:5]}"
+        )
+
+
+def plot_gt_likelihood(outdir: Path, likelihoods: np.ndarray) -> None:
+    logging.info("Plotting likelihood")
+    true_likelihoods = likelihoods[-1]
+    # true_likelihoods = true_likelihoods[true_likelihoods <= 1e10]
+    true_likelihoods = true_likelihoods[50:]
+    plt.plot(true_likelihoods)
+    plt.title("Ground truth posterior likelihood")
+    plt.xlabel("Human preferences")
+    plt.ylabel("True reward posterior")
+    plt.savefig(outdir / "gt_likelihood.png")
+    plt.close()
+
+
+def plot_dispersions(outdir: Path, dispersions: np.ndarray, name: str) -> None:
+    plt.plot(dispersions)
     plt.xlabel("Human preferences")
     plt.ylabel("Mean dispersion")
     plt.title("Concentration of posterior with data")
-    plt.savefig(outdir / "dispersion.png")
+    plt.savefig(outdir / f"{name}.png")
     plt.close()
 
-    log_dispersion = np.log(dispersion)
+    log_dispersion = np.log(dispersions)
     log_dispersion[log_dispersion == -np.inf] = None
     plt.plot(log_dispersion)
     plt.xlabel("Human preferences")
     plt.ylabel("Log-mean dispersion")
     plt.title("Log-concentration of posterior with data")
-    plt.savefig(outdir / "log_dispersion.png")
+    plt.savefig(outdir / f"log_{name}.png")
     plt.close()
+
+
+def plot_counts(outdir: Path, counts: np.ndarray, threshold: int = 200) -> None:
+    plt.plot(counts)
+    plt.title("Number of rewards with nonzero likelihood")
+    plt.xlabel("Number of preferences")
+    plt.ylabel("Count")
+    plt.savefig(outdir / "counts.png")
+    plt.close()
+
+    small_counts = counts[counts < threshold]
+    if np.any(small_counts):
+        plt.plot(small_counts)
+        plt.title("Number of rewards with nonzero likelihood")
+        plt.xlabel("Number of preferences")
+        plt.ylabel("Count")
+        plt.savefig(outdir / "small_counts.png")
+        plt.close()
+
+
+def plot_rewards(rewards: np.ndarray, outdir: Path, name: str) -> None:
+    for i, dimension in enumerate(rewards.T):
+        plt.plot(dimension)
+        plt.ylim(-1, 1)
+        plt.xlabel("Preferences")
+        plt.ylabel(f"{i}-th dimension of reward")
+        plt.title(f"{i}-th dimension of reward")
+        plt.savefig(outdir / f"{i}.{name}.png")
+        plt.close()
 
 
 def compare_modalities(
@@ -313,9 +439,18 @@ def compare_modalities(
     if action_path is not None:
         paths["action"] = Path(action_path)
 
+    rng = np.random.default_rng()
+
+    # TODO: Compute means, pass into dispersions
+
     diffs = {key: np.load(in_path) for key, in_path in paths.items()}
+    reward_samples = cover_sphere(n_samples, 5, rng)
     dispersions = {
-        key: mean_l2_dispersions(diff, n_samples=n_samples) for key, diff in diffs.items()
+        key: mean_l2_dispersions(
+            reward_samples,
+            likelihoods=reward_likelihoods(reward_samples, diff),
+        )
+        for key, diff in diffs.items()
     }
     pkl.dump(dispersions, (outdir / "dispersions.pkl").open("wb"))
     for name, dispersion in dispersions.items():
@@ -336,6 +471,7 @@ def plot_joint_data(
     n_samples: int = 1000,
 ) -> None:
     outdir = Path(outdir)
+    rng = np.random.default_rng()
 
     outname = ""
     paths = []
@@ -351,7 +487,9 @@ def plot_joint_data(
     outname += "dispersion.png"
 
     diffs = np.concatenate(pkl.load(path.open("rb")).numpy() for path in paths)
-    dispersion = mean_l2_dispersions(diffs, n_samples=n_samples)
+    reward_samples = cover_sphere(n_samples=n_samples, ndims=diffs.shape[1], rng=rng)
+    likelihoods = reward_likelihoods(reward_samples, diffs)
+    dispersion = mean_l2_dispersions(diffs, reward_samples, likelihoods)
     np.save(outdir / "dispersion.npy", dispersion)
     plt.plot(dispersion)
     plt.xlabel("Human preferences")
@@ -362,4 +500,4 @@ def plot_joint_data(
 
 
 if __name__ == "__main__":
-    fire.Fire({"plot_dispersion": plot_dispersion, "compare": compare_modalities})
+    fire.Fire({"plot_dispersion": one_modality_analysis, "compare": compare_modalities})
