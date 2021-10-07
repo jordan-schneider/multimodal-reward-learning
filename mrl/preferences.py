@@ -1,9 +1,7 @@
 import gc
 import logging
-import pickle as pkl
-from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Literal, Optional, Sequence, Tuple, Union, cast
+from typing import List, Literal, Optional, Tuple, cast
 
 import fire  # type: ignore
 import numpy as np
@@ -15,7 +13,6 @@ from phasic_policy_gradient.ppg import PhasicValueModel
 from torch.distributions import Categorical
 
 from mrl.envs import Miner
-from mrl.offline_buffer import RlDataset
 from mrl.util import procgen_rollout_dataset, procgen_rollout_features
 
 
@@ -75,6 +72,7 @@ def gen_state_preferences(
                 n_parallel_envs=n_parallel_envs,
                 outname=outname,
                 temperature=temperature,
+                verbosity=verbosity,
             )
         exit()
     reward_path, outdir = path / "reward.npy", path / "prefs/state"
@@ -194,6 +192,7 @@ def gen_traj_preferences(
                 outname=outname,
                 temperature=temperature,
                 keep_raw_states=keep_raw_states,
+                verbosity=verbosity,
             )
         exit()
     reward_path = path / "reward.npy"
