@@ -180,7 +180,7 @@ def cover_sphere(n_samples: int, ndims: int, rng: np.random.Generator) -> np.nda
     return samples
 
 
-def reward_likelihoods(
+def cum_reward_likelihoods(
     reward_samples: np.ndarray,
     diffs: np.ndarray,
     temperature: float = 1.0,
@@ -219,6 +219,9 @@ def mean_l2_dispersions(
     # Arc length is angle times radius, and the radius is 1, so the arc length between the mean
     # reward and each sample is just the angle between them, which you can get using the standard
     # cos(theta) = a @ b / (|a| * |b|) trick, and the norm of all vectors is 1.
+    logging.debug(
+        f"reward samples shape={reward_samples.shape}, target rewards shape={target_rewards.shape}"
+    )
     dots = reward_samples @ target_rewards.T
     dots[dots < -1.0] = -1.0
     dots[dots > 1.0] = 1.0
@@ -243,17 +246,17 @@ def mean_l2_dispersions(
     return weighted_dists
 
 
-def find_means(reward_samples: np.ndarray, likelihoods: np.ndarray) -> np.ndarray:
+def find_means(rewards: np.ndarray, likelihoods: np.ndarray) -> np.ndarray:
     mean_rewards = np.stack(
         [
-            np.average(reward_samples, weights=likelihoods[:, i], axis=0)
+            np.average(rewards, weights=likelihoods[:, i], axis=0)
             for i in range(likelihoods.shape[1])
         ]
     )
     assert mean_rewards.shape == (
         likelihoods.shape[1],
-        reward_samples.shape[1],
-    ), f"mean_rewards shape={mean_rewards.shape}, expected {(likelihoods.shape[1],reward_samples.shape[1])}"
+        rewards.shape[1],
+    ), f"mean_rewards shape={mean_rewards.shape}, expected {(likelihoods.shape[1],rewards.shape[1])}"
     assert np.all(np.isfinite(mean_rewards))
     return mean_rewards
 
@@ -282,30 +285,27 @@ def log_shift(log_total_likelihoods: np.ndarray) -> np.ndarray:
     return log_total_likelihoods
 
 
-def one_modality_analysis(
-    in_path: Path,
+def analysis(
     outdir: Path,
-    n_samples: int = 1000,
-    max_preferences: int = 1000,
-    temperature: float = 1.0,
-    approximate: bool = False,
-    reward_path: Optional[Path] = None,
-    verbosity: Literal["INFO", "DEBUG"] = "INFO",
+    diffs: np.ndarray,
+    n_reward_samples: int,
+    rng: np.random.Generator,
+    temperature: float,
+    approximate: bool,
+    norm_diffs: bool,
+    true_reward: Optional[np.ndarray] = None,
 ) -> None:
-    logging.basicConfig(level=verbosity)
+    # TODO: Try normalizing diffs
+    if norm_diffs:
+        diffs = (diffs.T / np.linalg.norm(diffs, axis=1)).T
+    ndims = diffs.shape[1]
 
-    rng = np.random.default_rng()
-
-    in_path, outdir = Path(in_path), Path(outdir)
-    diffs = np.load(in_path)[:max_preferences]
-    true_reward = np.load(reward_path) if reward_path is not None else None
-
-    samples = cover_sphere(n_samples=n_samples, ndims=diffs.shape[1], rng=rng)
+    samples = cover_sphere(n_samples=n_reward_samples, ndims=ndims, rng=rng)
 
     if true_reward is not None:
         samples = np.concatenate((samples, true_reward.reshape(1, -1)))
 
-    likelihoods = reward_likelihoods(
+    likelihoods = cum_reward_likelihoods(
         reward_samples=samples,
         diffs=diffs,
         temperature=temperature,
@@ -329,7 +329,7 @@ def one_modality_analysis(
         np.save(outdir / "dispersion_gt.npy", dispersions_gt)
         plot_dispersions(outdir, dispersions_gt, name="dispersion_gt")
 
-    mean_rewards = find_means(reward_samples=samples, likelihoods=likelihoods)
+    mean_rewards = find_means(rewards=samples, likelihoods=likelihoods)
     proj_mean_rewards = (mean_rewards.T / np.linalg.norm(mean_rewards, axis=1)).T
 
     plot_rewards(mean_rewards, outdir, name="mean_reward")
@@ -346,6 +346,33 @@ def one_modality_analysis(
 
     np.save(outdir / "dispersion_mean.npy", dispersions_mean)
     plot_dispersions(outdir, dispersions_mean, name="dispersion_mean")
+
+
+def one_modality_analysis(
+    in_path: Path,
+    outdir: Path,
+    n_samples: int = 1000,
+    max_preferences: int = 1000,
+    temperature: float = 1.0,
+    approximate: bool = False,
+    reward_path: Optional[Path] = None,
+    verbosity: Literal["INFO", "DEBUG"] = "INFO",
+) -> None:
+    logging.basicConfig(level=verbosity)
+    in_path, outdir = Path(in_path), Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    diffs = np.load(in_path)[:max_preferences]
+    true_reward = np.load(reward_path) if reward_path is not None else None
+
+    analysis(
+        outdir=outdir,
+        diffs=diffs,
+        n_reward_samples=n_samples,
+        rng=np.random.default_rng(),
+        temperature=temperature,
+        approximate=approximate,
+        true_reward=true_reward,
+    )
 
 
 def log_big_shifts(diffs: np.ndarray, mean_rewards: np.ndarray) -> None:
@@ -428,9 +455,11 @@ def compare_modalities(
     traj_path: Optional[Path] = None,
     state_path: Optional[Path] = None,
     action_path: Optional[Path] = None,
-    n_samples: int = 1000,
+    n_samples: int = 100_000,
+    max_comparisons: int = 1000,
 ) -> None:
     outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
     paths = {}
     if traj_path is not None:
         paths["traj"] = Path(traj_path)
@@ -441,26 +470,54 @@ def compare_modalities(
 
     rng = np.random.default_rng()
 
-    # TODO: Compute means, pass into dispersions
+    diffs = {
+        key: gather(in_path.parent, in_path.name, n=max_comparisons)
+        for key, in_path in paths.items()
+    }
+    diffs["joint"] = np.concatenate(
+        [diff[: max_comparisons // len(paths)] for diff in diffs.values()]
+    )
+    rng.shuffle(diffs["joint"])
+    ndims = list(diffs.values())[0].shape[1]  # type: ignore
+    reward_samples = cover_sphere(n_samples, ndims, rng)
 
-    diffs = {key: np.load(in_path) for key, in_path in paths.items()}
-    reward_samples = cover_sphere(n_samples, 5, rng)
-    dispersions = {
+    likelihoods = {key: cum_reward_likelihoods(reward_samples, diff) for key, diff in diffs.items()}
+    mean_rewards = {
+        key: find_means(rewards=reward_samples, likelihoods=likelihood)
+        for key, likelihood in likelihoods.items()
+    }
+
+    dispersions_mean = {
         key: mean_l2_dispersions(
             reward_samples,
-            likelihoods=reward_likelihoods(reward_samples, diff),
+            likelihoods=cum_reward_likelihoods(reward_samples, diff),
+            target_rewards=mean_rewards[key],
         )
         for key, diff in diffs.items()
     }
-    pkl.dump(dispersions, (outdir / "dispersions.pkl").open("wb"))
-    for name, dispersion in dispersions.items():
+    pkl.dump(dispersions_mean, (outdir / "dispersions_mean.pkl").open("wb"))
+
+    for name, dispersion in dispersions_mean.items():
         plt.plot(dispersion, label=name)
     plt.xlabel("Human preferences")
     plt.ylabel("Mean dispersion")
     plt.title("Concentration of posterior for different modalities")
     plt.legend()
-    plt.savefig(outdir / "comparison.png")
+    plt.savefig(outdir / "comparison_mean.png")
     plt.close()
+
+
+def gather(indir: Path, name: str, n: int) -> np.ndarray:
+    paths = list(indir.glob(f"{name}.[0-9]*.npy"))
+    data = []
+    current_size = 0
+    while current_size < n and len(paths) > 0:
+        path = paths.pop()
+        array = np.load(path)
+        data.append(array)
+        current_size += len(array)
+
+    return np.concatenate(data)[:n]
 
 
 def plot_joint_data(
@@ -468,10 +525,17 @@ def plot_joint_data(
     traj_path: Optional[Path] = None,
     state_path: Optional[Path] = None,
     action_path: Optional[Path] = None,
-    n_samples: int = 1000,
+    reward_path: Optional[Path] = None,
+    n_reward_samples: int = 100_000,
+    data_per_modality: int = 1000,
+    temperature: float = 1.0,
+    approximate: bool = False,
+    verbosity: Literal["DEBUG", "INFO"] = "INFO",
 ) -> None:
     outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng()
+    logging.basicConfig(level=verbosity)
 
     outname = ""
     paths = []
@@ -486,18 +550,23 @@ def plot_joint_data(
         outname += "action."
     outname += "dispersion.png"
 
-    diffs = np.concatenate(pkl.load(path.open("rb")).numpy() for path in paths)
-    reward_samples = cover_sphere(n_samples=n_samples, ndims=diffs.shape[1], rng=rng)
-    likelihoods = reward_likelihoods(reward_samples, diffs)
-    dispersion = mean_l2_dispersions(diffs, reward_samples, likelihoods)
-    np.save(outdir / "dispersion.npy", dispersion)
-    plt.plot(dispersion)
-    plt.xlabel("Human preferences")
-    plt.ylabel("Mean dispersion")
-    plt.title("Concentration of posterior with data")
-    plt.savefig(outdir / outname)
-    plt.close()
+    diffs = np.concatenate([gather(path.parent, path.name, n=data_per_modality) for path in paths])
+    rng.shuffle(diffs)
+
+    true_reward = np.load(reward_path) if reward_path is not None else None
+
+    analysis(
+        outdir,
+        diffs,
+        n_reward_samples,
+        rng,
+        temperature=temperature,
+        approximate=approximate,
+        true_reward=true_reward,
+    )
 
 
 if __name__ == "__main__":
-    fire.Fire({"plot_dispersion": one_modality_analysis, "compare": compare_modalities})
+    fire.Fire(
+        {"single": one_modality_analysis, "compare": compare_modalities, "joint": plot_joint_data}
+    )
