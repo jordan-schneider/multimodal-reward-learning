@@ -1,15 +1,15 @@
 from pathlib import Path
-from typing import List, cast
+from typing import cast
 
-import fire
+import fire  # type: ignore
 import numpy as np
 import torch
-from gym3 import ExtractDictObWrapper, VideoRecorderWrapper
+from gym3 import ExtractDictObWrapper, VideoRecorderWrapper  # type: ignore
 from phasic_policy_gradient.ppg import PhasicValueModel
 from phasic_policy_gradient.roller import Roller
-from PIL import Image
+from PIL import Image  # type: ignore
 
-from envs.miner import Miner
+from mrl.envs.miner import Miner
 
 
 def replay(model_path: Path, n_videos: int, outdir: Path, horizon: int = 1000) -> None:

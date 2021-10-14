@@ -1,4 +1,4 @@
-import fire
+import fire  # type: ignore
 import numpy as np
 from procgen.env import ProcgenGym3Env
 

@@ -4,7 +4,6 @@ from typing import Optional
 import fire  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
 import numpy as np
-import torch
 from numpy.testing import assert_allclose
 from tqdm import tqdm  # type: ignore
 

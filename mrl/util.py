@@ -239,7 +239,9 @@ def find_policy_path(policydir: Path, overwrite: bool = False) -> Tuple[Optional
         return None, 0
 
     latest_model = sorted(models)[-1]
-    model_iter = int(re.search("([0-9]+).jd", str(latest_model)).group(1))
+    match = re.search("([0-9]+).jd", str(latest_model))
+    assert match is not None
+    model_iter = int(match.group(1))
     return latest_model, model_iter
 
 

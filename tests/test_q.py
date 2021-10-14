@@ -25,7 +25,6 @@ def model_weight_stats(model: torch.nn.Module) -> Tuple[float, float]:
 
 
 def test_init():
-
     model = torch.load(MODEL_PATH)
 
     random_init_q = QNetwork(model, n_actions=16, discount_rate=1.0)

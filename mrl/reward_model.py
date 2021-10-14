@@ -1,18 +1,13 @@
 import logging
 import pickle as pkl
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Tuple, cast
+from typing import List, Literal, Optional, Tuple
 
 import fire  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
 import numpy as np
-import torch
-from numpy.lib.function_base import disp
-from numpy.lib.ufunclike import isneginf
-from scipy.optimize import linprog  # type: ignore
 from scipy.spatial.distance import cosine  # type: ignore
 from scipy.special import logsumexp  # type: ignore
-from tqdm import tqdm  # type: ignore
 
 
 def dedup(normals: np.ndarray, precision: float = 0.001) -> Tuple[np.ndarray, np.ndarray]:

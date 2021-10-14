@@ -6,7 +6,6 @@ from typing import Dict, Generator, List, Optional, Tuple, cast
 
 import numpy as np
 import torch
-from torch.functional import Tensor
 
 
 class RlDataset:

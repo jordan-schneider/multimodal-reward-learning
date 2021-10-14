@@ -1,8 +1,8 @@
 from pathlib import Path
 
-import fire
-import matplotlib.pyplot as plt
-import pandas as pd
+import fire  # type: ignore
+import matplotlib.pyplot as plt  # type: ignore
+import pandas as pd  # type: ignore
 
 
 def plot_progress(rootdir: Path) -> None:
