@@ -1,4 +1,3 @@
-import logging
 from typing import Any, Dict, Final, List, Optional, Tuple, Union, cast
 
 import numpy as np
@@ -161,7 +160,7 @@ class Miner(ProcgenGym3Env):
         # You are only in danger if the thing directly above you is moving
         if state.grid[agent_x, agent_y + 1] in {3, 4}:
             return (True, 1) if return_time_to_die else True
-        elif state.grid[agent_x, agent_y + 1] in {9, 10}:
+        elif state.grid[agent_x, agent_y + 1] in {1, 2, 9, 10}:
             return (False, -1) if return_time_to_die else False
 
         for y in range(agent_y + 2, state.grid.shape[1]):

@@ -355,7 +355,9 @@ def follow_path(env: Miner, path: Sequence[Action]) -> bool:
 @given(
     seed=integers(0, 2 ** 31 - 1),
     reward_weights=arrays(
-        np.float64, (Miner.N_FEATURES,), elements=floats(allow_nan=False, allow_infinity=False)
+        np.float64,
+        (Miner.N_FEATURES,),
+        elements=floats(min_value=1e10, max_value=1e10, allow_nan=False, allow_infinity=False),
     ),
 )
 def test_reward(seed: int, reward_weights: np.ndarray) -> None:
