@@ -17,7 +17,7 @@ from tqdm import trange  # type: ignore
 from mrl.offline_buffer import RlDataset
 from mrl.online_batcher import BatchGenerator
 from mrl.util import EnvName, find_best_gpu, find_policy_path, make_env, procgen_rollout, reinit
-from writer import SequentialWriter
+from mrl.writer import SequentialWriter
 
 
 class QNetwork(torch.nn.Module):
@@ -178,11 +178,9 @@ def train_q_trunc_returns(
     val_period: int,
     q: QNetwork,
     optim: torch.optim.Optimizer,
-    writer: SummaryWriter,
+    writer: SequentialWriter,
 ) -> QNetwork:
     val_counter = 0
-    val_step = 0
-    train_step = 0
     n_batches = n_train_steps // batch_size
     for _ in trange(n_batches):
         states, actions, partial_returns = batch_gen.make_trunc_return_batch(
@@ -199,12 +197,11 @@ def train_q_trunc_returns(
         assert q_pred.shape == (n,), f"q_pred={q_pred.shape} not expected ({n})"
         loss = torch.sum((q_pred - partial_returns) ** 2)
 
-        writer.add_scalar("train/loss", loss, global_step=train_step)
+        writer.add_scalar("train/loss", loss)
 
         loss.backward()
         optim.step()
 
-        train_step += 1
         val_counter += n
 
         if val_counter > val_period:
@@ -216,8 +213,7 @@ def train_q_trunc_returns(
                 discount_rate=q.discount_rate,
                 device=q.device,
             )
-            writer.add_scalar("val/rmse", val_loss, global_step=val_step)
-            val_step += 1
+            writer.add_scalar("val/rmse", val_loss)
 
     return q
 
@@ -438,12 +434,14 @@ def eval_q(datadir: Path, discount_rate: float = 0.999, env_interactions: int = 
     env = ProcgenGym3Env(1, "miner")
     env = ExtractDictObWrapper(env, "rgb")
 
+    writer = SequentialWriter(SummaryWriter(log_dir=datadir / "logs" / "eval_q"))
+
     logging.info("Gathering environment interactions")
     data = RlDataset.from_gym3(*procgen_rollout(env, policy, env_interactions, tqdm=True))
     pkl.dump(data, open(datadir / "eval_rollouts.pkl", "wb"))
 
     logging.info("Evaluating loss")
-    loss = eval_q_rmse(q.forward, data, discount_rate)
+    loss = eval_q_rmse(q.forward, data, discount_rate, writer=writer)
 
     logging.info(f"Loss={loss} over {env_interactions} env timesteps.")
 
@@ -451,7 +449,7 @@ def eval_q(datadir: Path, discount_rate: float = 0.999, env_interactions: int = 
 def refine_v(
     indir: Path,
     outdir: Path,
-    env_name: Literal["miner", "probe"] = "miner",
+    env_name: EnvName = "miner",
     lr: float = 10e-3,
     discount_rate: float = 0.999,
     batch_size: int = 64,

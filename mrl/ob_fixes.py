@@ -5,7 +5,7 @@ import fire  # type: ignore
 import torch
 from phasic_policy_gradient.ppg import PhasicValueModel
 
-from mrl.learn_q import QNetwork
+from mrl.learn_values import QNetwork
 from mrl.util import find_policy_path
 
 # Manual patches to saved objects that are missing an attribute, or have an attribute
@@ -19,6 +19,7 @@ def fix_policy_device(datadir: Path) -> None:
     """Adds a .device attribute to a PhasicValueModel"""
     datadir = Path(datadir)
     policy_path, _ = find_policy_path(datadir / "models")
+    assert policy_path is not None
     policy = cast(PhasicValueModel, torch.load(policy_path))
     policy.device = policy.pi_head.weight.device
     torch.save(policy, policy_path)

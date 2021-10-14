@@ -1,7 +1,7 @@
 from typing import Dict, Tuple
 
 import numpy as np
-from gym3.types import DictType, Discrete, TensorType
+from gym3.types import DictType, Discrete, TensorType  # type: ignore
 from procgen import ProcgenGym3Env
 
 
