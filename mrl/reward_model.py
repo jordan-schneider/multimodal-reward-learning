@@ -282,6 +282,7 @@ def one_modality_analysis(
     max_preferences: int = 1000,
     temperature: float = 1.0,
     approximate: bool = False,
+    norm_diffs: bool = False,
     reward_path: Optional[Path] = None,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> None:
@@ -298,6 +299,7 @@ def one_modality_analysis(
         rng=np.random.default_rng(),
         temperature=temperature,
         approximate=approximate,
+        norm_diffs=norm_diffs,
         true_reward=true_reward,
     )
 
@@ -384,6 +386,7 @@ def compare_modalities(
     action_path: Optional[Path] = None,
     n_samples: int = 100_000,
     max_comparisons: int = 1000,
+    norm_diffs: bool = False,
 ) -> None:
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -405,6 +408,10 @@ def compare_modalities(
         [diff[: max_comparisons // len(paths)] for diff in diffs.values()]
     )
     rng.shuffle(diffs["joint"])
+
+    if norm_diffs:
+        diffs = {key: (diff.T / np.linalg.norm(diff, axis=1)).T for key, diff in diffs.items()}
+
     ndims = list(diffs.values())[0].shape[1]  # type: ignore
     reward_samples = cover_sphere(n_samples, ndims, rng)
 
@@ -457,6 +464,7 @@ def plot_joint_data(
     data_per_modality: int = 1000,
     temperature: float = 1.0,
     approximate: bool = False,
+    norm_diffs: bool = False,
     verbosity: Literal["DEBUG", "INFO"] = "INFO",
 ) -> None:
     outdir = Path(outdir)
@@ -489,6 +497,7 @@ def plot_joint_data(
         rng,
         temperature=temperature,
         approximate=approximate,
+        norm_diffs=norm_diffs,
         true_reward=true_reward,
     )
 
