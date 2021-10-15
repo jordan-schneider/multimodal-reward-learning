@@ -248,3 +248,16 @@ def find_policy_path(policydir: Path, overwrite: bool = False) -> Tuple[Optional
 def find_best_gpu() -> torch.device:
     device_id = GPUtil.getFirstAvailable(order="load")[0]
     return torch.device(f"cuda:{device_id}")
+
+
+def np_gather(indir: Path, name: str, n: int) -> np.ndarray:
+    paths = list(indir.glob(f"{name}.[0-9]*.npy"))
+    data = []
+    current_size = 0
+    while current_size < n and len(paths) > 0:
+        path = paths.pop()
+        array = np.load(path)
+        data.append(array)
+        current_size += len(array)
+
+    return np.concatenate(data)[:n]
