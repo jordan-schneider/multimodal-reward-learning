@@ -9,6 +9,8 @@ import numpy as np
 from scipy.spatial.distance import cosine  # type: ignore
 from scipy.special import logsumexp  # type: ignore
 
+from mrl.util import np_gather
+
 
 def dedup(normals: np.ndarray, precision: float = 0.001) -> Tuple[np.ndarray, np.ndarray]:
     """Remove halfspaces that have small cosine similarity to another."""
@@ -379,6 +381,7 @@ def compare_modalities(
     traj_path: Optional[Path] = None,
     state_path: Optional[Path] = None,
     action_path: Optional[Path] = None,
+    reward_path: Optional[Path] = None,
     n_samples: int = 100_000,
     max_comparisons: int = 1000,
     norm_diffs: bool = False,
@@ -393,10 +396,13 @@ def compare_modalities(
     if action_path is not None:
         paths["action"] = Path(action_path)
 
+    if reward_path is not None:
+        true_reward = np.load(reward_path)
+
     rng = np.random.default_rng()
 
     diffs = {
-        key: gather(in_path.parent, in_path.name, n=max_comparisons)
+        key: np_gather(in_path.parent, in_path.name, n=max_comparisons)
         for key, in_path in paths.items()
     }
     diffs["joint"] = np.concatenate(
@@ -410,11 +416,25 @@ def compare_modalities(
     ndims = list(diffs.values())[0].shape[1]  # type: ignore
     reward_samples = cover_sphere(n_samples, ndims, rng)
 
+    if reward_path is not None:
+        reward_samples = np.concatenate((reward_samples, [true_reward]), axis=0)
+
     likelihoods = {key: cum_reward_likelihoods(reward_samples, diff) for key, diff in diffs.items()}
     mean_rewards = {
         key: find_means(rewards=reward_samples, likelihoods=likelihood)
         for key, likelihood in likelihoods.items()
     }
+
+    for dim in range(ndims):
+        for name, mean in mean_rewards.items():
+            plt.plot(mean[:, dim], label=name)
+        plt.ylim(-1, 1)
+        plt.xlabel("Preferences")
+        plt.ylabel(f"{dim}-th dimension of reward")
+        plt.title(f"{dim}-th dimension of reward")
+        plt.legend()
+        plt.savefig(outdir / f"{dim}.mean_reward.png")
+        plt.close()
 
     dispersions_mean = {
         key: mean_l2_dispersions(
@@ -432,21 +452,38 @@ def compare_modalities(
     plt.ylabel("Mean dispersion")
     plt.title("Concentration of posterior for different modalities")
     plt.legend()
-    plt.savefig(outdir / "comparison_mean.png")
+    plt.savefig(outdir / "dispersion_mean.png")
     plt.close()
 
+    if reward_path is not None:
+        gt_likelihood = {key: l[-1] for key, l in likelihoods.items()}
+        for name, likelihood in gt_likelihood.items():
+            plt.plot(likelihood, label=name)
+        plt.title("Likelihood of ground truth reward")
+        plt.xlabel("Human preferences")
+        plt.ylabel("Posterior likelihood")
+        plt.legend()
+        plt.savefig(outdir / "gt_likelihood.png")
+        plt.close()
 
-def gather(indir: Path, name: str, n: int) -> np.ndarray:
-    paths = list(indir.glob(f"{name}.[0-9]*.npy"))
-    data = []
-    current_size = 0
-    while current_size < n and len(paths) > 0:
-        path = paths.pop()
-        array = np.load(path)
-        data.append(array)
-        current_size += len(array)
+        true_reward_copies = np.tile(true_reward, (max_comparisons, 1))
+        dispersions_gt = {
+            key: mean_l2_dispersions(
+                reward_samples=reward_samples,
+                likelihoods=l,
+                target_rewards=true_reward_copies,
+            )
+            for key, l in likelihoods.items()
+        }
 
-    return np.concatenate(data)[:n]
+        for name, dispersion in dispersions_gt.items():
+            plt.plot(dispersion, label=name)
+        plt.xlabel("Human preferences")
+        plt.ylabel("Mean dispersion")
+        plt.title("Concentration of posterior for different modalities")
+        plt.legend()
+        plt.savefig(outdir / "dispersion_gt.png")
+        plt.close()
 
 
 def plot_joint_data(
@@ -480,7 +517,9 @@ def plot_joint_data(
         outname += "action."
     outname += "dispersion.png"
 
-    diffs = np.concatenate([gather(path.parent, path.name, n=data_per_modality) for path in paths])
+    diffs = np.concatenate(
+        [np_gather(path.parent, path.name, n=data_per_modality) for path in paths]
+    )
     rng.shuffle(diffs)
 
     true_reward = np.load(reward_path) if reward_path is not None else None
