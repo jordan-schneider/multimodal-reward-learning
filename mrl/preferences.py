@@ -45,37 +45,39 @@ def noisy_pref(
 
 
 def gen_state_preferences(
-    path: Path,
-    timesteps: int,
+    rootdir: Path,
+    n_states: int,
     n_parallel_envs: int,
     outname: str,
-    temperature: Optional[float] = None,
+    temperature: float = 0.0,
     policy_path_a: Optional[Path] = None,
     policy_path_b: Optional[Path] = None,
     use_value: bool = False,
     value_path: Optional[Path] = None,
+    normalize_features: bool = False,
     replications: Optional[int] = None,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> None:
     setup_logging(level=verbosity)
-    path = Path(path)
+    rootdir = Path(rootdir)
     if replications is not None:
-        offset = 0 if (path / "0").exists() else 1
+        offset = 0 if (rootdir / "0").exists() else 1
         for batch_iter in range(offset, replications + offset):
             if policy_path_a is not None or policy_path_b is not None or use_value:
                 raise NotImplementedError(
                     "Specifying policies and value networks with replications not supported at this time."
                 )
             gen_state_preferences(
-                path=path / str(batch_iter),
-                timesteps=timesteps,
+                rootdir=rootdir / str(batch_iter),
+                n_states=n_states,
                 n_parallel_envs=n_parallel_envs,
                 outname=outname,
                 temperature=temperature,
+                normalize_features=normalize_features,
                 verbosity=verbosity,
             )
         exit()
-    reward_path, outdir = path / "reward.npy", path / "prefs/state"
+    reward_path, outdir = rootdir / "reward.npy", rootdir / f"prefs/state/{temperature}"
     if not reward_path.exists():
         raise ValueError(f"Reward does not exist at {reward_path}")
     reward = np.load(reward_path)
@@ -89,7 +91,7 @@ def gen_state_preferences(
                 f"--use-value specified, but --value-path {value_path} does not point to valid file."
             )
 
-    env = Miner(reward_weights=reward, num=n_parallel_envs)
+    env = Miner(reward_weights=reward, num=n_parallel_envs, normalize_features=normalize_features)
     env = ExtractDictObWrapper(env, "rgb")
 
     policy_a = get_policy(policy_path_a, actype=env.ac_space, num=n_parallel_envs)
@@ -110,10 +112,10 @@ def gen_state_preferences(
     free_memory = psutil.virtual_memory().available
     logging.info(f"Free memory={free_memory}")
 
-    batch_timesteps = min(timesteps // n_parallel_envs, int(free_memory / one_step_size * 0.8))
+    batch_timesteps = min(n_states // n_parallel_envs, int(free_memory / one_step_size * 0.8))
     logging.info(f"batch_timesteps={batch_timesteps}")
 
-    n_batches = max(1, timesteps // (n_parallel_envs * batch_timesteps))
+    n_batches = max(1, n_states // (n_parallel_envs * batch_timesteps))
     logging.info(f"n_batches={n_batches}")
 
     # TODO: Instead of generating states from a policy, we could define a valid latent state space,
@@ -126,7 +128,7 @@ def gen_state_preferences(
 
     diff_count = 0
     batch_iter = 0
-    while diff_count < timesteps:
+    while diff_count < n_states:
         features_a = procgen_rollout_features(
             env=env,
             policy=policy_a,
@@ -143,7 +145,7 @@ def gen_state_preferences(
 
         diffs: List[np.ndarray] = []
         for i in range(len(features_a)):
-            if temperature is None:
+            if temperature == 0.0:
                 diff = features_a[i] - features_b[i]
                 opinion = np.sign(reward @ diff)
 
@@ -171,44 +173,46 @@ def gen_state_preferences(
 
 
 def gen_traj_preferences(
-    path: Path,
+    rootdir: Path,
     n_trajs: int,
     n_parallel_envs: int,
     outname: str,
-    temperature: Optional[float] = None,
+    temperature: float = 0.0,
     policy_path: Optional[Path] = None,
     keep_raw_states: bool = False,
+    normalize_features: bool = False,
     replications: Optional[int] = None,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> None:
     setup_logging(level=verbosity)
-    path = Path(path)
+    rootdir = Path(rootdir)
     if replications is not None:
         if policy_path is not None:
             raise NotImplementedError(
                 "Replications flag not compatible with specifying a policy path at this time."
             )
 
-        offset = 0 if (path / "0").exists() else 1
+        offset = 0 if (rootdir / "0").exists() else 1
         for i in range(offset, replications + offset):
             gen_traj_preferences(
-                path=path / str(i),
+                rootdir=rootdir / str(i),
                 n_trajs=n_trajs,
                 n_parallel_envs=n_parallel_envs,
                 outname=outname,
                 temperature=temperature,
                 keep_raw_states=keep_raw_states,
+                normalize_features=normalize_features,
                 verbosity=verbosity,
             )
         exit()
-    reward_path = path / "reward.npy"
+    reward_path = rootdir / "reward.npy"
     if not reward_path.exists():
         raise ValueError(f"Reward does not exist at {reward_path}")
     reward = np.load(reward_path)
-    outdir = path / "prefs/traj/"
+    outdir = rootdir / f"prefs/traj/{temperature}"
     outdir.mkdir(parents=True, exist_ok=True)
 
-    env = Miner(reward_weights=reward, num=n_parallel_envs)
+    env = Miner(reward_weights=reward, num=n_parallel_envs, normalize_features=normalize_features)
     env = ExtractDictObWrapper(env, "rgb")
 
     policy = get_policy(policy_path, actype=env.ac_space, num=n_parallel_envs)
@@ -248,7 +252,7 @@ def gen_traj_preferences(
         diffs: List[np.ndarray] = []
         for traj_a, traj_b in zip(trajs, trajs):
             assert traj_a.features is not None and traj_b.features is not None
-            if temperature is None:
+            if temperature == 0.0:
                 feature_diff = (
                     torch.sum(traj_a.features, dim=0) - torch.sum(traj_b.features, dim=0)
                 ).numpy()

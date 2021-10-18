@@ -32,7 +32,7 @@ class Miner(ProcgenGym3Env):
         use_generated_assets: bool = False,
         paint_vel_info: bool = False,
         distribution_mode: str = "hard",
-        use_normalized_features: bool = False,
+        normalize_features: bool = False,
         **kwargs,
     ) -> None:
         self._reward_weights = reward_weights
@@ -57,7 +57,7 @@ class Miner(ProcgenGym3Env):
 
         self.features: Optional[np.ndarray] = None
 
-        self.use_normalized_features = use_normalized_features
+        self.use_normalized_features = normalize_features
 
     def act(self, action: np.ndarray) -> None:
         super().act(action)
@@ -66,6 +66,9 @@ class Miner(ProcgenGym3Env):
         self.diamonds = np.array(
             [Miner.diamonds_remaining(state) for state in self.states], dtype=np.float32
         )
+        if self.use_normalized_features:
+            max_diamonds = DIAMOND_PERCENT * self.states[0].grid.size
+            self.diamonds /= max_diamonds
 
     def observe(self) -> Tuple[Any, Any, Any]:
         _, observations, self.firsts = super().observe()
@@ -160,9 +163,7 @@ class Miner(ProcgenGym3Env):
 
         if self.use_normalized_features:
             max_dist = float(self.states[0].grid.shape[0] * 2 - 1)
-            max_diamonds = DIAMOND_PERCENT * self.states[0].grid.size
             dists /= max_dist
-            self.diamonds /= max_diamonds
 
         features = np.array([pickup, exits, dangers, dists, self.diamonds], dtype=np.float32).T
         assert features.shape == (self.num, self.N_FEATURES)

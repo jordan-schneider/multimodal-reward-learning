@@ -386,7 +386,7 @@ def test_reward(seed: int, reward_weights: np.ndarray) -> None:
     seed=integers(0, 2 ** 31 - 1),
 )
 def test_normalized_features(seed: int, actions: List[int]) -> None:
-    env = Miner(reward_weights=np.zeros(5), num=1, rand_seed=seed, use_normalized_features=True)
+    env = Miner(reward_weights=np.zeros(5), num=1, rand_seed=seed, normalize_features=True)
     for action in actions:
         env.act(np.array([action]))
         features = env.make_features()
