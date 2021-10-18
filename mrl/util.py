@@ -1,3 +1,4 @@
+import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional, Sequence, Tuple, Union, cast
@@ -257,7 +258,12 @@ def np_gather(indir: Path, name: str, n: int) -> np.ndarray:
     while current_size < n and len(paths) > 0:
         path = paths.pop()
         array = np.load(path)
-        data.append(array)
+        data.append(array[np.linalg.norm(array, axis=1) > 0])
         current_size += len(array)
 
     return np.concatenate(data)[:n]
+
+
+def setup_logging(level: Literal["INFO", "DEBUG"]) -> None:
+    logging.basicConfig(level=level)
+    logging.getLogger("matplotlib").setLevel(logging.WARNING)

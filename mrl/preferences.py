@@ -13,7 +13,7 @@ from phasic_policy_gradient.ppg import PhasicValueModel
 from torch.distributions import Categorical
 
 from mrl.envs import Miner
-from mrl.util import procgen_rollout_dataset, procgen_rollout_features
+from mrl.util import procgen_rollout_dataset, procgen_rollout_features, setup_logging
 
 
 def noisy_pref(
@@ -57,7 +57,7 @@ def gen_state_preferences(
     replications: Optional[int] = None,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> None:
-    logging.basicConfig(level=verbosity)
+    setup_logging(level=verbosity)
     path = Path(path)
     if replications is not None:
         offset = 0 if (path / "0").exists() else 1
@@ -124,7 +124,9 @@ def gen_state_preferences(
     # possible, but the real world is not one of them, and so we might be doomed to using policy
     # based distributions.
 
-    for batch_iter in range(n_batches):
+    diff_count = 0
+    batch_iter = 0
+    while diff_count < timesteps:
         features_a = procgen_rollout_features(
             env=env,
             policy=policy_a,
@@ -152,13 +154,17 @@ def gen_state_preferences(
                     continue
 
                 diff *= opinion
-                diffs.append(diff)
             else:
                 _, diff = noisy_pref(features_a[i], features_b[i], reward, temperature, rng)
+            if np.linalg.norm(diff) > 0:
                 diffs.append(diff)
 
         logging.info(f"Saving {len(diffs)} state comparisons in batch {batch_iter}")
         np.save(outdir / f"{outname}.{batch_iter}.npy", np.stack(diffs))
+
+        diff_count += len(diffs)
+        batch_iter += 1
+
         del features_a
         del features_b
         gc.collect()
@@ -175,7 +181,7 @@ def gen_traj_preferences(
     replications: Optional[int] = None,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> None:
-    logging.basicConfig(level=verbosity)
+    setup_logging(level=verbosity)
     path = Path(path)
     if replications is not None:
         if policy_path is not None:
@@ -260,7 +266,8 @@ def gen_traj_preferences(
                     rng,
                 )
 
-            diffs.append(feature_diff)
+            if np.linalg.norm(feature_diff) > 0:
+                diffs.append(feature_diff)
 
         np.save(outdir / f"{outname}.{i}.npy", np.stack(diffs))
         current_trajs += len(diffs)
