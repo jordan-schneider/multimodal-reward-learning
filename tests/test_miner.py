@@ -108,6 +108,18 @@ def test_diamonds_remaining_decreasing(actions: List[int], seed: int):
 @given(
     seed=integers(0, 2 ** 31 - 1),
 )
+def test_start_diamonds_remaining(seed: int):
+    frac = 12 / 400.0
+    env = Miner(reward_weights=np.zeros(Miner.N_FEATURES), num=1, rand_seed=seed)
+    state = env.make_latent_states()[0]
+    diamonds_remaining = env.diamonds_remaining(state)
+    assert diamonds_remaining == int(frac * state.grid.size)
+
+
+@settings(deadline=3000)
+@given(
+    seed=integers(0, 2 ** 31 - 1),
+)
 def test_dist_to_diamond(seed: int):
     env = Miner(reward_weights=np.zeros(Miner.N_FEATURES), num=1, rand_seed=seed)
     start_state = env.make_latent_states()[0]
@@ -366,3 +378,17 @@ def test_reward(seed: int, reward_weights: np.ndarray) -> None:
 
     rewards, _, _ = env.observe()
     assert np.array_equal(rewards, features @ reward_weights)
+
+
+@settings(deadline=3000)
+@given(
+    actions=lists(integers(min_value=0, max_value=15), min_size=1, max_size=10),
+    seed=integers(0, 2 ** 31 - 1),
+)
+def test_normalized_features(seed: int, actions: List[int]) -> None:
+    env = Miner(reward_weights=np.zeros(5), num=1, rand_seed=seed, use_normalized_features=True)
+    for action in actions:
+        env.act(np.array([action]))
+        features = env.make_features()
+        assert np.all(features >= 0)
+        assert np.all(features <= 1)
