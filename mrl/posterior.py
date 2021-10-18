@@ -171,7 +171,7 @@ def one_modality_analysis(
     setup_logging(level=verbosity)
     in_path, outdir = Path(in_path), Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    diffs = np.load(in_path)[:max_preferences]
+    diffs = np_gather(in_path.parent, in_path.name, max_preferences)
     true_reward = np.load(reward_path) if reward_path is not None else None
 
     analysis(
