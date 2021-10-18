@@ -7,8 +7,10 @@ import fire  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
 import numpy as np
 from scipy.spatial.distance import cosine  # type: ignore
-from scipy.special import logsumexp  # type: ignore
 
+from mrl.reward_model.boltzmann import boltzmann_likelihood
+from mrl.reward_model.hinge import hinge_likelihood
+from mrl.reward_model.logspace import cum_likelihoods
 from mrl.util import np_gather, setup_logging
 
 
@@ -33,109 +35,11 @@ def dedup(normals: np.ndarray, precision: float = 0.001) -> Tuple[np.ndarray, np
     return np.array(out).reshape(-1, normals.shape[1]), np.array(counts)
 
 
-def log_normalize_logs(x: np.ndarray) -> np.ndarray:
-    logging.debug(f"min={np.min(x)}, max={np.max(x)}, ratio={np.max(x) - np.min(x)}")
-    denom = logsumexp(x, axis=0)
-    logging.debug(f"min denom={np.min(denom)}, max={np.max(denom)}")
-    out = x - denom
-    if np.any(np.isneginf(out)):
-        logging.warning("Some counted halfplanes have -inf log likelihood")
-    if np.any(np.exp(out) == 0):
-        logging.warning("Some counted halfplanes have 0 likelihood")
-    return out
-
-
-def reward_prop_likelihood_by_diff(
-    reward: np.ndarray,
-    diffs: np.ndarray,
-    temperature: float = 1.0,
-    approximate: bool = False,
-) -> np.ndarray:
-    """Return the proportional likelihood of a reward given a set of reward feature differences.
-
-    Args:
-        reward (np.ndarray): Reward or batch of rewards to determine likelihood of.
-        diffs (np.ndarray): Differences between features of preferred and dispreffered objects.
-        weights (np.ndarray, optional): How many copies of each difference vector are present. Defaults to None, in which case all counts are assumed to be 1.
-
-    Returns:
-        np.ndarray: (Batch of) proportional likelihoods of each reward under each halfplane
-    """
-    if len(reward.shape) == 1:
-        reward = reward.reshape(1, -1)
-    assert len(diffs) > 0
-
-    # This function assumes that the reward posterior is defined on the unit sphere by restricting
-    # the given likelihood to exactly the sphere, rather than taking a quotient space (by projecting
-    # the likelihood for all rewards on every ray to their unit length point. If I ever want to do
-    # that instead, the likelihood is |w| * log(1/2 * (1 + exp(w @ diffs))) / (w @ diffs) in general
-    # and (log(1/2) + log1p(exp(w @ diffs))) / (w @ diffs) in our case, as |w|=1.
-    strengths = temperature * (reward @ diffs.T).T
-    if approximate:
-        log_likelihoods = strengths
-    else:
-        exp_strengths = np.exp(-strengths)
-
-        infs = np.isinf(exp_strengths)
-        not_infs = np.logical_not(infs)
-
-        log_likelihoods = np.empty((len(diffs), len(reward)))
-
-        # If np.exp(...) is inf, then 1 + np.exp(...) is approximately np.exp(...)
-        # so log1p(exp(-reward @ diffs))) \approx rewards @ diffs
-        log_likelihoods[infs] = strengths[infs]
-        log_likelihoods[not_infs] = -np.log1p(exp_strengths[not_infs])
-
-    log_likelihoods = log_likelihoods.T
-    assert log_likelihoods.shape == (len(reward), len(diffs))
-
-    if np.any(np.isneginf(log_likelihoods)):
-        logging.warning("Some counted halfplanes have -inf log likelihood")
-    if np.any(np.exp(log_likelihoods) == 0):
-        logging.warning("Some counted halfplanes have 0 likelihood")
-
-    return log_likelihoods
-
-
 def cover_sphere(n_samples: int, ndims: int, rng: np.random.Generator) -> np.ndarray:
     samples = rng.multivariate_normal(mean=np.zeros(ndims), cov=np.eye(ndims), size=(n_samples))
     samples = (samples.T / np.linalg.norm(samples, axis=1)).T
     assert np.allclose(np.linalg.norm(samples, axis=1), 1.0)
     return samples
-
-
-def cum_reward_likelihoods(
-    reward_samples: np.ndarray,
-    diffs: np.ndarray,
-    temperature: float = 1.0,
-    approximate: bool = False,
-):
-    log_likelihoods = reward_prop_likelihood_by_diff(
-        reward_samples, diffs, temperature, approximate
-    )
-    assert np.all(np.isfinite(log_likelihoods))
-
-    log_total_likelihoods = np.cumsum(log_likelihoods, axis=1)
-    assert log_total_likelihoods.shape == (len(reward_samples), len(diffs))
-    assert np.all(np.isfinite(log_total_likelihoods))
-
-    if np.any(np.isneginf(log_total_likelihoods)):
-        logging.warning("Some rewards have -inf log total likelihood")
-    if np.any(np.exp(log_total_likelihoods) == 0):
-        logging.warning("Some rewards have 0 total unnormalized likelihood")
-
-    log_total_likelihoods = log_normalize_logs(log_total_likelihoods)
-    assert np.all(np.isfinite(log_total_likelihoods))
-
-    log_total_likelihoods = log_shift(log_total_likelihoods)
-
-    total_likelihoods = np.exp(log_total_likelihoods)
-    assert total_likelihoods.shape == (len(reward_samples), len(diffs))
-
-    if np.any(total_likelihoods == 0):
-        logging.warning("Some rewards have 0 total likelihood")
-    assert np.all(np.isfinite(total_likelihoods))
-    return total_likelihoods
 
 
 def mean_l2_dispersions(
@@ -188,29 +92,6 @@ def find_means(rewards: np.ndarray, likelihoods: np.ndarray) -> np.ndarray:
     return mean_rewards
 
 
-def log_shift(log_total_likelihoods: np.ndarray) -> np.ndarray:
-    smallest_meaningful_log = np.log(np.finfo(np.float64).tiny)
-    largest_meainingful_log = np.log(np.finfo(np.float64).max)
-    max_log_shift = max(0, largest_meainingful_log - np.max(log_total_likelihoods) - 100)
-    ideal_log_shift = smallest_meaningful_log - np.min(log_total_likelihoods) + 1
-    log_shift = max(0, min(ideal_log_shift, max_log_shift))
-    logging.info(f"ideal_log_shift={ideal_log_shift}, max_log_shift={max_log_shift}")
-    log_total_likelihoods += log_shift
-
-    if __debug__:
-        total_likelihoods = np.sum(np.exp(log_total_likelihoods), axis=0)
-        good_indices = np.logical_or(
-            np.isclose(total_likelihoods, np.exp(log_shift)), np.isclose(total_likelihoods, 0)
-        )
-        bad_indices = np.logical_not(good_indices)
-        if np.any(bad_indices):
-            logging.warning(
-                f"Some likelihoods don't add up to {np.exp(log_shift)} or 0:{total_likelihoods[bad_indices]}"
-            )
-
-    return log_total_likelihoods
-
-
 def analysis(
     outdir: Path,
     diffs: np.ndarray,
@@ -219,6 +100,7 @@ def analysis(
     temperature: float,
     approximate: bool,
     norm_diffs: bool,
+    use_hinge: bool,
     true_reward: Optional[np.ndarray] = None,
 ) -> None:
     # TODO: Try normalizing diffs
@@ -226,17 +108,17 @@ def analysis(
         diffs = (diffs.T / np.linalg.norm(diffs, axis=1)).T
     ndims = diffs.shape[1]
 
+    reward_likelihood = boltzmann_likelihood if not use_hinge else hinge_likelihood
+
     samples = cover_sphere(n_samples=n_reward_samples, ndims=ndims, rng=rng)
 
     if true_reward is not None:
         samples = np.concatenate((samples, true_reward.reshape(1, -1)))
 
-    likelihoods = cum_reward_likelihoods(
-        reward_samples=samples,
-        diffs=diffs,
-        temperature=temperature,
-        approximate=approximate,
+    per_diff_likelihoods = reward_likelihood(
+        reward=samples, diffs=diffs, temperature=temperature, approximate=approximate
     )
+    likelihoods = cum_likelihoods(per_diff_likelihoods)
 
     plot_counts(outdir, counts=np.sum(likelihoods > 0.0, axis=0))
 
@@ -282,6 +164,7 @@ def one_modality_analysis(
     temperature: float = 1.0,
     approximate: bool = False,
     norm_diffs: bool = False,
+    use_hinge: bool = False,
     reward_path: Optional[Path] = None,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> None:
@@ -299,6 +182,7 @@ def one_modality_analysis(
         temperature=temperature,
         approximate=approximate,
         norm_diffs=norm_diffs,
+        use_hinge=use_hinge,
         true_reward=true_reward,
     )
 
@@ -387,6 +271,7 @@ def compare_modalities(
     n_samples: int = 100_000,
     max_comparisons: int = 1000,
     norm_diffs: bool = False,
+    use_hinge: bool = False,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> None:
     setup_logging(level=verbosity)
@@ -402,6 +287,8 @@ def compare_modalities(
 
     if reward_path is not None:
         true_reward = np.load(reward_path)
+
+    reward_likelihood = boltzmann_likelihood if not use_hinge else hinge_likelihood
 
     rng = np.random.default_rng()
 
@@ -423,7 +310,9 @@ def compare_modalities(
     if reward_path is not None:
         reward_samples = np.concatenate((reward_samples, [true_reward]), axis=0)
 
-    likelihoods = {key: cum_reward_likelihoods(reward_samples, diff) for key, diff in diffs.items()}
+    likelihoods = {
+        key: cum_likelihoods(reward_likelihood(reward_samples, diff)) for key, diff in diffs.items()
+    }
     mean_rewards = {
         key: find_means(rewards=reward_samples, likelihoods=likelihood)
         for key, likelihood in likelihoods.items()
@@ -443,7 +332,7 @@ def compare_modalities(
     dispersions_mean = {
         key: mean_l2_dispersions(
             reward_samples,
-            likelihoods=cum_reward_likelihoods(reward_samples, diff),
+            likelihoods=cum_likelihoods(reward_likelihood(reward_samples, diff)),
             target_rewards=mean_rewards[key],
         )
         for key, diff in diffs.items()
@@ -501,6 +390,7 @@ def plot_joint_data(
     temperature: float = 1.0,
     approximate: bool = False,
     norm_diffs: bool = False,
+    use_hinge: bool = False,
     verbosity: Literal["DEBUG", "INFO"] = "INFO",
 ) -> None:
     outdir = Path(outdir)
@@ -536,6 +426,7 @@ def plot_joint_data(
         temperature=temperature,
         approximate=approximate,
         norm_diffs=norm_diffs,
+        use_hinge=use_hinge,
         true_reward=true_reward,
     )
 
