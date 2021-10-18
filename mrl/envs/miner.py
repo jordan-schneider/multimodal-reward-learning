@@ -4,6 +4,7 @@ import numpy as np
 from procgen import ProcgenGym3Env  # type: ignore
 
 __DIST_ARRAY = np.array([[np.abs(x) + np.abs(y) for x in range(-34, 35)] for y in range(-34, 35)])
+DIAMOND_PERCENT = 12 / 400.0  # from miner.cpp
 
 
 def get_dist_array(agent_x: int, agent_y: int, width: int, height: int) -> np.ndarray:
@@ -31,6 +32,7 @@ class Miner(ProcgenGym3Env):
         use_generated_assets: bool = False,
         paint_vel_info: bool = False,
         distribution_mode: str = "hard",
+        use_normalized_features: bool = False,
         **kwargs,
     ) -> None:
         self._reward_weights = reward_weights
@@ -47,17 +49,23 @@ class Miner(ProcgenGym3Env):
             **kwargs,
         )
         self.states = self.make_latent_states()
-        self.last_diamonds = [-1] * num
-        self.diamonds = [Miner.diamonds_remaining(state) for state in self.states]
+        self.last_diamonds = np.ones(num) * -1
+        self.diamonds = np.array(
+            [Miner.diamonds_remaining(state) for state in self.states], dtype=np.float32
+        )
         self.firsts = [True] * num
 
         self.features: Optional[np.ndarray] = None
+
+        self.use_normalized_features = use_normalized_features
 
     def act(self, action: np.ndarray) -> None:
         super().act(action)
         self.last_diamonds = self.diamonds
         self.states = self.make_latent_states()
-        self.diamonds = [Miner.diamonds_remaining(state) for state in self.states]
+        self.diamonds = np.array(
+            [Miner.diamonds_remaining(state) for state in self.states], dtype=np.float32
+        )
 
     def observe(self) -> Tuple[Any, Any, Any]:
         _, observations, self.firsts = super().observe()
@@ -121,27 +129,40 @@ class Miner(ProcgenGym3Env):
         )
 
     def make_features(self) -> np.ndarray:
-        dangers = [self.in_danger(state) for state in self.states]
-        dists = [
-            Miner.dist_to_diamond(state, diamonds_remaining)
-            for state, diamonds_remaining in zip(self.states, self.diamonds)
-        ]
-        pickup = [
-            Miner.got_diamond(n_diamonds, last_n_diamonds, first)
-            for n_diamonds, last_n_diamonds, first in zip(
-                self.diamonds, self.last_diamonds, self.firsts
-            )
-        ]
-        exits = [
-            Miner.reached_exit(state, n_diamonds)
-            for state, n_diamonds in zip(self.states, self.diamonds)
-        ]
+        dangers = np.array([self.in_danger(state) for state in self.states])
+        dists = np.array(
+            [
+                Miner.dist_to_diamond(state, diamonds_remaining)
+                for state, diamonds_remaining in zip(self.states, self.diamonds)
+            ],
+            dtype=np.float32,
+        )
+        pickup = np.array(
+            [
+                Miner.got_diamond(n_diamonds, last_n_diamonds, first)
+                for n_diamonds, last_n_diamonds, first in zip(
+                    self.diamonds, self.last_diamonds, self.firsts
+                )
+            ]
+        )
+        exits = np.array(
+            [
+                Miner.reached_exit(state, n_diamonds)
+                for state, n_diamonds in zip(self.states, self.diamonds)
+            ]
+        )
 
         assert len(pickup) == self.num
         assert len(exits) == self.num
         assert len(dangers) == self.num
         assert len(dists) == self.num
         assert len(self.diamonds) == self.num
+
+        if self.use_normalized_features:
+            max_dist = float(self.states[0].grid.shape[0] * 2 - 1)
+            max_diamonds = DIAMOND_PERCENT * self.states[0].grid.size
+            dists /= max_dist
+            self.diamonds /= max_diamonds
 
         features = np.array([pickup, exits, dangers, dists, self.diamonds], dtype=np.float32).T
         assert features.shape == (self.num, self.N_FEATURES)
