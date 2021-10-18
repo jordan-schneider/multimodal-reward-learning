@@ -9,7 +9,7 @@ import numpy as np
 from scipy.spatial.distance import cosine  # type: ignore
 from scipy.special import logsumexp  # type: ignore
 
-from mrl.util import np_gather
+from mrl.util import np_gather, setup_logging
 
 
 def dedup(normals: np.ndarray, precision: float = 0.001) -> Tuple[np.ndarray, np.ndarray]:
@@ -113,9 +113,11 @@ def cum_reward_likelihoods(
     log_likelihoods = reward_prop_likelihood_by_diff(
         reward_samples, diffs, temperature, approximate
     )
+    assert np.all(np.isfinite(log_likelihoods))
 
     log_total_likelihoods = np.cumsum(log_likelihoods, axis=1)
     assert log_total_likelihoods.shape == (len(reward_samples), len(diffs))
+    assert np.all(np.isfinite(log_total_likelihoods))
 
     if np.any(np.isneginf(log_total_likelihoods)):
         logging.warning("Some rewards have -inf log total likelihood")
@@ -123,6 +125,7 @@ def cum_reward_likelihoods(
         logging.warning("Some rewards have 0 total unnormalized likelihood")
 
     log_total_likelihoods = log_normalize_logs(log_total_likelihoods)
+    assert np.all(np.isfinite(log_total_likelihoods))
 
     log_total_likelihoods = log_shift(log_total_likelihoods)
 
@@ -188,8 +191,7 @@ def find_means(rewards: np.ndarray, likelihoods: np.ndarray) -> np.ndarray:
 def log_shift(log_total_likelihoods: np.ndarray) -> np.ndarray:
     smallest_meaningful_log = np.log(np.finfo(np.float64).tiny)
     largest_meainingful_log = np.log(np.finfo(np.float64).max)
-    max_log_shift = largest_meainingful_log - np.max(log_total_likelihoods) - 100
-    assert max_log_shift > 0
+    max_log_shift = max(0, largest_meainingful_log - np.max(log_total_likelihoods) - 100)
     ideal_log_shift = smallest_meaningful_log - np.min(log_total_likelihoods) + 1
     log_shift = max(0, min(ideal_log_shift, max_log_shift))
     logging.info(f"ideal_log_shift={ideal_log_shift}, max_log_shift={max_log_shift}")
@@ -283,7 +285,7 @@ def one_modality_analysis(
     reward_path: Optional[Path] = None,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> None:
-    logging.basicConfig(level=verbosity)
+    setup_logging(level=verbosity)
     in_path, outdir = Path(in_path), Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     diffs = np.load(in_path)[:max_preferences]
@@ -385,7 +387,9 @@ def compare_modalities(
     n_samples: int = 100_000,
     max_comparisons: int = 1000,
     norm_diffs: bool = False,
+    verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> None:
+    setup_logging(level=verbosity)
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     paths = {}
@@ -502,7 +506,7 @@ def plot_joint_data(
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng()
-    logging.basicConfig(level=verbosity)
+    setup_logging(level=verbosity)
 
     outname = ""
     paths = []

@@ -16,7 +16,15 @@ from tqdm import trange  # type: ignore
 
 from mrl.offline_buffer import RlDataset
 from mrl.online_batcher import BatchGenerator
-from mrl.util import EnvName, find_best_gpu, find_policy_path, make_env, procgen_rollout, reinit
+from mrl.util import (
+    EnvName,
+    find_best_gpu,
+    find_policy_path,
+    make_env,
+    procgen_rollout,
+    reinit,
+    setup_logging,
+)
 from mrl.writer import SequentialWriter
 
 
@@ -276,7 +284,7 @@ def learn_q(
             trunc_horizon is not None
         ), f"Must specify a truncation horizon to use truncated returns."
 
-    logging.basicConfig(level=verbosity)
+    setup_logging(level=verbosity)
 
     indir = Path(indir)
     outdir = Path(outdir)
@@ -466,7 +474,7 @@ def refine_v(
             trunc_horizon is not None
         ), f"Must specify a truncation horizon to use truncated returns."
 
-    logging.basicConfig(level=verbosity)
+    setup_logging(level=verbosity)
 
     indir = Path(indir)
     outdir = Path(outdir)
