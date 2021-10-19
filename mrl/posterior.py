@@ -14,27 +14,6 @@ from mrl.reward_model.logspace import cum_likelihoods
 from mrl.util import np_gather, setup_logging
 
 
-def dedup(normals: np.ndarray, precision: float = 0.001) -> Tuple[np.ndarray, np.ndarray]:
-    """Remove halfspaces that have small cosine similarity to another."""
-    out: List[np.ndarray] = []
-    counts: List[int] = []
-    # Remove exact duplicates
-    _, indices = np.unique(normals, return_index=True, axis=0)
-
-    for normal in normals[indices]:
-        unique = True
-        for j, accepted_normal in enumerate(out):
-            if cosine(normal, accepted_normal) < precision:
-                counts[j] += 1
-                unique = False
-                break
-        if unique:
-            out.append(normal)
-            counts.append(1)
-
-    return np.array(out).reshape(-1, normals.shape[1]), np.array(counts)
-
-
 def cover_sphere(n_samples: int, ndims: int, rng: np.random.Generator) -> np.ndarray:
     samples = rng.multivariate_normal(mean=np.zeros(ndims), cov=np.eye(ndims), size=(n_samples))
     samples = (samples.T / np.linalg.norm(samples, axis=1)).T
