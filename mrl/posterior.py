@@ -16,9 +16,24 @@ from mrl.util import np_gather, setup_logging
 
 def cover_sphere(n_samples: int, ndims: int, rng: np.random.Generator) -> np.ndarray:
     samples = rng.multivariate_normal(mean=np.zeros(ndims), cov=np.eye(ndims), size=(n_samples))
-    samples = (samples.T / np.linalg.norm(samples, axis=1)).T
-    assert np.allclose(np.linalg.norm(samples, axis=1), 1.0)
+    samples = normalize(samples)
     return samples
+
+
+def infogain_sort(rewards: np.ndarray, diffs: np.ndarray) -> np.ndarray:
+    """Sort difference vector greedily by expected information gain.
+
+    Args:
+        rewards (np.ndarray): Reward samples used to evaluate infogain.
+        diffs (np.ndarray): Reward feature difference vectors.
+
+    Returns:
+        np.ndarray: A copy of diffs in the order of max expected infogain
+    """
+    current_diffs = [diffs[0]]
+    for i in range(1, len(diffs)):
+        likelihoods = None
+    # TODO: Finish
 
 
 def mean_l2_dispersions(
@@ -32,9 +47,9 @@ def mean_l2_dispersions(
     logging.debug(
         f"reward samples shape={reward_samples.shape}, target rewards shape={target_rewards.shape}"
     )
-    dots = reward_samples @ target_rewards.T
-    dots[dots < -1.0] = -1.0
-    dots[dots > 1.0] = 1.0
+    assert np.allclose(np.linalg.norm(reward_samples, axis=1), 1)
+    assert np.allclose(np.linalg.norm(target_rewards, axis=1), 1)
+    dots = np.clip(reward_samples @ target_rewards.T, -1.0, 1.0)
 
     # TODO: Try entropy or exp entropy or something
 
@@ -71,6 +86,25 @@ def find_means(rewards: np.ndarray, likelihoods: np.ndarray) -> np.ndarray:
     return mean_rewards
 
 
+def normalize(x: np.ndarray) -> np.ndarray:
+    """Normalizes the vectors in an array on the 1th axis.
+
+    Args:
+        x (np.ndarray): 2D array of vectors.
+
+    Returns:
+        np.ndarray: 2D array x such that np.linalg.norm(x, axis=1) == 1
+    """
+    shape = x.shape
+    norms = np.linalg.norm(x, axis=1)
+    out = (x.T / norms).T
+    assert out.shape == shape, f"shape: expected={shape} actual={out.shape}"
+    assert np.allclose(
+        np.linalg.norm(out, axis=1), 1
+    ), f"norm: expected={1} actual={np.linalg.norm(out, axis=1)}"
+    return out
+
+
 def analysis(
     outdir: Path,
     diffs: np.ndarray,
@@ -84,7 +118,7 @@ def analysis(
 ) -> None:
     # TODO: Try normalizing diffs
     if norm_diffs:
-        diffs = (diffs.T / np.linalg.norm(diffs, axis=1)).T
+        diffs = normalize(diffs)
     ndims = diffs.shape[1]
 
     reward_likelihood = boltzmann_likelihood if not use_hinge else hinge_likelihood
@@ -117,7 +151,7 @@ def analysis(
         plot_dispersions(outdir, dispersions_gt, name="dispersion_gt")
 
     mean_rewards = find_means(rewards=samples, likelihoods=likelihoods)
-    proj_mean_rewards = (mean_rewards.T / np.linalg.norm(mean_rewards, axis=1)).T
+    proj_mean_rewards = normalize(mean_rewards)
 
     plot_rewards(mean_rewards, outdir, name="mean_reward")
     plot_rewards(proj_mean_rewards, outdir, name="proj_mean_reward")
@@ -281,7 +315,7 @@ def compare_modalities(
     rng.shuffle(diffs["joint"])
 
     if norm_diffs:
-        diffs = {key: (diff.T / np.linalg.norm(diff, axis=1)).T for key, diff in diffs.items()}
+        diffs = {key: normalize(diff) for key, diff in diffs.items()}
 
     ndims = list(diffs.values())[0].shape[1]  # type: ignore
     reward_samples = cover_sphere(n_samples, ndims, rng)
@@ -290,27 +324,28 @@ def compare_modalities(
         reward_samples = np.concatenate((reward_samples, [true_reward]), axis=0)
 
     likelihoods = {
-        key: cum_likelihoods(reward_likelihood(reward_samples, diff)) for key, diff in diffs.items()
+        key: cum_likelihoods(reward_likelihood(reward=reward_samples, diffs=diff))
+        for key, diff in diffs.items()
     }
     mean_rewards = {
-        key: find_means(rewards=reward_samples, likelihoods=likelihood)
+        key: normalize(find_means(rewards=reward_samples, likelihoods=likelihood))
         for key, likelihood in likelihoods.items()
     }
 
-    for dim in range(ndims):
-        for name, mean in mean_rewards.items():
-            plt.plot(mean[:, dim], label=name)
-        plt.ylim(-1, 1)
-        plt.xlabel("Preferences")
-        plt.ylabel(f"{dim}-th dimension of reward")
-        plt.title(f"{dim}-th dimension of reward")
-        plt.legend()
-        plt.savefig(outdir / f"{dim}.mean_reward.png")
-        plt.close()
+    # for dim in range(ndims):
+    #     for name, mean in mean_rewards.items():
+    #         plt.plot(mean[:, dim], label=name)
+    #     plt.ylim(-1, 1)
+    #     plt.xlabel("Preferences")
+    #     plt.ylabel(f"{dim}-th dimension of reward")
+    #     plt.title(f"{dim}-th dimension of reward")
+    #     plt.legend()
+    #     plt.savefig(outdir / f"{dim}.mean_reward.png")
+    #     plt.close()
 
     dispersions_mean = {
         key: mean_l2_dispersions(
-            reward_samples,
+            reward_samples=reward_samples,
             likelihoods=cum_likelihoods(reward_likelihood(reward_samples, diff)),
             target_rewards=mean_rewards[key],
         )
@@ -327,35 +362,37 @@ def compare_modalities(
     plt.savefig(outdir / "dispersion_mean.png")
     plt.close()
 
-    if reward_path is not None:
-        gt_likelihood = {key: l[-1] for key, l in likelihoods.items()}
-        for name, likelihood in gt_likelihood.items():
-            plt.plot(likelihood, label=name)
-        plt.title("Likelihood of ground truth reward")
-        plt.xlabel("Human preferences")
-        plt.ylabel("Posterior likelihood")
-        plt.legend()
-        plt.savefig(outdir / "gt_likelihood.png")
-        plt.close()
+    # if reward_path is not None:
+    #     true_reward_index = np.where(np.all(reward_samples == true_reward, axis=1))[0][0]
+    #     assert true_reward_index == len(list(likelihoods.values())[0]) - 1
+    #     gt_likelihood = {key: l[-1] for key, l in likelihoods.items()}
+    #     for name, likelihood in gt_likelihood.items():
+    #         plt.plot(likelihood, label=name)
+    #     plt.title("Likelihood of ground truth reward")
+    #     plt.xlabel("Human preferences")
+    #     plt.ylabel("Posterior likelihood")
+    #     plt.legend()
+    #     plt.savefig(outdir / "gt_likelihood.png")
+    #     plt.close()
 
-        true_reward_copies = np.tile(true_reward, (max_comparisons, 1))
-        dispersions_gt = {
-            key: mean_l2_dispersions(
-                reward_samples=reward_samples,
-                likelihoods=l,
-                target_rewards=true_reward_copies,
-            )
-            for key, l in likelihoods.items()
-        }
+    # true_reward_copies = np.tile(true_reward, (max_comparisons, 1))
+    # dispersions_gt = {
+    #     key: mean_l2_dispersions(
+    #         reward_samples=reward_samples,
+    #         likelihoods=l,
+    #         target_rewards=true_reward_copies,
+    #     )
+    #     for key, l in likelihoods.items()
+    # }
 
-        for name, dispersion in dispersions_gt.items():
-            plt.plot(dispersion, label=name)
-        plt.xlabel("Human preferences")
-        plt.ylabel("Mean dispersion")
-        plt.title("Concentration of posterior for different modalities")
-        plt.legend()
-        plt.savefig(outdir / "dispersion_gt.png")
-        plt.close()
+    # for name, dispersion in dispersions_gt.items():
+    #     plt.plot(dispersion, label=name)
+    # plt.xlabel("Human preferences")
+    # plt.ylabel("Mean dispersion")
+    # plt.title("Concentration of posterior for different modalities")
+    # plt.legend()
+    # plt.savefig(outdir / "dispersion_gt.png")
+    # plt.close()
 
 
 def plot_joint_data(

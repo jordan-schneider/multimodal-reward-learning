@@ -50,8 +50,8 @@ def boltzmann_likelihood(
     assert log_likelihoods.shape == (len(reward), len(diffs))
 
     if np.any(np.isneginf(log_likelihoods)):
-        logging.warning("Some counted halfplanes have -inf log likelihood")
+        logging.warning("Some reward-halfplane pairs have -inf log likelihood")
     if np.any(np.exp(log_likelihoods) == 0):
-        logging.warning("Some counted halfplanes have 0 likelihood")
+        logging.warning("Some reward-halfplane pairs have 0 likelihood")
 
     return log_likelihoods
