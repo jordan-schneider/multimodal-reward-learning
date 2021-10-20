@@ -71,10 +71,18 @@ def cum_likelihoods(log_likelihoods: np.ndarray):
     if np.any(np.exp(log_total_likelihoods) == 0):
         logging.warning("Some cumulative terms have 0 total unnormalized likelihood")
 
-    log_total_likelihoods = log_normalize_logs(log_total_likelihoods)
-    assert np.all(np.isfinite(log_total_likelihoods))
+    # tmp = log_total_likelihoods
 
-    log_total_likelihoods = log_shift(log_total_likelihoods)
+    # log_total_likelihoods = log_normalize_logs(log_total_likelihoods)
+    # assert np.all(np.isfinite(log_total_likelihoods))
+
+    # log_total_likelihoods = log_shift(log_total_likelihoods)
+
+    # for i in range(log_total_likelihoods.shape[1]):
+    #     total_shift = tmp[:, i] - log_total_likelihoods[:, i]
+    #     assert np.allclose(
+    #         total_shift, total_shift[0]
+    #     ), f"Shift at time {i} not constant. total_shift={total_shift}"
 
     total_likelihoods = np.exp(log_total_likelihoods)
     assert total_likelihoods.shape == shape

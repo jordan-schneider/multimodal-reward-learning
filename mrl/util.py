@@ -253,6 +253,8 @@ def find_best_gpu() -> torch.device:
 
 def np_gather(indir: Path, name: str, n: int) -> np.ndarray:
     paths = list(indir.glob(f"{name}.[0-9]*.npy"))
+    if len(paths) == 0:
+        raise FileNotFoundError(f"No {name} files found in {indir}")
     data = []
     current_size = 0
     while current_size < n and len(paths) > 0:
