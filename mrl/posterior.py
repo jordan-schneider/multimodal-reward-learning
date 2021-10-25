@@ -1,16 +1,19 @@
 import logging
 import pickle as pkl
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple
+from typing import Dict, Literal, Optional, Union
 
 import fire  # type: ignore
+import joypy  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
 import numpy as np
-from scipy.spatial.distance import cosine  # type: ignore
+import pandas as pd  # type: ignore
+from tqdm import trange  # type: ignore
 
 from mrl.reward_model.boltzmann import boltzmann_likelihood
 from mrl.reward_model.hinge import hinge_likelihood
 from mrl.reward_model.logspace import cum_likelihoods
+from mrl.sphere import find_centroid
 from mrl.util import np_gather, setup_logging
 
 
@@ -33,6 +36,7 @@ def infogain_sort(rewards: np.ndarray, diffs: np.ndarray) -> np.ndarray:
     current_diffs = [diffs[0]]
     for i in range(1, len(diffs)):
         likelihoods = None
+    exit()
     # TODO: Finish
 
 
@@ -40,6 +44,7 @@ def mean_l2_dispersions(
     reward_samples: np.ndarray,
     likelihoods: np.ndarray,
     target_rewards: np.ndarray,
+    expect_monotonic: bool = False,
 ) -> np.ndarray:
     # Arc length is angle times radius, and the radius is 1, so the arc length between the mean
     # reward and each sample is just the angle between them, which you can get using the standard
@@ -63,19 +68,78 @@ def mean_l2_dispersions(
     ), f"dists shape={dists.shape}, expected {(len(reward_samples), len(target_rewards))}"
     assert not np.any(np.all(dists == 0.0, axis=0))
 
-    weighted_dists = np.zeros((len(target_rewards),))
-    for i in range(len(target_rewards)):
-        # TODO: There might be a less terrible way to do this, but np.average can't handle it
-        weighted_dists[i] = np.average(dists[:, i], weights=likelihoods[:, i], axis=0)
+    weighted_dists = np.stack(
+        [np.average(dists[:, i], weights=likelihoods[:, i], axis=0) for i in range(dists.shape[1])]
+    )
+
+    if expect_monotonic and __debug__:
+        for t in range(len(weighted_dists) - 1):
+            if weighted_dists[t] < weighted_dists[t + 1]:
+                # This should never happen. Let's figure out why
+
+                d_1 = dists[:, t]
+                d_2 = dists[:, t + 1]
+
+                l_1 = likelihoods[:, t]
+                l_2 = likelihoods[:, t + 1]
+
+                denominator_1 = np.sum(l_1)
+                denominator_2 = np.sum(l_2)
+
+                assert (
+                    denominator_2 - denominator_1 <= 1e-8
+                ), f"Total likelihood increased between t={t} and {t+1} from {denominator_1} to {denominator_2}"
+
+                # What rewards are most contributing to the distances?
+                contributions_2 = d_2 * l_2 / denominator_2
+                assert np.allclose(np.sum(contributions_2), weighted_dists[t + 1])
+                big_indices_2 = np.argsort(contributions_2)[::-1][:10]
+                big_rewards_2 = reward_samples[big_indices_2]
+                big_dists_2 = d_2[big_indices_2]
+                big_likelihoods_2 = l_2[big_indices_2]
+                big_contributions_2 = contributions_2[big_indices_2]
+
+                logging.info(f"{np.sum(l_2 == 1)} likelihoods are 1.")
+
+                logging.warning(
+                    f"Average dispersion went up from {weighted_dists[t]} to {weighted_dists[t+1]} on timestep={t}.\nThe largest terms are rewards=\n{big_rewards_2}\ntarget={target_rewards[t+1]}\ndists=\n{big_dists_2}\nlikelihoods=\n{big_likelihoods_2}\ncontributions=\n{big_contributions_2}\ndenom={denominator_2}"
+                )
+
+                # What rewards's contributions changed the most from the last timestep
+                contributions_1 = d_1 * l_1 / denominator_1
+                assert np.allclose(np.sum(contributions_1), weighted_dists[t])
+                diffs = contributions_2 - contributions_1
+                assert np.allclose(np.sum(diffs), np.sum(contributions_2) - np.sum(contributions_1))
+                big_diff_indices = np.argsort(diffs)[::-1][:10]
+                big_diff_rewards = reward_samples[big_diff_indices]
+                big_diff_dists = d_2[big_diff_indices] - d_1[big_diff_indices]
+                big_diff_likelihoods = l_2[big_diff_indices] - l_1[big_diff_indices]
+                big_diffs = diffs[big_diff_indices]
+                logging.warning(
+                    f"The largest difference is due to rewards=\n{big_diff_rewards}\ndists=\n{big_diff_dists}\nlikelihoods=\n{big_diff_likelihoods}\ndenom={denominator_1 - denominator_2}\ncontributions=\n{big_diffs},"
+                )
 
     return weighted_dists
+
+
+def entropy(likelihoods: np.ndarray) -> np.ndarray:
+    """Compute the entropy of a set of likelihoods.
+
+    Args:
+        likelihoods (np.ndarray): A set of likelihoods.
+
+    Returns:
+        np.ndarray: The entropy of each likelihood.
+    """
+    l = np.ma.masked_equal(likelihoods, 0.0)
+    return -np.sum(l * np.log(l), axis=0)
 
 
 def find_means(rewards: np.ndarray, likelihoods: np.ndarray) -> np.ndarray:
     mean_rewards = np.stack(
         [
-            np.average(rewards, weights=likelihoods[:, i], axis=0)
-            for i in range(likelihoods.shape[1])
+            np.average(rewards, weights=likelihoods[:, t], axis=0)
+            for t in range(likelihoods.shape[1])
         ]
     )
     assert mean_rewards.shape == (
@@ -131,15 +195,15 @@ def analysis(
     per_diff_likelihoods = reward_likelihood(
         reward=samples, diffs=diffs, temperature=temperature, approximate=approximate
     )
-    likelihoods = cum_likelihoods(per_diff_likelihoods)
+    likelihoods = cum_likelihoods(per_diff_likelihoods, shift=True)
 
-    plot_counts(outdir, counts=np.sum(likelihoods > 0.0, axis=0))
+    plot_counts(counts=np.sum(likelihoods > 0.0, axis=0), outdir=outdir)
 
     map_rewards = samples[np.argmax(likelihoods, axis=0)]
-    plot_rewards(map_rewards, outdir, name="map_reward")
+    plot_rewards(map_rewards, outdir, outname="map_reward")
 
     if true_reward is not None:
-        plot_gt_likelihood(outdir, likelihoods)
+        plot_gt_likelihood(likelihoods, outdir)
 
         true_reward_copies = np.tile(true_reward, (len(diffs), 1))
         dispersions_gt = mean_l2_dispersions(
@@ -148,13 +212,13 @@ def analysis(
             target_rewards=true_reward_copies,
         )
         np.save(outdir / "dispersion_gt.npy", dispersions_gt)
-        plot_dispersions(outdir, dispersions_gt, name="dispersion_gt")
+        plot_dispersions(dispersions_gt, outdir, outname="dispersion_gt")
 
     mean_rewards = find_means(rewards=samples, likelihoods=likelihoods)
     proj_mean_rewards = normalize(mean_rewards)
 
-    plot_rewards(mean_rewards, outdir, name="mean_reward")
-    plot_rewards(proj_mean_rewards, outdir, name="proj_mean_reward")
+    plot_rewards(mean_rewards, outdir, outname="mean_reward")
+    plot_rewards(proj_mean_rewards, outdir, outname="proj_mean_reward")
 
     log_big_shifts(diffs, mean_rewards)
 
@@ -163,10 +227,11 @@ def analysis(
         reward_samples=samples,
         likelihoods=likelihoods,
         target_rewards=proj_mean_rewards,
+        expect_monotonic=True,
     )
 
     np.save(outdir / "dispersion_mean.npy", dispersions_mean)
-    plot_dispersions(outdir, dispersions_mean, name="dispersion_mean")
+    plot_dispersions(dispersions_mean, outdir, outname="dispersion_mean")
 
 
 def one_modality_analysis(
@@ -179,6 +244,7 @@ def one_modality_analysis(
     norm_diffs: bool = False,
     use_hinge: bool = False,
     reward_path: Optional[Path] = None,
+    seed: int = 0,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> None:
     setup_logging(level=verbosity)
@@ -191,13 +257,164 @@ def one_modality_analysis(
         outdir=outdir,
         diffs=diffs,
         n_reward_samples=n_samples,
-        rng=np.random.default_rng(),
+        rng=np.random.default_rng(seed=seed),
         temperature=temperature,
         approximate=approximate,
         norm_diffs=norm_diffs,
         use_hinge=use_hinge,
         true_reward=true_reward,
     )
+
+
+def compare_modalities(
+    outdir: Path,
+    traj_path: Optional[Path] = None,
+    state_path: Optional[Path] = None,
+    action_path: Optional[Path] = None,
+    reward_path: Optional[Path] = None,
+    n_samples: int = 100_000,
+    max_comparisons: int = 1000,
+    norm_diffs: bool = False,
+    use_hinge: bool = False,
+    use_shift: bool = False,
+    seed: int = 0,
+    verbosity: Literal["INFO", "DEBUG"] = "INFO",
+) -> None:
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    setup_logging(outdir=outdir, level=verbosity)
+
+    paths = {}
+    if traj_path is not None:
+        paths["traj"] = Path(traj_path)
+    if state_path is not None:
+        paths["state"] = Path(state_path)
+    if action_path is not None:
+        paths["action"] = Path(action_path)
+
+    if reward_path is not None:
+        true_reward = np.load(reward_path)
+
+    reward_likelihood = boltzmann_likelihood if not use_hinge else hinge_likelihood
+
+    rng = np.random.default_rng(seed=seed)
+
+    diffs = {
+        key: np_gather(in_path.parent, in_path.name, n=max_comparisons)
+        for key, in_path in paths.items()
+    }
+    diffs["joint"] = np.concatenate(
+        [diff[: max_comparisons // len(paths)] for diff in diffs.values()]
+    )
+    rng.shuffle(diffs["joint"])
+
+    if reward_path is not None:
+        for d in diffs.values():
+            assert np.all(d @ true_reward > 0)
+
+    # TODO: Remove after debugging
+    del diffs["state"]
+    del diffs["traj"]
+
+    if norm_diffs:
+        diffs = {key: normalize(diff) for key, diff in diffs.items()}
+
+    ndims = list(diffs.values())[0].shape[1]  # type: ignore
+    reward_samples = cover_sphere(n_samples, ndims, rng)
+
+    if reward_path is not None:
+        reward_samples = np.concatenate((reward_samples, [true_reward]), axis=0)
+
+    np.save(outdir / "reward_samples.npy", reward_samples)
+
+    log_likelihoods = {
+        key: reward_likelihood(reward=reward_samples, diffs=diff) for key, diff in diffs.items()
+    }
+    for logs in log_likelihoods.values():
+        assert np.all(logs <= 0)
+        if reward_path is not None and use_hinge:
+            assert np.any(logs == 0)
+    pkl.dump(log_likelihoods, open(outdir / "log_likelihoods.pkl", "wb"))
+
+    likelihoods = {
+        key: cum_likelihoods(logs, shift=use_shift) for key, logs in log_likelihoods.items()
+    }
+    pkl.dump(likelihoods, open(outdir / "likelihoods.pkl", "wb"))
+    # plot_liklihoods(likelihoods, outdir)
+
+    entropies = {key: entropy(l) for key, l in likelihoods.items()}
+    pkl.dump(entropies, open(outdir / "entropies.pkl", "wb"))
+    plot_entropies(entropies, outdir)
+
+    counts = {key: np.sum(l > 0.0, axis=0) for key, l in likelihoods.items()}
+    pkl.dump(counts, open(outdir / "counts.pkl", "wb"))
+    plot_counts(counts, outdir)
+
+    centroids = {}
+    dispersion_centroid = {}
+    mean_rewards = {}
+    proj_mean_rewards = {}
+    for key, l in likelihoods.items():
+        cs = []
+        ds = []
+        mean_rewards[key] = find_means(rewards=reward_samples, likelihoods=l)
+        proj_mean_rewards[key] = normalize(mean_rewards[key])
+        for t in trange(l.shape[1]):
+            centroid, dist = find_centroid(
+                points=reward_samples,
+                weights=l[:, t],
+                max_iter=10,
+                init=proj_mean_rewards[key][t],
+            )
+            assert np.allclose(
+                np.linalg.norm(centroid), 1.0
+            ), f"centroid={centroid} has norm={np.linalg.norm(centroid)} far from 1."
+            cs.append(centroid)
+            ds.append(dist)
+
+        centroids[key] = np.stack(cs)
+        assert np.allclose(np.linalg.norm(centroids[key], axis=1), 1.0)
+        dispersion_centroid[key] = np.array(ds)
+
+    pkl.dump(centroids, open(outdir / "centroids.pkl", "wb"))
+    pkl.dump(mean_rewards, open(outdir / "mean_rewards.pkl", "wb"))
+    pkl.dump(proj_mean_rewards, open(outdir / "proj_mean_rewards.pkl", "wb"))
+    pkl.dump(dispersion_centroid, (outdir / "dispersions_centroid.pkl").open("wb"))
+
+    plot_rewards(rewards=centroids, outdir=outdir, outname="centroids")
+    plot_rewards(rewards=mean_rewards, outdir=outdir, outname="mean_rewards")
+
+    plot_dispersions(dispersion_centroid, outdir, outname="dispersion_centroid")
+
+    dispersion_mean = {
+        key: mean_l2_dispersions(
+            reward_samples=reward_samples,
+            likelihoods=likelihoods[key],
+            target_rewards=proj_mean_rewards[key],
+            expect_monotonic=True,
+        )
+        for key in likelihoods.keys()
+    }
+    pkl.dump(dispersion_mean, open(outdir / "dispersion_mean.pkl", "wb"))
+    plot_dispersions(dispersion_mean, outdir, outname="dispersion_mean")
+
+    if reward_path is not None:
+        true_reward_index = np.where(np.all(reward_samples == true_reward, axis=1))[0][0]
+        assert true_reward_index == len(list(likelihoods.values())[0]) - 1
+        plot_gt_likelihood(likelihoods, outdir)
+
+        true_reward_copies = np.tile(true_reward, (max_comparisons, 1))
+        dispersions_gt = {
+            key: mean_l2_dispersions(
+                reward_samples=reward_samples,
+                likelihoods=l,
+                target_rewards=true_reward_copies,
+            )
+            for key, l in likelihoods.items()
+        }
+        pkl.dump(dispersions_gt, open(outdir / "dispersions_gt.pkl", "wb"))
+
+        plot_dispersions(dispersions_gt, outdir, outname="dispersion_gt")
 
 
 def log_big_shifts(diffs: np.ndarray, mean_rewards: np.ndarray) -> None:
@@ -215,48 +432,83 @@ def log_big_shifts(diffs: np.ndarray, mean_rewards: np.ndarray) -> None:
         )
 
 
-def plot_gt_likelihood(outdir: Path, likelihoods: np.ndarray) -> None:
+def plot_gt_likelihood(likelihoods: Union[Dict[str, np.ndarray], np.ndarray], outdir: Path) -> None:
     logging.info("Plotting likelihood")
-    true_likelihoods = likelihoods[-1]
-    # true_likelihoods = true_likelihoods[true_likelihoods <= 1e10]
-    true_likelihoods = true_likelihoods[50:]
-    plt.plot(true_likelihoods)
+    if isinstance(likelihoods, dict):
+        for name, l in likelihoods.items():
+            plt.plot(l[-1], label=name)
+        plt.legend()
+    else:
+        plt.plot(likelihoods[-1])
     plt.title("Ground truth posterior likelihood")
     plt.xlabel("Human preferences")
-    plt.ylabel("True reward posterior")
+    plt.ylabel("Likelihood of true reward")
     plt.savefig(outdir / "gt_likelihood.png")
     plt.close()
 
 
-def plot_dispersions(outdir: Path, dispersions: np.ndarray, name: str) -> None:
-    plt.plot(dispersions)
+def plot_dispersions(
+    dispersions: Union[Dict[str, np.ndarray], np.ndarray], outdir: Path, outname: str
+) -> None:
+    if isinstance(dispersions, dict):
+        for name, d in dispersions.items():
+            plt.plot(d, label=name)
+        plt.legend()
+    else:
+        plt.plot(dispersions)
     plt.xlabel("Human preferences")
     plt.ylabel("Mean dispersion")
     plt.title("Concentration of posterior with data")
-    plt.savefig(outdir / f"{name}.png")
+    plt.savefig(outdir / f"{outname}.png")
     plt.close()
 
-    log_dispersion = np.log(dispersions)
-    log_dispersion[log_dispersion == -np.inf] = None
-    plt.plot(log_dispersion)
+    if isinstance(dispersions, dict):
+        for name, d in dispersions.items():
+            log_dispersion = np.log(d)
+            log_dispersion[log_dispersion == -np.inf] = None
+            plt.plot(log_dispersion, label=outname)
+        plt.legend()
+    else:
+        log_dispersion = np.log(dispersions)
+        log_dispersion[log_dispersion == -np.inf] = None
+        plt.plot(log_dispersion)
     plt.xlabel("Human preferences")
-    plt.ylabel("Log-mean dispersion")
+    plt.ylabel("log(mean dispersion)")
     plt.title("Log-concentration of posterior with data")
-    plt.savefig(outdir / f"log_{name}.png")
+    plt.savefig(outdir / f"log_{outname}.png")
     plt.close()
 
 
-def plot_counts(outdir: Path, counts: np.ndarray, threshold: int = 200) -> None:
-    plt.plot(counts)
+def plot_counts(
+    counts: Union[Dict[str, np.ndarray], np.ndarray], outdir: Path, threshold: int = 200
+) -> None:
+    max_count = (
+        max(np.max(c) for c in counts.values()) if isinstance(counts, dict) else np.max(counts)
+    )
+    if isinstance(counts, dict):
+        for name, c in counts.items():
+            plt.plot(c, label=name)
+        plt.legend()
+    else:
+        plt.plot(counts)
     plt.title("Number of rewards with nonzero likelihood")
     plt.xlabel("Number of preferences")
     plt.ylabel("Count")
+    plt.ylim((0, max_count * 1.05))
     plt.savefig(outdir / "counts.png")
     plt.close()
 
-    small_counts = counts[counts < threshold]
-    if np.any(small_counts):
-        plt.plot(small_counts)
+    if isinstance(counts, dict):
+        plot_small = any(np.any(c < threshold) for c in counts.values())
+    else:
+        plot_small = bool(np.any(counts < threshold))
+    if plot_small:
+        if isinstance(counts, dict):
+            for name, c in counts.items():
+                plt.plot(c[c < threshold], label=name)
+            plt.legend()
+        else:
+            plt.plot(counts[counts < threshold])
         plt.title("Number of rewards with nonzero likelihood")
         plt.xlabel("Number of preferences")
         plt.ylabel("Count")
@@ -264,135 +516,77 @@ def plot_counts(outdir: Path, counts: np.ndarray, threshold: int = 200) -> None:
         plt.close()
 
 
-def plot_rewards(rewards: np.ndarray, outdir: Path, name: str) -> None:
-    for i, dimension in enumerate(rewards.T):
-        plt.plot(dimension)
+def plot_rewards(
+    rewards: Union[Dict[str, np.ndarray], np.ndarray], outdir: Path, outname: str
+) -> None:
+    ndims = list(rewards.values())[0].shape[1] if isinstance(rewards, dict) else rewards.shape[1]
+    for dim in range(ndims):
+        if isinstance(rewards, dict):
+            for name, r in rewards.items():
+                plt.plot(r[:, dim], label=name)
+            plt.legend()
+        else:
+            plt.plot(rewards[:, dim])
         plt.ylim(-1, 1)
         plt.xlabel("Preferences")
-        plt.ylabel(f"{i}-th dimension of reward")
-        plt.title(f"{i}-th dimension of reward")
-        plt.savefig(outdir / f"{i}.{name}.png")
+        plt.ylabel(f"{dim}-th dimension of reward")
+        plt.title(f"{dim}-th dimension of reward")
+        plt.savefig(outdir / f"{dim}.{outname}.png")
         plt.close()
 
 
-def compare_modalities(
-    outdir: Path,
-    traj_path: Optional[Path] = None,
-    state_path: Optional[Path] = None,
-    action_path: Optional[Path] = None,
-    reward_path: Optional[Path] = None,
-    n_samples: int = 100_000,
-    max_comparisons: int = 1000,
-    norm_diffs: bool = False,
-    use_hinge: bool = False,
-    verbosity: Literal["INFO", "DEBUG"] = "INFO",
-) -> None:
-    setup_logging(level=verbosity)
-    outdir = Path(outdir)
-    outdir.mkdir(parents=True, exist_ok=True)
-    paths = {}
-    if traj_path is not None:
-        paths["traj"] = Path(traj_path)
-    if state_path is not None:
-        paths["state"] = Path(state_path)
-    if action_path is not None:
-        paths["action"] = Path(action_path)
-
-    if reward_path is not None:
-        true_reward = np.load(reward_path)
-
-    reward_likelihood = boltzmann_likelihood if not use_hinge else hinge_likelihood
-
-    rng = np.random.default_rng()
-
-    diffs = {
-        key: np_gather(in_path.parent, in_path.name, n=max_comparisons)
-        for key, in_path in paths.items()
-    }
-    diffs["joint"] = np.concatenate(
-        [diff[: max_comparisons // len(paths)] for diff in diffs.values()]
-    )
-    rng.shuffle(diffs["joint"])
-
-    if norm_diffs:
-        diffs = {key: normalize(diff) for key, diff in diffs.items()}
-
-    ndims = list(diffs.values())[0].shape[1]  # type: ignore
-    reward_samples = cover_sphere(n_samples, ndims, rng)
-
-    if reward_path is not None:
-        reward_samples = np.concatenate((reward_samples, [true_reward]), axis=0)
-
-    likelihoods = {
-        key: cum_likelihoods(reward_likelihood(reward=reward_samples, diffs=diff))
-        for key, diff in diffs.items()
-    }
-    mean_rewards = {
-        key: normalize(find_means(rewards=reward_samples, likelihoods=likelihood))
-        for key, likelihood in likelihoods.items()
-    }
-
-    # for dim in range(ndims):
-    #     for name, mean in mean_rewards.items():
-    #         plt.plot(mean[:, dim], label=name)
-    #     plt.ylim(-1, 1)
-    #     plt.xlabel("Preferences")
-    #     plt.ylabel(f"{dim}-th dimension of reward")
-    #     plt.title(f"{dim}-th dimension of reward")
-    #     plt.legend()
-    #     plt.savefig(outdir / f"{dim}.mean_reward.png")
-    #     plt.close()
-
-    dispersions_mean = {
-        key: mean_l2_dispersions(
-            reward_samples=reward_samples,
-            likelihoods=cum_likelihoods(reward_likelihood(reward_samples, diff)),
-            target_rewards=mean_rewards[key],
+def plot_liklihoods(likelihoods: Union[Dict[str, np.ndarray], np.ndarray], outdir: Path) -> None:
+    def plot(likelihoods: pd.DataFrame, outdir: Path, name: str) -> None:
+        df = pd.DataFrame(likelihoods, dtype=np.float128)
+        assert df.notnull().all().all()
+        assert (df < np.inf).all().all()
+        df = df.melt(
+            value_vars=range(likelihoods.shape[1]), var_name="timestep", value_name="likelihood"
         )
-        for key, diff in diffs.items()
-    }
-    pkl.dump(dispersions_mean, (outdir / "dispersions_mean.pkl").open("wb"))
 
-    for name, dispersion in dispersions_mean.items():
-        plt.plot(dispersion, label=name)
-    plt.xlabel("Human preferences")
-    plt.ylabel("Mean dispersion")
-    plt.title("Concentration of posterior for different modalities")
+        n_plots = min(10, likelihoods.shape[1])
+        logging.debug(f"n_plots={n_plots}")
+        timesteps = np.arange(0, likelihoods.shape[1], likelihoods.shape[1] // n_plots)
+        assert len(timesteps) == n_plots, f"{len(timesteps)} != {n_plots}"
+
+        df = df.loc[df["timestep"].isin(timesteps)]
+        df = df.loc[df.timestep > 1e-3]
+
+        small_df = df.loc[df.likelihood < 0.1]
+        large_df = df.loc[df.likelihood >= 0.1]
+
+        assert large_df.notnull().all().all()
+        assert (large_df.abs() < np.inf).all().all()
+
+        logging.debug(f"small_df min={small_df.likelihood.min()} max={small_df.likelihood.max()}")
+        logging.debug(f"large_df min={large_df.likelihood.min()} max={large_df.likelihood.max()}")
+
+        if len(small_df) > 0:
+            fig, _ = joypy.joyplot(small_df, hist=True, by="timestep", overlap=0, bins=100)
+            fig.savefig(outdir / f"{name}.small.png")
+            plt.close(fig)
+
+        if len(large_df) > 0:
+            fig, _ = joypy.joyplot(large_df, hist=True, by="timestep", overlap=0, bins=100)
+            fig.savefig(outdir / f"{name}.large.png")
+            plt.close(fig)
+
+    if isinstance(likelihoods, dict):
+        for name, l in likelihoods.items():
+            plot(l, outdir, name=f"likelihood_hist.{name}")
+    else:
+        plot(likelihoods, outdir, name="likelihood_hist")
+
+
+def plot_entropies(entropies: Dict[str, np.ndarray], outdir: Path) -> None:
+    for name, e in entropies.items():
+        plt.plot(e, label=name)
     plt.legend()
-    plt.savefig(outdir / "dispersion_mean.png")
+    plt.title("Posterior entropy")
+    plt.ylabel("Entropy")
+    plt.xlabel("Human preferences")
+    plt.savefig(outdir / "entropy.png")
     plt.close()
-
-    # if reward_path is not None:
-    #     true_reward_index = np.where(np.all(reward_samples == true_reward, axis=1))[0][0]
-    #     assert true_reward_index == len(list(likelihoods.values())[0]) - 1
-    #     gt_likelihood = {key: l[-1] for key, l in likelihoods.items()}
-    #     for name, likelihood in gt_likelihood.items():
-    #         plt.plot(likelihood, label=name)
-    #     plt.title("Likelihood of ground truth reward")
-    #     plt.xlabel("Human preferences")
-    #     plt.ylabel("Posterior likelihood")
-    #     plt.legend()
-    #     plt.savefig(outdir / "gt_likelihood.png")
-    #     plt.close()
-
-    # true_reward_copies = np.tile(true_reward, (max_comparisons, 1))
-    # dispersions_gt = {
-    #     key: mean_l2_dispersions(
-    #         reward_samples=reward_samples,
-    #         likelihoods=l,
-    #         target_rewards=true_reward_copies,
-    #     )
-    #     for key, l in likelihoods.items()
-    # }
-
-    # for name, dispersion in dispersions_gt.items():
-    #     plt.plot(dispersion, label=name)
-    # plt.xlabel("Human preferences")
-    # plt.ylabel("Mean dispersion")
-    # plt.title("Concentration of posterior for different modalities")
-    # plt.legend()
-    # plt.savefig(outdir / "dispersion_gt.png")
-    # plt.close()
 
 
 def plot_joint_data(
@@ -407,11 +601,12 @@ def plot_joint_data(
     approximate: bool = False,
     norm_diffs: bool = False,
     use_hinge: bool = False,
+    seed: int = 0,
     verbosity: Literal["DEBUG", "INFO"] = "INFO",
 ) -> None:
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    rng = np.random.default_rng()
+    rng = np.random.default_rng(seed=seed)
     setup_logging(level=verbosity)
 
     outname = ""
