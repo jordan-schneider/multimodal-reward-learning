@@ -22,6 +22,7 @@ def log_normalize_logs(x: np.ndarray) -> np.ndarray:
         logging.warning("Some normalized items have -inf log likelihood")
     if np.any(np.exp(out) == 0):
         logging.warning("Some normalized items have 0 likelihood")
+    assert np.allclose(np.sum(np.exp(out), axis=0), 1)
     return out
 
 
@@ -34,8 +35,9 @@ def log_shift(logs: np.ndarray) -> np.ndarray:
     Returns:
         np.ndarray: An array x such that np.exp(x) does not go out of bounds.
     """
-    smallest_meaningful_log = np.log(np.finfo(np.float64).tiny)
-    largest_meainingful_log = np.log(np.finfo(np.float64).max)
+    logs = logs.astype(np.float128)
+    smallest_meaningful_log = np.log(np.finfo(np.float128).tiny)
+    largest_meainingful_log = np.log(np.finfo(np.float128).max)
     max_log_shift = max(0, largest_meainingful_log - np.max(logs) - 100)
     ideal_log_shift = smallest_meaningful_log - np.min(logs) + 1
     log_shift = max(0, min(ideal_log_shift, max_log_shift))
@@ -45,7 +47,7 @@ def log_shift(logs: np.ndarray) -> np.ndarray:
     return logs
 
 
-def cum_likelihoods(log_likelihoods: np.ndarray):
+def cum_likelihoods(log_likelihoods: np.ndarray, shift: bool):
     """Computes the cumulative likelihoods in logspace across the 1-th dimension.
 
     We compute the cumulative likelihood, normalize using the logsumexp trick, and then try to add
@@ -60,10 +62,9 @@ def cum_likelihoods(log_likelihoods: np.ndarray):
     """
     assert np.all(np.isfinite(log_likelihoods))
 
-    shape = log_likelihoods.shape
+    logging.debug(f"likelihoods shape={log_likelihoods.shape}")
 
     log_total_likelihoods = np.cumsum(log_likelihoods, axis=1)
-    assert log_total_likelihoods.shape == shape
     assert np.all(np.isfinite(log_total_likelihoods))
 
     if np.any(np.isneginf(log_total_likelihoods)):
@@ -71,21 +72,21 @@ def cum_likelihoods(log_likelihoods: np.ndarray):
     if np.any(np.exp(log_total_likelihoods) == 0):
         logging.warning("Some cumulative terms have 0 total unnormalized likelihood")
 
-    # tmp = log_total_likelihoods
+    tmp = log_total_likelihoods
 
-    # log_total_likelihoods = log_normalize_logs(log_total_likelihoods)
-    # assert np.all(np.isfinite(log_total_likelihoods))
+    log_total_likelihoods = log_normalize_logs(log_total_likelihoods)
+    assert np.all(np.isfinite(log_total_likelihoods))
 
-    # log_total_likelihoods = log_shift(log_total_likelihoods)
+    if shift:
+        log_total_likelihoods = log_shift(log_total_likelihoods)
 
-    # for i in range(log_total_likelihoods.shape[1]):
-    #     total_shift = tmp[:, i] - log_total_likelihoods[:, i]
-    #     assert np.allclose(
-    #         total_shift, total_shift[0]
-    #     ), f"Shift at time {i} not constant. total_shift={total_shift}"
+    for i in range(log_total_likelihoods.shape[1]):
+        total_shift = tmp[:, i] - log_total_likelihoods[:, i]
+        assert np.allclose(
+            total_shift, total_shift[0]
+        ), f"Shift at time {i} not constant. total_shift={total_shift}"
 
     total_likelihoods = np.exp(log_total_likelihoods)
-    assert total_likelihoods.shape == shape
 
     if np.any(total_likelihoods == 0):
         logging.warning("Some cumulative terms have 0 total shifted likelihood")
