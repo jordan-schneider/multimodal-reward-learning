@@ -267,7 +267,9 @@ def np_gather(indir: Path, name: str, n: int) -> np.ndarray:
 
 
 def setup_logging(level: Literal["INFO", "DEBUG"], outdir: Optional[Path] = None) -> None:
-    logging.basicConfig(level=level)
+    FORMAT = "%(levelname)s:%(filename)s:%(lineno)d:%(asctime)s:%(message)s"
+
+    logging.basicConfig(level=level, format=FORMAT)
     if outdir is not None:
-        logging.getLogger().addHandler(logging.FileHandler(str(outdir / "log.txt")))
+        logging.getLogger().addHandler(logging.FileHandler(filename=str(outdir / "log.txt")))
     logging.getLogger("matplotlib").setLevel(logging.WARNING)
