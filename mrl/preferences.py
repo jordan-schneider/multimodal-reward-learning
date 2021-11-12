@@ -221,9 +221,7 @@ def gen_mixed_traj_preferences(
     diffs = []
     while len(diffs) < n_policy_trajs:
         for traj_a, traj_b in zip(
-            *gen_policy.gen_traj_pairs(
-                timesteps=batch_timesteps, n_trajs=n_policy_trajs - len(diffs)
-            )
+            *gen_random.gen_traj_pairs(timesteps=10_000, n_trajs=n_policy_trajs - len(diffs))
         ):
             assert traj_a.features is not None and traj_b.features is not None
             feature_diff = orient_diff(
