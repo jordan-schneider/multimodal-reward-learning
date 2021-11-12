@@ -536,5 +536,6 @@ if __name__ == "__main__":
             "traj": gen_traj_preferences,
             "state": gen_state_preferences,
             "state-mixed": gen_mixed_state_preferences,
+            "traj-mixed": gen_mixed_traj_preferences,
         },
     )
