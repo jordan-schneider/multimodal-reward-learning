@@ -215,7 +215,7 @@ def gen_mixed_traj_preferences(
             if np.linalg.norm(feature_diff) > 0:
                 diffs.append(feature_diff)
 
-        outfile = outdir / f"{outname}_{i}.npy"
+        outfile = outdir / f"{outname}.{i}.npy"
         logging.info(f"Writing current batch to {outfile}")
         np.save(outfile, np.stack(diffs))
         current_trajs += len(diffs)
@@ -241,7 +241,7 @@ def gen_mixed_traj_preferences(
                 diffs.append(feature_diff)
 
         logging.info(f"Writing current complete batch to {outdir / f'{outname}_{i}.npy'}")
-        outfile = outdir / f"{outname}_{i}.npy"
+        outfile = outdir / f"{outname}.{i}.npy"
         np.save(outfile, np.stack(diffs))
 
 
