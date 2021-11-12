@@ -163,6 +163,7 @@ def gen_mixed_traj_preferences(
 
     outdir = rootdir / f"traj/{temperature}"
     outdir.mkdir(parents=True, exist_ok=True)
+    logging.info(f"Writing to {outdir}")
 
     rng = np.random.default_rng()
 
@@ -214,7 +215,9 @@ def gen_mixed_traj_preferences(
             if np.linalg.norm(feature_diff) > 0:
                 diffs.append(feature_diff)
 
-        np.save(outdir / f"{outname}.{i}.npy", np.stack(diffs))
+        outfile = outdir / f"{outname}_{i}.npy"
+        logging.info(f"Writing current batch to {outfile}")
+        np.save(outfile, np.stack(diffs))
         current_trajs += len(diffs)
         del diffs
         gc.collect()
@@ -237,7 +240,9 @@ def gen_mixed_traj_preferences(
             if feature_diff[1] != 0:
                 diffs.append(feature_diff)
 
-        np.save(outdir / f"{outname}.{i}.npy", np.stack(diffs))
+        logging.info(f"Writing current complete batch to {outdir / f'{outname}_{i}.npy'}")
+        outfile = outdir / f"{outname}_{i}.npy"
+        np.save(outfile, np.stack(diffs))
 
 
 def gen_state_preferences(
