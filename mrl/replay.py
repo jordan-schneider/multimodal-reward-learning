@@ -14,6 +14,7 @@ from mrl.envs.miner import Miner
 
 def replay(model_path: Path, n_videos: int, outdir: Path, horizon: int = 1000) -> None:
     model = cast(PhasicValueModel, torch.load(model_path))
+    model = model.to(model.device)
 
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
