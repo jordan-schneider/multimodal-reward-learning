@@ -129,7 +129,9 @@ def procgen_rollout_features(
         _, state, first = env.observe()
         features[t] = env.callmethod("get_last_features")
         action, _, _ = policy.act(
-            torch.tensor(state, device=policy.device), first, policy.initial_state(env.num)
+            torch.tensor(state, device=policy.device),
+            torch.tensor(first, device=policy.device),
+            policy.initial_state(env.num),
         )
         env.act(action.cpu().numpy())
         return state, action, first
@@ -194,7 +196,9 @@ def procgen_rollout_dataset(
         reward, state, first = env.observe()
         record(t, env, state, reward, first)
         action, _, _ = policy.act(
-            torch.tensor(state, device=policy.device), first, policy.initial_state(env.num)
+            torch.tensor(state, device=policy.device),
+            torch.tensor(first, device=policy.device),
+            policy.initial_state(env.num),
         )
         action = action.cpu().numpy()
         env.act(action)
