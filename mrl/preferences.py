@@ -59,6 +59,7 @@ def gen_mixed_state_preferences(
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> None:
     setup_logging(level=verbosity)
+    rootdir = Path(rootdir)
     if replications is not None:
         offset = 0 if (rootdir / "0").exists() else 1
         for batch_iter in range(offset, replications + offset):
@@ -143,6 +144,7 @@ def gen_mixed_traj_preferences(
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ):
     setup_logging(level=verbosity)
+    rootdir = Path(rootdir)
     if replications is not None:
         offset = 0 if (rootdir / "0").exists() else 1
         for batch_iter in range(offset, replications + offset):
