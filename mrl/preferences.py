@@ -75,16 +75,27 @@ def gen_mixed_state_preferences(
             )
         exit()
 
-    gen_policy, outdir = setup_io(
-        Path(rootdir),
-        temperature,
+    outdir = rootdir / f"state/{temperature}"
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    rng = np.random.default_rng()
+
+    gen_policy = Generator(
+        rootdir,
         n_parallel_envs,
         normalize_features,
         policy_path_a=Path(policy_path),
         policy_path_b=None,
+        rng=rng,
     )
+
     gen_random = Generator(
-        Path(rootdir), n_parallel_envs, normalize_features, policy_path_a=None, policy_path_b=None
+        Path(rootdir),
+        n_parallel_envs,
+        normalize_features,
+        policy_path_a=None,
+        policy_path_b=None,
+        rng=rng,
     )
 
     batch_timesteps = max_state_batch_size(
@@ -148,16 +159,26 @@ def gen_mixed_traj_preferences(
             )
         exit()
 
-    gen_policy, outdir = setup_io(
+    outdir = rootdir / f"traj/{temperature}"
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    rng = np.random.default_rng()
+
+    gen_policy = Generator(
         Path(rootdir),
-        temperature,
         n_parallel_envs,
         normalize_features,
         policy_path_a=Path(policy_path),
         policy_path_b=None,
+        rng=rng,
     )
     gen_random = Generator(
-        Path(rootdir), n_parallel_envs, normalize_features, policy_path_a=None, policy_path_b=None
+        Path(rootdir),
+        n_parallel_envs,
+        normalize_features,
+        policy_path_a=None,
+        policy_path_b=None,
+        rng=rng,
     )
 
     batch_timesteps = max_traj_batch_size(
@@ -168,6 +189,10 @@ def gen_mixed_traj_preferences(
     i = 0
     while current_trajs < n_random_trajs:
         i += 1
+
+        logging.info(
+            f"Asking for {n_random_trajs - current_trajs} trajs or {batch_timesteps} timesteps"
+        )
 
         diffs: List[np.ndarray] = []
         for traj_a, traj_b in zip(
@@ -196,8 +221,8 @@ def gen_mixed_traj_preferences(
     diffs = []
     while len(diffs) < n_policy_trajs:
         for traj_a, traj_b in zip(
-            *gen_random.gen_traj_pairs(
-                timesteps=batch_timesteps, n_trajs=n_random_trajs - current_trajs
+            *gen_policy.gen_traj_pairs(
+                timesteps=batch_timesteps, n_trajs=n_policy_trajs - len(diffs)
             )
         ):
             assert traj_a.features is not None and traj_b.features is not None
@@ -205,8 +230,8 @@ def gen_mixed_traj_preferences(
                 feature_a=torch.sum(traj_a.features, dim=0).numpy(),
                 feature_b=torch.sum(traj_b.features, dim=0).numpy(),
                 temperature=temperature,
-                reward=gen_random.reward,
-                rng=gen_random.rng,
+                reward=gen_policy.reward,
+                rng=gen_policy.rng,
             )
 
             if feature_diff[1] != 0:
@@ -249,13 +274,18 @@ def gen_state_preferences(
             )
         exit()
 
-    gen, outdir = setup_io(
+    outdir = rootdir / f"state/{temperature}"
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    rng = np.random.default_rng()
+
+    gen = Generator(
         Path(rootdir),
-        temperature,
         n_parallel_envs,
         normalize_features,
         Path(policy_path_a) if policy_path_a is not None else None,
         Path(policy_path_b) if policy_path_b is not None else None,
+        rng=rng,
     )
 
     if use_value:
@@ -331,15 +361,18 @@ def gen_traj_preferences(
             )
         exit()
 
-    # TODO: handle policy_path is None case
+    outdir = rootdir / f"traj/{temperature}"
+    outdir.mkdir(parents=True, exist_ok=True)
 
-    gen, outdir = setup_io(
+    rng = np.random.default_rng()
+
+    gen = Generator(
         Path(rootdir),
-        temperature,
         n_parallel_envs,
         normalize_features,
         Path(policy_path_a) if policy_path_a is not None else None,
         Path(policy_path_b) if policy_path_b is not None else None,
+        rng=rng,
     )
 
     batch_timesteps = max_traj_batch_size(n_trajs, n_parallel_envs, gen.step_nbytes)
@@ -430,21 +463,6 @@ def get_policy(
         raise ValueError("Either path or num must be specified")
 
 
-def setup_io(
-    rootdir: Path,
-    temperature: float,
-    n_parallel_envs: int,
-    normalize_features: bool,
-    policy_path_a: Optional[Path],
-    policy_path_b: Optional[Path],
-) -> Tuple[Generator, Path]:
-    outdir = rootdir / f"prefs/state/{temperature}"
-    outdir.mkdir(parents=True, exist_ok=True)
-
-    gen = Generator(rootdir, n_parallel_envs, normalize_features, policy_path_a, policy_path_b)
-    return gen, outdir
-
-
 class Generator:
     def __init__(
         self,
@@ -453,6 +471,7 @@ class Generator:
         normalize_features: bool,
         policy_path_a: Optional[Path],
         policy_path_b: Optional[Path],
+        rng: np.random.Generator,
     ) -> None:
         reward_path = rootdir / "reward.npy"
         if not reward_path.exists():
@@ -468,8 +487,6 @@ class Generator:
         self.policy_a = get_policy(policy_path_a, actype=env.ac_space, num=n_parallel_envs)
         self.policy_b = get_policy(policy_path_b, actype=env.ac_space, num=n_parallel_envs)
 
-        self.rng = np.random.default_rng()
-
         feature = procgen_rollout_features(
             env=env,
             policy=self.policy_a,
@@ -477,6 +494,8 @@ class Generator:
         )
         self.step_nbytes = feature.nbytes
         logging.info(f"one timestep size={self.step_nbytes}")
+
+        self.rng = rng
 
     def gen_state_pairs(self, timesteps: int) -> Tuple[np.ndarray, np.ndarray]:
         features_a = procgen_rollout_features(
