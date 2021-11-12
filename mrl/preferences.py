@@ -76,7 +76,7 @@ def gen_mixed_state_preferences(
             )
         exit()
 
-    outdir = rootdir / f"state/{temperature}"
+    outdir = rootdir / f"prefs/state/{temperature}"
     outdir.mkdir(parents=True, exist_ok=True)
 
     rng = np.random.default_rng()
@@ -161,7 +161,7 @@ def gen_mixed_traj_preferences(
             )
         exit()
 
-    outdir = rootdir / f"traj/{temperature}"
+    outdir = rootdir / f"prefs/traj/{temperature}"
     outdir.mkdir(parents=True, exist_ok=True)
     logging.info(f"Writing to {outdir}")
 
@@ -279,7 +279,7 @@ def gen_state_preferences(
             )
         exit()
 
-    outdir = rootdir / f"state/{temperature}"
+    outdir = rootdir / f"prefs/state/{temperature}"
     outdir.mkdir(parents=True, exist_ok=True)
 
     rng = np.random.default_rng()
@@ -366,7 +366,7 @@ def gen_traj_preferences(
             )
         exit()
 
-    outdir = rootdir / f"traj/{temperature}"
+    outdir = rootdir / f"prefs/traj/{temperature}"
     outdir.mkdir(parents=True, exist_ok=True)
 
     rng = np.random.default_rng()
