@@ -206,7 +206,7 @@ def procgen_rollout_dataset(
             actions[t] = action
         return state, action, reward, first
 
-    if n_trajs is not None:
+    if n_trajs is not None and n_trajs > 0 and timesteps != 0:
         cur_trajs = 0
         t = 0
         while cur_trajs < n_trajs and (timesteps < 0 or t < timesteps):
@@ -223,6 +223,8 @@ def procgen_rollout_dataset(
 
         reward, state, first = env.observe()
         record(timesteps - 1, env, state, reward, first)
+    else:
+        raise ValueError("Must speficy n_trajs if timesteps=-1")
 
     states_arr, actions_arr, rewards_arr, firsts_arr, features_arr = (
         arr.numpy() if arr is not None else None
