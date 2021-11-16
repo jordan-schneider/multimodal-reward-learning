@@ -1,4 +1,6 @@
+import collections
 import logging
+import pickle as pkl
 import re
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional, Sequence, Tuple, Union, cast
@@ -15,6 +17,24 @@ from mrl.envs import Miner
 from mrl.envs.probe_envs import OneActionNoObsOneTimestepOneReward as Probe1
 from mrl.envs.probe_envs import OneActionTwoObsOneTimestepDeterministicReward as Probe2
 from mrl.offline_buffer import RlDataset
+
+
+def dump(obj: Any, path: Path) -> None:
+    def is_torch(obj):
+        torch_classes = (torch.Tensor, torch.nn.Module)
+        if isinstance(obj, collections.abc.Mapping):
+            v = list(obj.values())[0]
+            return is_torch(v)
+        if isinstance(obj, collections.Sequence):
+            return is_torch(obj[0])
+        return isinstance(obj, torch_classes)
+
+    if isinstance(obj, np.ndarray):
+        np.save(path, obj)
+    elif is_torch(obj):
+        torch.save(obj, path.with_suffix(".pt"))
+    else:
+        pkl.dump(obj, path.with_suffix(".pkl").open("wb"))
 
 
 def reinit(n: torch.nn.Module) -> None:
@@ -257,19 +277,45 @@ def find_best_gpu() -> torch.device:
     return torch.device(f"cuda:{device_id}")
 
 
-def np_gather(indir: Path, name: str, n: int) -> np.ndarray:
+def np_gather(
+    indir: Path,
+    name: str,
+    n: int,
+    frac_complete: float,
+    rng: Optional[np.random.Generator] = None,
+) -> np.ndarray:
+    assert frac_complete >= 0 and frac_complete <= 1
     paths = list(indir.glob(f"{name}.[0-9]*.npy"))
     if len(paths) == 0:
         raise FileNotFoundError(f"No {name} files found in {indir}")
-    data = []
-    current_size = 0
-    while current_size < n and len(paths) > 0:
+    shards = []
+
+    while len(paths) > 0:
         path = paths.pop()
         array = np.load(path)
-        data.append(array[np.linalg.norm(array, axis=1) > 0])
-        current_size += len(array)
+        shards.append(array[np.linalg.norm(array, axis=1) > 0])
+    data = np.concatenate(shards)
+    logging.debug(f"{len(data)} rows")
 
-    return np.concatenate(data)[:n]
+    complete_rows = data[:, 1] != 0
+    incomplete_rows = np.where(np.logical_not(complete_rows))[0]
+
+    n_complete_rows = int(frac_complete * n)
+    n_incomplete_rows = n - n_complete_rows
+
+    indices = None
+
+    if rng:
+        complete_indices = rng.choice(
+            np.where(complete_rows)[0], size=n_complete_rows, replace=False
+        )
+        incomplete_indices = rng.choice(incomplete_rows, size=n_incomplete_rows, replace=False)
+    else:
+        complete_indices = np.where(complete_rows)[0][:n_complete_rows]
+        incomplete_indices = incomplete_rows[:n_incomplete_rows]
+
+    indices = np.union1d(complete_indices, incomplete_indices)
+    return data[indices]
 
 
 def setup_logging(level: Literal["INFO", "DEBUG"], outdir: Optional[Path] = None) -> None:
@@ -277,5 +323,9 @@ def setup_logging(level: Literal["INFO", "DEBUG"], outdir: Optional[Path] = None
 
     logging.basicConfig(level=level, format=FORMAT)
     if outdir is not None:
-        logging.getLogger().addHandler(logging.FileHandler(filename=str(outdir / "log.txt")))
+        fh = logging.FileHandler(filename=str(outdir / "log.txt"))
+        fh.setLevel(level)
+        fh.setFormatter(logging.Formatter(FORMAT))
+        logging.getLogger().addHandler(fh)
+
     logging.getLogger("matplotlib").setLevel(logging.WARNING)
