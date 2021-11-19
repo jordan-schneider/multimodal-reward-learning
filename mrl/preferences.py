@@ -18,34 +18,6 @@ from mrl.envs import Miner
 from mrl.util import procgen_rollout_dataset, procgen_rollout_features, setup_logging
 
 
-def noisy_pref(
-    feature_a: np.ndarray,
-    feature_b: np.ndarray,
-    reward: np.ndarray,
-    temperature: float,
-    rng: np.random.Generator,
-) -> Tuple[bool, np.ndarray]:
-    """Generates a noisy preference between feature_a and feature_b
-
-    Args:
-        feature_a (np.ndarray): Reward features
-        feature_b (np.ndarray): Reward features
-        reward (np.ndarray): Reward weights
-        temperature (float): How noisy the preference is. Low temp means preference is more often the non-noisy preference, high temperature is closer to random.
-        rng (np.random.Generator): Random number Generator
-
-    Returns:
-        Tuple[bool, torch.Tensor]: If the first feature vector is better than the second, and their signed difference
-    """
-    diff = feature_a - feature_b
-    strength = reward @ diff
-    p_correct = 1.0 / (1.0 + np.exp(-strength / temperature))
-    a_better = rng.random() < p_correct
-    if not a_better:
-        diff *= -1
-    return a_better, diff
-
-
 def gen_mixed_state_preferences(
     rootdir: Path,
     n_random_states: int,
@@ -59,30 +31,13 @@ def gen_mixed_state_preferences(
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> None:
     setup_logging(level=verbosity)
-    rootdir = Path(rootdir)
-    if replications is not None:
-        offset = 0 if (rootdir / "0").exists() else 1
-        for batch_iter in range(offset, replications + offset):
-            gen_mixed_state_preferences(
-                rootdir=rootdir / str(batch_iter),
-                n_random_states=n_random_states,
-                n_policy_states=n_policy_states,
-                n_parallel_envs=n_parallel_envs,
-                outname=outname,
-                policy_path=policy_path,
-                temperature=temperature,
-                normalize_features=normalize_features,
-                verbosity=verbosity,
-            )
-        exit()
-
-    outdir = rootdir / f"prefs/state/{temperature}"
-    outdir.mkdir(parents=True, exist_ok=True)
+    outdirs, rewards = make_replication_paths(
+        Path(rootdir), modality="state", temperature=temperature, replications=replications
+    )
 
     rng = np.random.default_rng()
 
     gen_policy = Generator(
-        rootdir,
         n_parallel_envs,
         normalize_features,
         policy_path_a=Path(policy_path),
@@ -91,7 +46,6 @@ def gen_mixed_state_preferences(
     )
 
     gen_random = Generator(
-        Path(rootdir),
         n_parallel_envs,
         normalize_features,
         policy_path_a=None,
@@ -105,16 +59,16 @@ def gen_mixed_state_preferences(
         step_nbytes=gen_policy.step_nbytes,
     )
 
-    diffs: List[np.ndarray] = []
+    diffs: List[List[np.ndarray]] = [[] for _ in outdirs]
 
     while len(diffs) < n_random_states:
         feature_a, feature_b = gen_random.gen_state_pairs(timesteps=batch_timesteps)
         for i in range(len(feature_a)):
-            feature_diff = orient_diff(
-                feature_a[i], feature_b[i], temperature, gen_random.reward, gen_random.rng
-            )
+            feature_diff = feature_a[i] - feature_b[i]
             if np.linalg.norm(feature_diff) > 0:
-                diffs.append(feature_diff)
+                for reward_index, reward in enumerate(rewards):
+                    feature_diff = orient_diff(feature_diff, temperature, reward, gen_random.rng)
+                    diffs[reward_index].append(feature_diff.copy())
 
     n_random_states = len(diffs)
 
@@ -122,13 +76,13 @@ def gen_mixed_state_preferences(
         feature_a, feature_b = gen_policy.gen_state_pairs(timesteps=10_000)
         for i in range(len(feature_a)):
             if feature_a[i, 1] > 0 or feature_b[i, 1] > 0:
-                feature_diff = orient_diff(
-                    feature_a[i], feature_b[i], temperature, gen_policy.reward, gen_policy.rng
-                )
-                diffs.append(feature_diff)
-                print(len(diffs))
+                feature_diff = feature_a[i] - feature_b[i]
+                for reward_index, reward in enumerate(rewards):
+                    feature_diff = orient_diff(feature_diff, temperature, reward, gen_policy.rng)
+                    diffs[reward_index].append(feature_diff.copy())
 
-    np.save(outdir / outname, np.stack(diffs))
+    for reward_index, outdir in enumerate(outdirs):
+        np.save(outdir / outname, np.stack(diffs[reward_index]))
 
 
 def gen_mixed_traj_preferences(
@@ -144,31 +98,13 @@ def gen_mixed_traj_preferences(
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ):
     setup_logging(level=verbosity)
-    rootdir = Path(rootdir)
-    if replications is not None:
-        offset = 0 if (rootdir / "0").exists() else 1
-        for batch_iter in range(offset, replications + offset):
-            gen_mixed_traj_preferences(
-                rootdir=rootdir / str(batch_iter),
-                n_random_trajs=n_random_trajs,
-                n_policy_trajs=n_policy_trajs,
-                n_parallel_envs=n_parallel_envs,
-                outname=outname,
-                policy_path=policy_path,
-                temperature=temperature,
-                normalize_features=normalize_features,
-                verbosity=verbosity,
-            )
-        exit()
-
-    outdir = rootdir / f"prefs/traj/{temperature}"
-    outdir.mkdir(parents=True, exist_ok=True)
-    logging.info(f"Writing to {outdir}")
+    outdirs, rewards = make_replication_paths(
+        Path(rootdir), modality="traj", temperature=temperature, replications=replications
+    )
 
     rng = np.random.default_rng()
 
     gen_policy = Generator(
-        Path(rootdir),
         n_parallel_envs,
         normalize_features,
         policy_path_a=Path(policy_path),
@@ -176,7 +112,6 @@ def gen_mixed_traj_preferences(
         rng=rng,
     )
     gen_random = Generator(
-        Path(rootdir),
         n_parallel_envs,
         normalize_features,
         policy_path_a=None,
@@ -189,226 +124,125 @@ def gen_mixed_traj_preferences(
     )
 
     current_trajs = 0
-    i = 0
+    collection_batch = 0
     while current_trajs < n_random_trajs:
-        i += 1
+        collection_batch += 1
 
         logging.info(
             f"Asking for {n_random_trajs - current_trajs} trajs or {batch_timesteps} timesteps"
         )
 
-        diffs: List[np.ndarray] = []
+        diffs: List[List[np.ndarray]] = [[] for _ in range(len(rewards))]
         for traj_a, traj_b in zip(
             *gen_random.gen_traj_pairs(
                 timesteps=batch_timesteps, n_trajs=n_random_trajs - current_trajs
             )
         ):
             assert traj_a.features is not None and traj_b.features is not None
-            feature_diff = orient_diff(
-                feature_a=torch.sum(traj_a.features, dim=0).numpy(),
-                feature_b=torch.sum(traj_b.features, dim=0).numpy(),
-                temperature=temperature,
-                reward=gen_random.reward,
-                rng=gen_random.rng,
-            )
-
+            feature_diff = (
+                torch.sum(traj_a.features, dim=0) - torch.sum(traj_b.features, dim=0)
+            ).numpy()
             if np.linalg.norm(feature_diff) > 0:
-                diffs.append(feature_diff)
+                for reward_index, reward in enumerate(rewards):
+                    feature_diff = orient_diff(feature_diff, temperature, reward, gen_random.rng)
+                    diffs[reward_index].append(feature_diff.copy())
 
-        outfile = outdir / f"{outname}.{i}.npy"
-        logging.info(f"Writing current batch to {outfile}")
-        np.save(outfile, np.stack(diffs))
+        for reward_index, outdir in enumerate(outdirs):
+            diffs_file = outdir / f"{outname}.{collection_batch}.diffs.npy"
+            logging.info(f"Writing current batch to {diffs_file}.")
+            np.save(diffs_file, np.stack(diffs[reward_index]))
         current_trajs += len(diffs)
         del diffs
         gc.collect()
 
-    i += 1
+    collection_batch += 1
     diffs = []
     while len(diffs) < n_policy_trajs:
         for traj_a, traj_b in zip(
-            *gen_random.gen_traj_pairs(
+            *gen_policy.gen_traj_pairs(
                 timesteps=batch_timesteps, n_trajs=n_policy_trajs - len(diffs)
             )
         ):
             assert traj_a.features is not None and traj_b.features is not None
-            feature_diff = orient_diff(
-                feature_a=torch.sum(traj_a.features, dim=0).numpy(),
-                feature_b=torch.sum(traj_b.features, dim=0).numpy(),
-                temperature=temperature,
-                reward=gen_policy.reward,
-                rng=gen_policy.rng,
-            )
-
+            feature_diff = (
+                torch.sum(traj_a.features, dim=0) - torch.sum(traj_b.features, dim=0)
+            ).numpy()
             if feature_diff[1] != 0:
-                diffs.append(feature_diff)
+                for reward_index, reward in enumerate(rewards):
+                    feature_diff = orient_diff(feature_diff, temperature, reward, gen_random.rng)
+                    diffs[reward_index].append(feature_diff.copy())
 
-        logging.info(f"Writing current complete batch to {outdir / f'{outname}_{i}.npy'}")
-        outfile = outdir / f"{outname}.{i}.npy"
-        np.save(outfile, np.stack(diffs))
-
-
-def gen_state_preferences(
-    rootdir: Path,
-    n_states: int,
-    n_parallel_envs: int,
-    outname: str,
-    temperature: float = 0.0,
-    policy_path_a: Optional[Path] = None,
-    policy_path_b: Optional[Path] = None,
-    use_value: bool = False,
-    value_path: Optional[Path] = None,
-    normalize_features: bool = False,
-    replications: Optional[int] = None,
-    verbosity: Literal["INFO", "DEBUG"] = "INFO",
-) -> None:
-    setup_logging(level=verbosity)
-    rootdir = Path(rootdir)
-    if replications is not None:
-        offset = 0 if (rootdir / "0").exists() else 1
-        for batch_iter in range(offset, replications + offset):
-            if policy_path_a is not None or policy_path_b is not None or use_value:
-                raise NotImplementedError(
-                    "Specifying policies and value networks with replications not supported at this time."
-                )
-            gen_state_preferences(
-                rootdir=rootdir / str(batch_iter),
-                n_states=n_states,
-                n_parallel_envs=n_parallel_envs,
-                outname=outname,
-                temperature=temperature,
-                normalize_features=normalize_features,
-                verbosity=verbosity,
-            )
-        exit()
-
-    outdir = rootdir / f"prefs/state/{temperature}"
-    outdir.mkdir(parents=True, exist_ok=True)
-
-    rng = np.random.default_rng()
-
-    gen = Generator(
-        Path(rootdir),
-        n_parallel_envs,
-        normalize_features,
-        Path(policy_path_a) if policy_path_a is not None else None,
-        Path(policy_path_b) if policy_path_b is not None else None,
-        rng=rng,
-    )
-
-    if use_value:
-        raise NotImplementedError("Value networks not supported yet")
-        if value_path is not None and not Path(value_path).exists():
-            raise ValueError(
-                f"--use-value specified, but --value-path {value_path} does not point to valid file."
-            )
-
-    batch_timesteps = max_state_batch_size(n_states, n_parallel_envs, gen.step_nbytes)
-
-    # TODO: Instead of generating states from a policy, we could define a valid latent state space,
-    # sample from that, and convert to features. Alternatively, we could define a valid feature
-    # space and sample from that directly. Doing direct sampling with produce a very different
-    # distribution. I'm not certain how important this is. We want the distribution of states
-    # that the human will actually see. There are some environments where direct sampling is
-    # possible, but the real world is not one of them, and so we might be doomed to using policy
-    # based distributions.
-
-    diff_count = 0
-    batch_iter = 0
-    while diff_count < n_states:
-        features_a, features_b = gen.gen_state_pairs(batch_timesteps)
-        diffs: List[np.ndarray] = []
-        for i in range(len(features_a)):
-            diff = orient_diff(features_a[i], features_b[i], temperature, gen.reward, gen.rng)
-            if np.linalg.norm(diff) > 0:
-                diffs.append(diff)
-
-        logging.info(f"Saving {len(diffs)} state comparisons in batch {batch_iter}")
-        np.save(outdir / f"{outname}.{batch_iter}.npy", np.stack(diffs))
-
-        diff_count += len(diffs)
-        batch_iter += 1
-
-        del features_a
-        del features_b
-        gc.collect()
-
-
-def gen_traj_preferences(
-    rootdir: Path,
-    n_trajs: int,
-    n_parallel_envs: int,
-    outname: str,
-    temperature: float = 0.0,
-    policy_path_a: Optional[Path] = None,
-    policy_path_b: Optional[Path] = None,
-    keep_raw_states: bool = False,
-    normalize_features: bool = False,
-    replications: Optional[int] = None,
-    verbosity: Literal["INFO", "DEBUG"] = "INFO",
-) -> None:
-    setup_logging(level=verbosity)
-    rootdir = Path(rootdir)
-    if replications is not None:
-        if policy_path_a is not None or policy_path_b is not None:
-            raise NotImplementedError(
-                "Replications flag not compatible with specifying a policy path at this time."
-            )
-
-        offset = 0 if (rootdir / "0").exists() else 1
-        for i in range(offset, replications + offset):
-            gen_traj_preferences(
-                rootdir=rootdir / str(i),
-                n_trajs=n_trajs,
-                n_parallel_envs=n_parallel_envs,
-                outname=outname,
-                temperature=temperature,
-                keep_raw_states=keep_raw_states,
-                normalize_features=normalize_features,
-                verbosity=verbosity,
-            )
-        exit()
-
-    outdir = rootdir / f"prefs/traj/{temperature}"
-    outdir.mkdir(parents=True, exist_ok=True)
-
-    rng = np.random.default_rng()
-
-    gen = Generator(
-        Path(rootdir),
-        n_parallel_envs,
-        normalize_features,
-        Path(policy_path_a) if policy_path_a is not None else None,
-        Path(policy_path_b) if policy_path_b is not None else None,
-        rng=rng,
-    )
-
-    batch_timesteps = max_traj_batch_size(n_trajs, n_parallel_envs, gen.step_nbytes)
-
-    current_trajs = 0
-    i = 0
-    while current_trajs < n_trajs:
-        i += 1
-
-        diffs: List[np.ndarray] = []
-        for traj_a, traj_b in zip(
-            *gen.gen_traj_pairs(timesteps=batch_timesteps, n_trajs=n_trajs - current_trajs)
-        ):
-            assert traj_a.features is not None and traj_b.features is not None
-            feature_diff = orient_diff(
-                feature_a=torch.sum(traj_a.features, dim=0).numpy(),
-                feature_b=torch.sum(traj_b.features, dim=0).numpy(),
-                temperature=temperature,
-                reward=gen.reward,
-                rng=gen.rng,
-            )
-
-            if np.linalg.norm(feature_diff) > 0:
-                diffs.append(feature_diff)
-
-        np.save(outdir / f"{outname}.{i}.npy", np.stack(diffs))
+        for reward_index, outdir in enumerate(outdirs):
+            diffs_file = outdir / f"{outname}.{collection_batch}.diffs.npy"
+            logging.info(f"Writing current batch of complete runs to {diffs_file}.")
+            np.save(diffs_file, np.stack(diffs[reward_index]))
         current_trajs += len(diffs)
         del diffs
         gc.collect()
+
+
+def reuse_replications(
+    diffs_path: Path,
+    replications_rootdir: Path,
+    replications: int,
+    temperature: float,
+    seed: int = 0,
+    verbosity: Literal["INFO", "DEBUG"] = "INFO",
+) -> None:
+    setup_logging(verbosity)
+    diffs_path = Path(diffs_path)
+
+    if "traj" in diffs_path.parts:
+        modality = "traj"
+    elif "state" in diffs_path.parts:
+        modality = "state"
+    else:
+        raise ValueError(f"Unknown modality in {diffs_path}")
+
+    outdirs, rewards = make_replication_paths(
+        Path(replications_rootdir),
+        modality=modality,
+        temperature=temperature,
+        replications=replications,
+    )
+
+    logging.debug(f"outdirs={outdirs}")
+
+    # Don't overwrite the diffs from the origin folder
+    try:
+        diffs_index = outdirs.index(diffs_path.parent)
+        del outdirs[diffs_index]
+        del rewards[diffs_index]
+    except ValueError:
+        pass
+
+    rng = np.random.default_rng(seed)
+
+    diffs = np.load(diffs_path)
+    for outdir, reward in zip(outdirs, rewards):
+        oriented_diffs = np.empty_like(diffs)
+        for i, diff in enumerate(diffs):
+            oriented_diffs[i] = orient_diff(diff, temperature, reward, rng)
+        np.save(outdir / diffs_path.name, oriented_diffs)
+
+
+def make_replication_paths(
+    rootdir: Path, modality: str, temperature: float, replications: Optional[int]
+) -> Tuple[List[Path], List[np.ndarray]]:
+    if replications is not None:
+        offset = 0 if (rootdir / "0").exists() else 1
+        rootdirs = [
+            rootdir / str(replication) for replication in range(offset, replications + offset)
+        ]
+    else:
+        rootdirs = [rootdir]
+
+    outdirs = [rootdir / f"prefs/{modality}/{temperature}" for rootdir in rootdirs]
+    for outdir in outdirs:
+        outdir.mkdir(parents=True, exist_ok=True)
+
+    rewards = [np.load(rootdir / "reward.npy") for rootdir in rootdirs]
+    return outdirs, rewards
 
 
 def max_state_batch_size(n_states: int, n_parallel_envs: int, step_nbytes: int) -> int:
@@ -436,25 +270,48 @@ def max_traj_batch_size(n_trajs: int, n_parallel_envs: int, step_nbytes: int) ->
 
 
 def orient_diff(
-    feature_a: np.ndarray,
-    feature_b: np.ndarray,
+    diff: np.ndarray,
     temperature: float,
     reward: np.ndarray,
     rng: np.random.Generator,
 ) -> np.ndarray:
     if temperature == 0.0:
-        feature_diff = feature_a - feature_b
-        opinion = np.sign(reward @ feature_diff)
-        feature_diff *= opinion
+        opinion = np.sign(reward @ diff)
+        diff *= opinion
     else:
-        _, feature_diff = noisy_pref(
-            feature_a,
-            feature_b,
+        _, diff = noisy_pref(
+            diff,
             reward,
             temperature,
             rng,
         )
-    return feature_diff
+    return diff
+
+
+def noisy_pref(
+    diff: np.ndarray,
+    reward: np.ndarray,
+    temperature: float,
+    rng: np.random.Generator,
+) -> Tuple[bool, np.ndarray]:
+    """Generates a noisy preference between feature_a and feature_b
+
+    Args:
+        feature_a (np.ndarray): Reward features
+        feature_b (np.ndarray): Reward features
+        reward (np.ndarray): Reward weights
+        temperature (float): How noisy the preference is. Low temp means preference is more often the non-noisy preference, high temperature is closer to random.
+        rng (np.random.Generator): Random number Generator
+
+    Returns:
+        Tuple[bool, torch.Tensor]: If the first feature vector is better than the second, and their signed difference
+    """
+    strength = reward @ diff
+    p_correct = 1.0 / (1.0 + np.exp(-strength / temperature))
+    a_better = rng.random() < p_correct
+    if not a_better:
+        diff *= -1
+    return a_better, diff
 
 
 def get_policy(
@@ -473,21 +330,18 @@ def get_policy(
 class Generator:
     def __init__(
         self,
-        rootdir: Path,
         n_parallel_envs: int,
         normalize_features: bool,
         policy_path_a: Optional[Path],
         policy_path_b: Optional[Path],
         rng: np.random.Generator,
     ) -> None:
-        reward_path = rootdir / "reward.npy"
-        if not reward_path.exists():
-            raise ValueError(f"Reward does not exist at {reward_path}")
-        self.reward = np.load(reward_path)
-        logging.info(f"reward={self.reward}")
-
         env = Miner(
-            reward_weights=self.reward, num=n_parallel_envs, normalize_features=normalize_features
+            reward_weights=np.zeros(
+                4,
+            ),
+            num=n_parallel_envs,
+            normalize_features=normalize_features,
         )
         self.env = ExtractDictObWrapper(env, "rgb")
 
@@ -559,9 +413,8 @@ class RandomPolicy(PhasicValueModel):
 if __name__ == "__main__":
     fire.Fire(
         {
-            "traj": gen_traj_preferences,
-            "state": gen_state_preferences,
             "state-mixed": gen_mixed_state_preferences,
             "traj-mixed": gen_mixed_traj_preferences,
+            "reuse": reuse_replications,
         },
     )
