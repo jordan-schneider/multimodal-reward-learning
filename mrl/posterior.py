@@ -2,7 +2,7 @@ import logging
 import pickle as pkl
 from math import ceil
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional, Sequence, Union
+from typing import Any, Dict, Final, Literal, Optional, Sequence, Union
 
 import fire  # type: ignore
 import joypy  # type: ignore
@@ -148,15 +148,9 @@ def compare_modalities(
         logging.info(f"Loading ground truth reward from {reward_path}")
         true_reward = np.load(reward_path)
 
-    diffs = load_comparison_diffs(paths, max_comparisons, frac_complete, rng)
-
-    if norm_diffs:
-        logging.info("Normalizing difference vectors")
-        diffs = {key: normalize(diff) for key, diff in diffs.items()}
-
     logging.info(f"Generating {n_samples} reward samples on the sphere")
-    ndims = list(diffs.values())[0].shape[1]  # type: ignore
-    reward_samples = cover_sphere(n_samples, ndims, rng)
+    NDIMS: Final = 5
+    reward_samples = cover_sphere(n_samples, NDIMS, rng)
 
     if reward_path is not None:
         logging.info("Adding ground truth reward as reward sample")
@@ -168,23 +162,31 @@ def compare_modalities(
     for trial in range(n_trials):
         logging.info(f"Starting trial-{trial}")
         results.start(f"trial-{trial}")
+
+        diffs = load_comparison_diffs(paths, max_comparisons, frac_complete, rng)
+
+        if norm_diffs:
+            logging.info("Normalizing difference vectors")
+            diffs = {key: normalize(diff) for key, diff in diffs.items()}
+
         shuffled_diffs = {}
         for key, diff in diffs.items():
-            order = rng.permutation(diffs["joint"].shape[0])
-            results.update(f"{key}_order", order)
-            shuffled_diffs[key] = diff[order]
+            shuffled_diffs[key] = diff[rng.permutation(diffs["joint"].shape[0])]
 
-        results = comparison_analysis(
-            reward_samples=reward_samples,
-            diffs=shuffled_diffs,
-            use_hinge=use_hinge,
-            use_shift=use_shift,
-            results=results,
-            true_reward=true_reward if reward_path is not None else None,
-            save_all=save_all,
-        )
-        if plot_individual:
-            plot_comparison(results, use_gt=reward_path is not None)
+        try:
+            results = comparison_analysis(
+                reward_samples=reward_samples,
+                diffs=shuffled_diffs,
+                use_hinge=use_hinge,
+                use_shift=use_shift,
+                results=results,
+                true_reward=true_reward if reward_path is not None else None,
+                save_all=save_all,
+            )
+            if plot_individual:
+                plot_comparison(results, use_gt=reward_path is not None)
+        except AssertionError as e:
+            logging.exception(e)
         results.close()
 
     logging.info("Finished all trials, plotting aggregate results")
