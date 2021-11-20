@@ -37,6 +37,17 @@ def dump(obj: Any, path: Path) -> None:
         pkl.dump(obj, path.with_suffix(".pkl").open("wb"))
 
 
+def load(path: Path) -> Any:
+    if path.suffix in (".npy", ".npz"):
+        return np.load(path)
+    elif path.suffix == ".pt":
+        return torch.load(path)
+    elif path.suffix == ".pkl":
+        return pkl.load(path.open("rb"))
+    else:
+        raise ValueError(f"Unknown file type: {path.suffix}")
+
+
 def reinit(n: torch.nn.Module) -> None:
     def _init(m):
         if hasattr(m, "reset_parameters") and callable(m.reset_parameters):

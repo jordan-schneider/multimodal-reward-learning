@@ -2,7 +2,7 @@ import logging
 import pickle as pkl
 from math import ceil
 from pathlib import Path
-from typing import Any, Dict, Final, Literal, Optional, Sequence, Union
+from typing import Any, Dict, Final, List, Literal, Optional, Sequence, Union
 
 import fire  # type: ignore
 import joypy  # type: ignore
@@ -16,7 +16,7 @@ from mrl.reward_model.boltzmann import boltzmann_likelihood
 from mrl.reward_model.hinge import hinge_likelihood
 from mrl.reward_model.logspace import cum_likelihoods
 from mrl.sphere import find_centroid
-from mrl.util import dump, np_gather, setup_logging
+from mrl.util import dump, load, np_gather, setup_logging
 
 
 def one_modality_analysis(
@@ -209,6 +209,27 @@ def compare_modalities(
     )
 
 
+def post_hoc_plot_comparisons(outdir: Path) -> None:
+    outdir = Path(outdir)
+    results = Results(outdir=outdir, load_contents=True)
+    dispersion_gt = results.getall("dispersion_gt")
+    sns.relplot(
+        data=dispersion_gt, x="time", y="dispersion_gt", hue="modality", kind="line"
+    ).savefig(outdir / "dispersion_gt.png")
+    plt.close()
+
+    likelihoods_gt = results.getall_gt_likelihood()
+    sns.relplot(
+        data=likelihoods_gt, x="time", y="likelihood_gt", hue="modality", kind="line"
+    ).savefig(outdir / "likelihood_gt.png")
+    plt.close()
+
+    entropies = results.getall("entropies")
+    sns.relplot(data=entropies, x="time", y="entropies", hue="modality", kind="line").savefig(
+        outdir / "entropy.png"
+    )
+
+
 def load_comparison_diffs(
     paths: Dict[str, Path],
     max_comparisons: int,
@@ -235,11 +256,20 @@ def load_comparison_diffs(
 class Results:
     current_experiment: Optional[str]
 
-    def __init__(self, outdir: Path):
+    def __init__(self, outdir: Path, load_contents: bool = False):
         self.outdir = outdir
         self.outdir.mkdir(parents=True, exist_ok=True)
 
         self.experiments: Dict[str, Dict[str, Any]] = {}
+
+        if load_contents:
+            for experiment_dir in self.outdir.iterdir():
+                if experiment_dir.is_dir():
+                    experiment_name = experiment_dir.parts[-1]
+                    self.start(experiment_name)
+                    for file in experiment_dir.iterdir():
+                        obj_name = file.stem
+                        self.experiments[experiment_name][obj_name] = load(file)
 
     def start(self, experiment_name: str):
         self.experiments[experiment_name] = self.experiments.get(experiment_name, {})
@@ -257,10 +287,14 @@ class Results:
 
     def getall(self, name: str) -> pd.DataFrame:
         if name in ["centroids", "mean_rewards"]:
-            raise NotImplementedError("Support for converting reward data implemented.")
+            raise NotImplementedError("Support for converting reward data not implemented.")
 
         out = pd.DataFrame(columns=["trial", "time", name])
         for exp_name, exp in self.experiments.items():
+            if name not in exp.keys():
+                logging.warning(f"{name} not present in experiment {exp_name}, skipping")
+                continue
+
             value = exp[name]
             if isinstance(value, np.ndarray):
                 df = self.__make_df(name, value)
@@ -823,5 +857,10 @@ def plot_entropies(entropies: Dict[str, np.ndarray], outdir: Path) -> None:
 
 if __name__ == "__main__":
     fire.Fire(
-        {"single": one_modality_analysis, "compare": compare_modalities, "joint": analysis_joint}
+        {
+            "single": one_modality_analysis,
+            "compare": compare_modalities,
+            "joint": analysis_joint,
+            "plot-compare": post_hoc_plot_comparisons,
+        }
     )
