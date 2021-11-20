@@ -292,26 +292,31 @@ def np_gather(
 
     while len(paths) > 0:
         path = paths.pop()
+        logging.debug(f"Reading from {path}")
         array = np.load(path)
         shards.append(array[np.linalg.norm(array, axis=1) > 0])
     data = np.concatenate(shards)
-    logging.debug(f"{len(data)} rows")
+    logging.debug(f"{len(data)} total rows")
 
     complete_rows = data[:, 1] != 0
     incomplete_rows = np.where(np.logical_not(complete_rows))[0]
+    complete_rows = np.where(complete_rows)[0]
 
     n_complete_rows = int(frac_complete * n)
     n_incomplete_rows = n - n_complete_rows
 
+    logging.debug(complete_rows)
+
+    logging.debug(f"Asking for {n_complete_rows} from {len(complete_rows)} complete rows.")
+    logging.debug(f"Asking for {n_incomplete_rows} from {len(incomplete_rows)} incomplete rows.")
+
     indices = None
 
     if rng:
-        complete_indices = rng.choice(
-            np.where(complete_rows)[0], size=n_complete_rows, replace=False
-        )
+        complete_indices = rng.choice(complete_rows, size=n_complete_rows, replace=False)
         incomplete_indices = rng.choice(incomplete_rows, size=n_incomplete_rows, replace=False)
     else:
-        complete_indices = np.where(complete_rows)[0][:n_complete_rows]
+        complete_indices = complete_rows[:n_complete_rows]
         incomplete_indices = incomplete_rows[:n_incomplete_rows]
 
     indices = np.union1d(complete_indices, incomplete_indices)

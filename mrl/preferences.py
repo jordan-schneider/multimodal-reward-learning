@@ -3,7 +3,7 @@ from __future__ import annotations
 import gc
 import logging
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple, cast
+from typing import List, Literal, Optional, Sequence, Tuple, cast
 
 import fire  # type: ignore
 import numpy as np
@@ -65,9 +65,13 @@ def gen_mixed_state_preferences(
         feature_a, feature_b = gen_random.gen_state_pairs(timesteps=batch_timesteps)
         for i in range(len(feature_a)):
             feature_diff = feature_a[i] - feature_b[i]
-            if np.linalg.norm(feature_diff) > 0:
-                for reward_index, reward in enumerate(rewards):
-                    feature_diff = orient_diff(feature_diff, temperature, reward, gen_random.rng)
+            if np.linalg.norm(feature_diff) == 0:
+                continue
+            for reward_index, reward in enumerate(rewards):
+                feature_diff, opinion = orient_diff(
+                    feature_diff, temperature, reward, gen_random.rng
+                )
+                if opinion != 0:
                     diffs[reward_index].append(feature_diff.copy())
 
     n_random_states = len(diffs)
@@ -75,14 +79,23 @@ def gen_mixed_state_preferences(
     while len(diffs) - n_random_states < n_policy_states:
         feature_a, feature_b = gen_policy.gen_state_pairs(timesteps=10_000)
         for i in range(len(feature_a)):
-            if feature_a[i, 1] > 0 or feature_b[i, 1] > 0:
-                feature_diff = feature_a[i] - feature_b[i]
+            feature_diff = feature_a[i] - feature_b[i]
+            if feature_diff[1] != 0:
                 for reward_index, reward in enumerate(rewards):
-                    feature_diff = orient_diff(feature_diff, temperature, reward, gen_policy.rng)
-                    diffs[reward_index].append(feature_diff.copy())
+                    feature_diff, opinion = orient_diff(
+                        feature_diff, temperature, reward, gen_policy.rng
+                    )
+                    if opinion != 0:
+                        diffs[reward_index].append(feature_diff.copy())
 
     for reward_index, outdir in enumerate(outdirs):
-        np.save(outdir / outname, np.stack(diffs[reward_index]))
+        new_diffs = np.concatenate(diffs[reward_index])
+        outpath = outdir / outname
+        if outpath.exists():
+            current_diffs = np.load(outpath)
+            new_diffs = np.concatenate((current_diffs, new_diffs))
+
+        np.save(outdir / outname, new_diffs)
 
 
 def gen_mixed_traj_preferences(
@@ -124,7 +137,7 @@ def gen_mixed_traj_preferences(
     )
 
     current_trajs = 0
-    collection_batch = 0
+    collection_batch = max_shard_index(outdirs, outname)
     while current_trajs < n_random_trajs:
         collection_batch += 1
 
@@ -144,14 +157,17 @@ def gen_mixed_traj_preferences(
             ).numpy()
             if np.linalg.norm(feature_diff) > 0:
                 for reward_index, reward in enumerate(rewards):
-                    feature_diff = orient_diff(feature_diff, temperature, reward, gen_random.rng)
-                    diffs[reward_index].append(feature_diff.copy())
+                    feature_diff, opinion = orient_diff(
+                        feature_diff, temperature, reward, gen_random.rng
+                    )
+                    if opinion != 0:
+                        diffs[reward_index].append(feature_diff.copy())
 
         for reward_index, outdir in enumerate(outdirs):
-            diffs_file = outdir / f"{outname}.{collection_batch}.diffs.npy"
+            diffs_file = outdir / f"{outname}.{collection_batch}.npy"
             logging.info(f"Writing current batch to {diffs_file}.")
             np.save(diffs_file, np.stack(diffs[reward_index]))
-        current_trajs += len(diffs)
+        current_trajs += len(diffs[0])
         del diffs
         gc.collect()
 
@@ -169,13 +185,16 @@ def gen_mixed_traj_preferences(
             ).numpy()
             if feature_diff[1] != 0:
                 for reward_index, reward in enumerate(rewards):
-                    feature_diff = orient_diff(feature_diff, temperature, reward, gen_random.rng)
-                    diffs[reward_index].append(feature_diff.copy())
+                    feature_diff, opinion = orient_diff(
+                        feature_diff, temperature, reward, gen_random.rng
+                    )
+                    if opinion != 0:
+                        diffs[reward_index].append(feature_diff.copy())
 
         for reward_index, outdir in enumerate(outdirs):
-            diffs_file = outdir / f"{outname}.{collection_batch}.diffs.npy"
+            diffs_file = outdir / f"{outname}.{collection_batch}.npy"
             logging.info(f"Writing current batch of complete runs to {diffs_file}.")
-            np.save(diffs_file, np.stack(diffs[reward_index]))
+            np.save(diffs_file, np.concatenate(diffs[reward_index]))
         current_trajs += len(diffs)
         del diffs
         gc.collect()
@@ -245,6 +264,14 @@ def make_replication_paths(
     return outdirs, rewards
 
 
+def max_shard_index(outdirs: Sequence[Path], outname: str) -> int:
+    max_index = 0
+    for outdir in outdirs:
+        for file in outdir.glob(f"{outname}.[0-9]*.npy"):
+            max_index = max(max_index, int(file.suffixes[-2][1:]))
+    return max_index
+
+
 def max_state_batch_size(n_states: int, n_parallel_envs: int, step_nbytes: int) -> int:
     gc.collect()
     free_memory = psutil.virtual_memory().available
@@ -274,7 +301,7 @@ def orient_diff(
     temperature: float,
     reward: np.ndarray,
     rng: np.random.Generator,
-) -> np.ndarray:
+) -> Tuple[np.ndarray, int]:
     if temperature == 0.0:
         opinion = np.sign(reward @ diff)
         diff *= opinion
@@ -285,7 +312,7 @@ def orient_diff(
             temperature,
             rng,
         )
-    return diff
+    return diff, opinion
 
 
 def noisy_pref(
@@ -337,9 +364,7 @@ class Generator:
         rng: np.random.Generator,
     ) -> None:
         env = Miner(
-            reward_weights=np.zeros(
-                4,
-            ),
+            reward_weights=np.zeros(5),
             num=n_parallel_envs,
             normalize_features=normalize_features,
         )
@@ -413,8 +438,8 @@ class RandomPolicy(PhasicValueModel):
 if __name__ == "__main__":
     fire.Fire(
         {
-            "state-mixed": gen_mixed_state_preferences,
-            "traj-mixed": gen_mixed_traj_preferences,
+            "state": gen_mixed_state_preferences,
+            "traj": gen_mixed_traj_preferences,
             "reuse": reuse_replications,
         },
     )
