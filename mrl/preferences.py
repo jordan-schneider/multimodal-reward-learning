@@ -61,10 +61,10 @@ def gen_mixed_state_preferences(
 
     diffs: List[List[np.ndarray]] = [[] for _ in outdirs]
 
-    while len(diffs) < n_random_states:
+    while len(diffs[0]) < n_random_states:
         feature_a, feature_b = gen_random.gen_state_pairs(timesteps=batch_timesteps)
-        for i in range(len(feature_a)):
-            feature_diff = feature_a[i] - feature_b[i]
+        feature_diffs = feature_a - feature_b
+        for feature_diff in feature_diffs:
             if np.linalg.norm(feature_diff) == 0:
                 continue
             for reward_index, reward in enumerate(rewards):
@@ -74,19 +74,20 @@ def gen_mixed_state_preferences(
                 if opinion != 0:
                     diffs[reward_index].append(feature_diff.copy())
 
-    n_random_states = len(diffs)
+    n_random_states = len(diffs[0])
 
-    while len(diffs) - n_random_states < n_policy_states:
+    while len(diffs[0]) - n_random_states < n_policy_states:
         feature_a, feature_b = gen_policy.gen_state_pairs(timesteps=10_000)
-        for i in range(len(feature_a)):
-            feature_diff = feature_a[i] - feature_b[i]
-            if feature_diff[1] != 0:
-                for reward_index, reward in enumerate(rewards):
-                    feature_diff, opinion = orient_diff(
-                        feature_diff, temperature, reward, gen_policy.rng
-                    )
-                    if opinion != 0:
-                        diffs[reward_index].append(feature_diff.copy())
+        feature_diffs = feature_a - feature_b
+        for feature_diff in feature_diffs:
+            if feature_diff[1] == 0:
+                continue
+            for reward_index, reward in enumerate(rewards):
+                feature_diff, opinion = orient_diff(
+                    feature_diff, temperature, reward, gen_policy.rng
+                )
+                if opinion != 0:
+                    diffs[reward_index].append(feature_diff.copy())
 
     for reward_index, outdir in enumerate(outdirs):
         new_diffs = np.concatenate(diffs[reward_index])
@@ -133,7 +134,9 @@ def gen_mixed_traj_preferences(
     )
 
     batch_timesteps = max_traj_batch_size(
-        n_trajs=n_random_trajs, n_parallel_envs=n_parallel_envs, step_nbytes=gen_random.step_nbytes
+        n_trajs=max(n_random_trajs, n_policy_trajs),
+        n_parallel_envs=n_parallel_envs,
+        step_nbytes=gen_random.step_nbytes,
     )
 
     current_trajs = 0
@@ -145,7 +148,7 @@ def gen_mixed_traj_preferences(
             f"Asking for {n_random_trajs - current_trajs} trajs or {batch_timesteps} timesteps"
         )
 
-        diffs: List[List[np.ndarray]] = [[] for _ in range(len(rewards))]
+        diffs: List[List[np.ndarray]] = [[] for _ in rewards]
         for traj_a, traj_b in zip(
             *gen_random.gen_traj_pairs(
                 timesteps=batch_timesteps, n_trajs=n_random_trajs - current_trajs
@@ -155,47 +158,50 @@ def gen_mixed_traj_preferences(
             feature_diff = (
                 torch.sum(traj_a.features, dim=0) - torch.sum(traj_b.features, dim=0)
             ).numpy()
-            if np.linalg.norm(feature_diff) > 0:
-                for reward_index, reward in enumerate(rewards):
-                    feature_diff, opinion = orient_diff(
-                        feature_diff, temperature, reward, gen_random.rng
-                    )
-                    if opinion != 0:
-                        diffs[reward_index].append(feature_diff.copy())
+            if np.linalg.norm(feature_diff) == 0:
+                continue
+            for reward_index, reward in enumerate(rewards):
+                feature_diff, opinion = orient_diff(
+                    feature_diff, temperature, reward, gen_random.rng
+                )
+                if opinion != 0:
+                    diffs[reward_index].append(feature_diff.copy())
 
         for reward_index, outdir in enumerate(outdirs):
             diffs_file = outdir / f"{outname}.{collection_batch}.npy"
             logging.info(f"Writing current batch to {diffs_file}.")
-            np.save(diffs_file, np.stack(diffs[reward_index]))
+            np.save(diffs_file, np.concatenate(diffs[reward_index]))
         current_trajs += len(diffs[0])
         del diffs
         gc.collect()
 
+    current_trajs = 0
     collection_batch += 1
-    diffs = []
-    while len(diffs) < n_policy_trajs:
+    while current_trajs < n_policy_trajs:
+        diffs = [[] for _ in rewards]
         for traj_a, traj_b in zip(
             *gen_policy.gen_traj_pairs(
-                timesteps=batch_timesteps, n_trajs=n_policy_trajs - len(diffs)
+                timesteps=batch_timesteps, n_trajs=n_policy_trajs - current_trajs
             )
         ):
             assert traj_a.features is not None and traj_b.features is not None
             feature_diff = (
                 torch.sum(traj_a.features, dim=0) - torch.sum(traj_b.features, dim=0)
             ).numpy()
-            if feature_diff[1] != 0:
-                for reward_index, reward in enumerate(rewards):
-                    feature_diff, opinion = orient_diff(
-                        feature_diff, temperature, reward, gen_random.rng
-                    )
-                    if opinion != 0:
-                        diffs[reward_index].append(feature_diff.copy())
+            if feature_diff[1] == 0:
+                continue
+            for reward_index, reward in enumerate(rewards):
+                feature_diff, opinion = orient_diff(
+                    feature_diff, temperature, reward, gen_random.rng
+                )
+                if opinion != 0:
+                    diffs[reward_index].append(feature_diff.copy())
 
         for reward_index, outdir in enumerate(outdirs):
             diffs_file = outdir / f"{outname}.{collection_batch}.npy"
             logging.info(f"Writing current batch of complete runs to {diffs_file}.")
             np.save(diffs_file, np.concatenate(diffs[reward_index]))
-        current_trajs += len(diffs)
+        current_trajs += len(diffs[0])
         del diffs
         gc.collect()
 
