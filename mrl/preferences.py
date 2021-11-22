@@ -241,7 +241,7 @@ def reuse_replications(
     for outdir, reward in zip(outdirs, rewards):
         oriented_diffs = np.empty_like(diffs)
         for i, diff in enumerate(diffs):
-            oriented_diffs[i] = orient_diff(diff, temperature, reward, rng)
+            oriented_diffs[i] = orient_diff(diff, temperature, reward, rng)[0]
         np.save(outdir / diffs_path.name, oriented_diffs)
 
 
@@ -306,12 +306,13 @@ def orient_diff(
         opinion = np.sign(reward @ diff)
         diff *= opinion
     else:
-        _, diff = noisy_pref(
+        first_better, diff = noisy_pref(
             diff,
             reward,
             temperature,
             rng,
         )
+        opinion = 1 if first_better else -1
     return diff, opinion
 
 
