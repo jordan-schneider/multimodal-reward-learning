@@ -32,7 +32,10 @@ def gen_mixed_state_preferences(
 ) -> None:
     setup_logging(level=verbosity)
     outdirs, rewards = make_replication_paths(
-        Path(rootdir), modality="state", temperature=temperature, replications=replications
+        Path(rootdir),
+        modality="state",
+        temperature=temperature,
+        replications=replications,
     )
 
     rng = np.random.default_rng()
@@ -113,7 +116,10 @@ def gen_mixed_traj_preferences(
 ):
     setup_logging(level=verbosity)
     outdirs, rewards = make_replication_paths(
-        Path(rootdir), modality="traj", temperature=temperature, replications=replications
+        Path(rootdir),
+        modality="traj",
+        temperature=temperature,
+        replications=replications,
     )
 
     rng = np.random.default_rng()
@@ -176,8 +182,9 @@ def gen_mixed_traj_preferences(
         gc.collect()
 
     current_trajs = 0
-    collection_batch += 1
     while current_trajs < n_policy_trajs:
+        collection_batch += 1
+        logging.info(f"Starting batch {collection_batch}")
         diffs = [[] for _ in rewards]
         for traj_a, traj_b in zip(
             *gen_policy.gen_traj_pairs(
@@ -197,11 +204,14 @@ def gen_mixed_traj_preferences(
                 if opinion != 0:
                     diffs[reward_index].append(feature_diff.copy())
 
-        for reward_index, outdir in enumerate(outdirs):
-            diffs_file = outdir / f"{outname}.{collection_batch}.npy"
-            logging.info(f"Writing current batch of complete runs to {diffs_file}.")
-            np.save(diffs_file, np.concatenate(diffs[reward_index]))
-        current_trajs += len(diffs[0])
+        for diff_batch, outdir in zip(diffs, outdirs):
+            if len(diff_batch) > 0:
+                diffs_file = outdir / f"{outname}.{collection_batch}.npy"
+                logging.info(f"Writing current batch of complete runs to {diffs_file}.")
+                np.save(diffs_file, np.concatenate(diff_batch))
+        new_diffs = min(len(diff) for diff in diffs)
+        logging.info(f"Batch has {new_diffs} complete runs.")
+        current_trajs += new_diffs
         del diffs
         gc.collect()
 
@@ -257,7 +267,8 @@ def make_replication_paths(
     if replications is not None:
         offset = 0 if (rootdir / "0").exists() else 1
         rootdirs = [
-            rootdir / str(replication) for replication in range(offset, replications + offset)
+            rootdir / str(replication)
+            for replication in range(offset, replications + offset)
         ]
     else:
         rootdirs = [rootdir]
@@ -283,7 +294,9 @@ def max_state_batch_size(n_states: int, n_parallel_envs: int, step_nbytes: int) 
     free_memory = psutil.virtual_memory().available
     logging.info(f"Free memory={free_memory}")
 
-    batch_timesteps = min(n_states // n_parallel_envs, int(free_memory / step_nbytes * 0.8))
+    batch_timesteps = min(
+        n_states // n_parallel_envs, int(free_memory / step_nbytes * 0.8)
+    )
     logging.info(f"batch_timesteps={batch_timesteps}")
 
     return batch_timesteps
@@ -377,8 +390,12 @@ class Generator:
         )
         self.env = ExtractDictObWrapper(env, "rgb")
 
-        self.policy_a = get_policy(policy_path_a, actype=env.ac_space, num=n_parallel_envs)
-        self.policy_b = get_policy(policy_path_b, actype=env.ac_space, num=n_parallel_envs)
+        self.policy_a = get_policy(
+            policy_path_a, actype=env.ac_space, num=n_parallel_envs
+        )
+        self.policy_b = get_policy(
+            policy_path_b, actype=env.ac_space, num=n_parallel_envs
+        )
 
         feature = procgen_rollout_features(
             env=env,
@@ -431,7 +448,9 @@ class Generator:
 class RandomPolicy(PhasicValueModel):
     def __init__(self, actype: ValType, num: int):
         self.actype = actype
-        self.act_dist = Categorical(probs=torch.ones(actype.eltype.n) / np.prod(actype.eltype.n))
+        self.act_dist = Categorical(
+            probs=torch.ones(actype.eltype.n) / np.prod(actype.eltype.n)
+        )
         self.device = torch.device("cpu")
         self.num = num
 
