@@ -22,6 +22,7 @@ def make_aligned_reward_set(
     policy: PhasicValueModel,
     tqdm: bool = False,
 ) -> np.ndarray:
+    logging.info("Generating states")
     state_features = procgen_rollout_features(
         env=env,
         policy=policy,
@@ -30,6 +31,7 @@ def make_aligned_reward_set(
     ).reshape(-1, 5)
     assert state_features.shape[0] == n_states
 
+    logging.info("Generating trajs")
     trajs = procgen_rollout_dataset(
         env=env,
         policy=policy,
@@ -50,6 +52,10 @@ def make_aligned_reward_set(
 
     features = np.concatenate((state_features, traj_features), axis=0)
 
+    logging.info("Finding non-redundant constraint set")
+
+    total = len(features) * len(features)
+
     diffs: List[np.ndarray] = []
     for i in range(len(features)):
         for j in range(len(features)):
@@ -63,6 +69,12 @@ def make_aligned_reward_set(
 
             if len(diffs) < 2 or not is_redundant(diff, np.stack(diffs)):
                 diffs.append(diff)
+
+        iterations = i * j + j
+        if iterations % (total // 100) == 0:
+            logging.info(
+                f"{iterations}/{total} pairs considered ({iterations / total : 0.2f}%)"
+            )
 
     return np.stack(diffs)
 
@@ -110,6 +122,8 @@ def main(
     reward = np.load(reward_path)
     outdir = Path(outdir)
     outdir.mkdir(exist_ok=True, parents=True)
+
+    logging.basicConfig(level="INFO", filename=outdir / "aligned_reward_set.log")
 
     torch.manual_seed(seed)
 
