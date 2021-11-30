@@ -22,16 +22,27 @@ def make_aligned_reward_set(
     policy: PhasicValueModel,
     tqdm: bool = False,
 ) -> np.ndarray:
+    logging.info("Generating states")
     state_features = procgen_rollout_features(
-        env=env, policy=policy, timesteps=n_states, tqdm=tqdm,
+        env=env,
+        policy=policy,
+        timesteps=n_states,
+        tqdm=tqdm,
     ).reshape(-1, 5)
     assert state_features.shape[0] == n_states
 
+    logging.info("Generating trajs")
     trajs = procgen_rollout_dataset(
-        env=env, policy=policy, n_trajs=n_trajs, flags=["feature", "first"], tqdm=tqdm,
+        env=env,
+        policy=policy,
+        n_trajs=n_trajs,
+        flags=["feature", "first"],
+        tqdm=tqdm,
     ).trajs()
     traj_features = np.stack([np.sum(traj.features.numpy(), axis=0) for traj in trajs])
-    assert len(traj_features.shape) == 2, f"traj feature has wrong dimension {traj_features.shape}"
+    assert (
+        len(traj_features.shape) == 2
+    ), f"traj feature has wrong dimension {traj_features.shape}"
     assert (
         traj_features.shape[0] >= n_trajs
     ), f"traj features {traj_features.shape} not expected length {n_trajs}"
@@ -40,6 +51,10 @@ def make_aligned_reward_set(
     ), f"traj and state feature dims don't match {traj_features.shape}, {state_features.shape}"
 
     features = np.concatenate((state_features, traj_features), axis=0)
+
+    logging.info("Finding non-redundant constraint set")
+
+    total = len(features) * len(features)
 
     diffs: List[np.ndarray] = []
     for i in range(len(features)):
@@ -54,6 +69,12 @@ def make_aligned_reward_set(
 
             if len(diffs) < 2 or not is_redundant(diff, diffs):
                 diffs.append(diff)
+
+        iterations = i * j + j
+        if iterations % (total // 100) == 0:
+            logging.info(
+                f"{iterations}/{total} pairs considered ({iterations / total : 0.2f}%)"
+            )
 
     return np.stack(diffs)
 
@@ -101,6 +122,8 @@ def main(
     reward = np.load(reward_path)
     outdir = Path(outdir)
     outdir.mkdir(exist_ok=True, parents=True)
+
+    logging.basicConfig(level="INFO", filename=outdir / "aligned_reward_set.log")
 
     torch.manual_seed(seed)
 
