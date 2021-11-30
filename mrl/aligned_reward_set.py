@@ -2,10 +2,10 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 
-import fire
+import fire  # type: ignore
 import numpy as np
 import torch
-from gym3 import ExtractDictObWrapper
+from gym3 import ExtractDictObWrapper  # type: ignore
 from phasic_policy_gradient.ppg import PhasicValueModel
 from scipy.optimize import linprog  # type: ignore
 
@@ -39,7 +39,7 @@ def make_aligned_reward_set(
         flags=["feature", "first"],
         tqdm=tqdm,
     ).trajs()
-    traj_features = np.stack([np.sum(traj.features.numpy(), axis=0) for traj in trajs])
+    traj_features = np.stack([np.sum(traj.features.numpy(), axis=0) for traj in trajs])  # type: ignore
     assert (
         len(traj_features.shape) == 2
     ), f"traj feature has wrong dimension {traj_features.shape}"
@@ -67,7 +67,7 @@ def make_aligned_reward_set(
                 continue
             diff *= opinion
 
-            if len(diffs) < 2 or not is_redundant(diff, diffs):
+            if len(diffs) < 2 or not is_redundant(diff, np.stack(diffs)):
                 diffs.append(diff)
 
         iterations = i * j + j
