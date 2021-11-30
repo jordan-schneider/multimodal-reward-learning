@@ -93,12 +93,13 @@ def gen_mixed_state_preferences(
                     diffs[reward_index].append(feature_diff.copy())
 
     for reward_index, outdir in enumerate(outdirs):
-        new_diffs = np.concatenate(diffs[reward_index])
+        new_diffs = np.stack(diffs[reward_index])
         outpath = outdir / outname
         if outpath.exists():
             current_diffs = np.load(outpath)
             new_diffs = np.concatenate((current_diffs, new_diffs))
 
+        assert len(new_diffs.shape) == 2
         np.save(outdir / outname, new_diffs)
 
 
@@ -174,7 +175,9 @@ def gen_mixed_traj_preferences(
         for reward_index, outdir in enumerate(outdirs):
             diffs_file = outdir / f"{outname}.{collection_batch}.npy"
             logging.info(f"Writing current batch to {diffs_file}.")
-            np.save(diffs_file, np.concatenate(diffs[reward_index]))
+            out = np.stack(diffs[reward_index])
+            assert len(out.shape) == 2
+            np.save(diffs_file, out)
 
         collection_batch += 1
         current_trajs += len(diffs[0])
@@ -207,7 +210,9 @@ def gen_mixed_traj_preferences(
             if len(diff_batch) > 0:
                 diffs_file = outdir / f"{outname}.{collection_batch}.npy"
                 logging.info(f"Writing current batch of complete runs to {diffs_file}.")
-                np.save(diffs_file, np.concatenate(diff_batch))
+                out = np.stack(diff_batch)
+                assert len(out.shape) == 2
+                np.save(diffs_file, out)
         collection_batch += 1
         new_diffs = min(len(diff) for diff in diffs)
         logging.info(f"Batch has {new_diffs} complete runs.")
