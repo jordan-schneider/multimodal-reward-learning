@@ -2,10 +2,10 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 
-import fire
+import fire  # type: ignore
 import numpy as np
 import torch
-from gym3 import ExtractDictObWrapper
+from gym3 import ExtractDictObWrapper  # type: ignore
 from phasic_policy_gradient.ppg import PhasicValueModel
 from scipy.optimize import linprog  # type: ignore
 
@@ -23,15 +23,24 @@ def make_aligned_reward_set(
     tqdm: bool = False,
 ) -> np.ndarray:
     state_features = procgen_rollout_features(
-        env=env, policy=policy, timesteps=n_states, tqdm=tqdm,
+        env=env,
+        policy=policy,
+        timesteps=n_states,
+        tqdm=tqdm,
     ).reshape(-1, 5)
     assert state_features.shape[0] == n_states
 
     trajs = procgen_rollout_dataset(
-        env=env, policy=policy, n_trajs=n_trajs, flags=["feature", "first"], tqdm=tqdm,
+        env=env,
+        policy=policy,
+        n_trajs=n_trajs,
+        flags=["feature", "first"],
+        tqdm=tqdm,
     ).trajs()
-    traj_features = np.stack([np.sum(traj.features.numpy(), axis=0) for traj in trajs])
-    assert len(traj_features.shape) == 2, f"traj feature has wrong dimension {traj_features.shape}"
+    traj_features = np.stack([np.sum(traj.features.numpy(), axis=0) for traj in trajs])  # type: ignore
+    assert (
+        len(traj_features.shape) == 2
+    ), f"traj feature has wrong dimension {traj_features.shape}"
     assert (
         traj_features.shape[0] >= n_trajs
     ), f"traj features {traj_features.shape} not expected length {n_trajs}"
@@ -52,7 +61,7 @@ def make_aligned_reward_set(
                 continue
             diff *= opinion
 
-            if len(diffs) < 2 or not is_redundant(diff, diffs):
+            if len(diffs) < 2 or not is_redundant(diff, np.stack(diffs)):
                 diffs.append(diff)
 
     return np.stack(diffs)
