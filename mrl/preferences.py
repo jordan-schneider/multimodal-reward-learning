@@ -145,11 +145,9 @@ def gen_mixed_traj_preferences(
         step_nbytes=gen_random.step_nbytes,
     )
 
-    current_trajs = 0
+    current_trajs = 1
     collection_batch = max_shard_index(outdirs, outname)
     while current_trajs < n_random_trajs:
-        collection_batch += 1
-
         logging.info(
             f"Asking for {n_random_trajs - current_trajs} trajs or {batch_timesteps} timesteps"
         )
@@ -177,13 +175,14 @@ def gen_mixed_traj_preferences(
             diffs_file = outdir / f"{outname}.{collection_batch}.npy"
             logging.info(f"Writing current batch to {diffs_file}.")
             np.save(diffs_file, np.concatenate(diffs[reward_index]))
+
+        collection_batch += 1
         current_trajs += len(diffs[0])
         del diffs
         gc.collect()
 
     current_trajs = 0
     while current_trajs < n_policy_trajs:
-        collection_batch += 1
         logging.info(f"Starting batch {collection_batch}")
         diffs = [[] for _ in rewards]
         for traj_a, traj_b in zip(
@@ -209,6 +208,7 @@ def gen_mixed_traj_preferences(
                 diffs_file = outdir / f"{outname}.{collection_batch}.npy"
                 logging.info(f"Writing current batch of complete runs to {diffs_file}.")
                 np.save(diffs_file, np.concatenate(diff_batch))
+        collection_batch += 1
         new_diffs = min(len(diff) for diff in diffs)
         logging.info(f"Batch has {new_diffs} complete runs.")
         current_trajs += new_diffs
