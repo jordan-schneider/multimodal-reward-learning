@@ -1,6 +1,7 @@
 import logging
+import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 import fire  # type: ignore
 import numpy as np
@@ -11,7 +12,7 @@ from scipy.optimize import linprog  # type: ignore
 
 from mrl.envs.miner import Miner
 from mrl.preferences import get_policy
-from mrl.util import procgen_rollout_dataset, procgen_rollout_features
+from mrl.util import procgen_rollout_dataset, procgen_rollout_features, setup_logging
 
 
 def make_aligned_reward_set(
@@ -21,6 +22,7 @@ def make_aligned_reward_set(
     env: Miner,
     policy: PhasicValueModel,
     tqdm: bool = False,
+    out: Optional[Path] = None,
 ) -> np.ndarray:
     logging.info("Generating states")
     state_features = procgen_rollout_features(
@@ -53,12 +55,15 @@ def make_aligned_reward_set(
     features = np.concatenate((state_features, traj_features), axis=0)
 
     logging.info("Finding non-redundant constraint set")
+    start = time.time()
 
     total = len(features) * len(features)
 
-    diffs: List[np.ndarray] = []
+    iterations = 0
+    diffs = np.empty((0, features.shape[1]))
     for i in range(len(features)):
         for j in range(len(features)):
+            iterations += 1
             if i == j:
                 continue
             diff = features[i] - features[j]
@@ -67,19 +72,28 @@ def make_aligned_reward_set(
                 continue
             diff *= opinion
 
-            if len(diffs) < 2 or not is_redundant(diff, np.stack(diffs)):
-                diffs.append(diff)
+            if len(diffs) < 2 or not is_redundant(diff, diffs):
+                diffs = np.append(diffs, [diff], axis=0)
+                if out is not None:
+                    np.save(out, diffs)
 
-        iterations = i * j + j
-        if iterations % (total // 100) == 0:
+        if iterations == 100:
+            stop = time.time()
+            duration = stop - start
             logging.info(
-                f"{iterations}/{total} pairs considered ({iterations / total : 0.2f}%)"
+                f"First 100 iterations took {duration} seconds. {total} total iters expected to take {duration * total / 100}"
+            )
+        if iterations % (total // 1000) == 0:
+            logging.info(
+                f"{iterations}/{total} pairs considered ({iterations / total * 100 : 0.2f}%)"
             )
 
-    return np.stack(diffs)
+    return diffs
 
 
-def is_redundant(halfspace: np.ndarray, halfspaces: np.ndarray, epsilon=0.0001) -> bool:
+def is_redundant(
+    halfspace: np.ndarray, halfspaces: np.ndarray, epsilon: float = 1e-4
+) -> bool:
     # Let h be a halfspace constraint in the set of contraints H.
     # We have a constraint c^w >= 0 we want to see if we can minimize c^T w and get it to go below 0
     # if not then this constraint is satisfied by the constraints in H, if we can, then we need to
@@ -87,7 +101,9 @@ def is_redundant(halfspace: np.ndarray, halfspaces: np.ndarray, epsilon=0.0001) 
     # Thus, we want to minimize c^T w subject to Hw >= 0.
     # First we need to change this into the form min c^T x subject to Ax <= b.
     # Our problem is equivalent to min c^T w subject to  -H w <= 0.
-    halfspaces = np.array(halfspaces)
+    if np.any(np.linalg.norm(halfspaces - halfspace) < epsilon):
+        return True
+
     m, _ = halfspaces.shape
 
     b = np.zeros(m)
@@ -117,21 +133,22 @@ def main(
     policy_path: Optional[Path] = None,
     n_states: int = 10_000,
     n_trajs: int = 10_000,
+    n_envs: int = 100,
     seed: int = 0,
 ):
     reward = np.load(reward_path)
     outdir = Path(outdir)
     outdir.mkdir(exist_ok=True, parents=True)
 
-    logging.basicConfig(level="INFO", filename=outdir / "aligned_reward_set.log")
+    setup_logging(level="INFO", outdir=outdir, name="aligned_reward_set.log")
 
     torch.manual_seed(seed)
 
-    env = ExtractDictObWrapper(Miner(reward_weights=reward, num=1), "rgb")
-    policy = get_policy(policy_path, actype=env.ac_space, num=1)
+    env = ExtractDictObWrapper(Miner(reward_weights=reward, num=n_envs), "rgb")
+    policy = get_policy(policy_path, actype=env.ac_space, num=n_envs)
 
     diffs = make_aligned_reward_set(
-        reward, n_states=n_states, n_trajs=n_trajs, env=env, policy=policy
+        reward, n_states=n_states, n_trajs=n_trajs, env=env, policy=policy, tqdm=True
     )
     np.save(outdir / "aligned_reward_set.npy", diffs)
 
