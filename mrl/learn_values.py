@@ -1,8 +1,9 @@
 import logging
 import pickle as pkl
+import re
 from copy import deepcopy
 from pathlib import Path
-from typing import Callable, Literal, Optional, cast
+from typing import Callable, Literal, Optional, Tuple, cast
 
 import fire  # type: ignore
 import GPUtil  # type: ignore
@@ -16,17 +17,32 @@ from tqdm import trange  # type: ignore
 
 from mrl.offline_buffer import RlDataset
 from mrl.online_batcher import BatchGenerator
-from mrl.util import (
-    EnvName,
-    find_best_gpu,
-    find_policy_path,
-    make_env,
-    procgen_rollout,
-    reinit,
-    setup_logging,
-)
+from mrl.util import (EnvName, find_best_gpu, find_policy_path, make_env,
+                      procgen_rollout, reinit)
 from mrl.writer import SequentialWriter
 
+
+class Checkpointer:
+    def __init__(self, path: Path, name: str, extension: str) -> None:
+        self.path = Path(path)
+        self.name = name
+        self.extension = extension
+
+    def save(self, model: torch.nn.Module, counter: int) -> None:
+        torch.save(model, self.path / f"{self.name}.{counter}.{self.extension}")
+
+    def load(self, overwrite: bool = False) -> Tuple[Optional[torch.nn.Module], int]:
+        models = list(self.path.glob(f"{self.name}.[0-9]*.{self.extension}"))
+        if len(models) == 0 or overwrite:
+            return None, 0
+
+        model_iters = [re.search(f"{self.name}\.([0-9]+)\.jd", model.name).group(1) for model in models]
+        model_iter = max(model_iters)
+        model_path = models[np.argmax(model_iters)]
+        logging.info(f"Loading Q model from {model_path}")
+        latest_model = cast(torch.nn.Module, torch.load(model_path))
+
+        return latest_model, model_iter
 
 class QNetwork(torch.nn.Module):
     def __init__(
@@ -34,6 +50,7 @@ class QNetwork(torch.nn.Module):
         policy: PhasicValueModel,
         n_actions: int,
         discount_rate: float,
+        activation: Literal["relu","leaky","elu"] = "relu",
         value_init: bool = False,
         device: Optional[torch.device] = None,
     ):
@@ -42,6 +59,7 @@ class QNetwork(torch.nn.Module):
         self.discount_rate = discount_rate
 
         self.enc = deepcopy(policy.get_encoder(policy.true_vf_key))
+        self.enc.cnn.set_activation(activation)
         if not value_init:
             reinit(self.enc)
 
@@ -108,6 +126,8 @@ def train_q(
     batch_size: int,
     val_data: RlDataset,
     val_period: int,
+    checkpoint_period: int,
+    checkpointer: Checkpointer,
     target_mixing_coeff: float,
     q: QNetwork,
     optim: torch.optim.Optimizer,
@@ -118,7 +138,7 @@ def train_q(
 
     val_counter = 0
     val_log_step = 0
-    for _ in trange(n_train_steps // batch_size):
+    for batch_counter in trange(n_train_steps // batch_size):
         batch = batch_gen.make_sars_batch(timesteps=batch_size)
 
         states, actions, rewards, next_states = batch.make_sars()
@@ -145,6 +165,13 @@ def train_q(
         final_states = batch.states[:-1][batch.dones]
         if len(final_states) > 0:
             logging.debug("Processing final states")
+            
+            if __debug__:
+                pos_states = torch.sum(final_states[:,0,0,0] > 0)
+                neg_states = torch.sum(final_states[:,0,0,0] < 0)
+                assert pos_states + neg_states == len(final_states)
+                logging.debug(f"{pos_states} positive states, {neg_states} negative states")
+
             q_pred_final = q.state_value(final_states).cpu()
             writer.add_histogram("train/q_pred_final", q_pred_final)
             q_targ_final = batch.rewards[:-1][batch.dones]
@@ -173,6 +200,9 @@ def train_q(
                 # params, as opposed to "mul" and "add", which would make new tensors.
                 p_targ.data.mul_(target_mixing_coeff)
                 p_targ.data.add_((1 - target_mixing_coeff) * p.data)
+        
+        if batch_counter % checkpoint_period == 0:
+            checkpointer.save(model=q, counter=batch_counter)
 
     return q
 
@@ -272,7 +302,9 @@ def learn_q(
     train_env_steps: int = 10_000_000,
     val_env_steps: int = 100_000,
     val_period: int = 2000 * 10,
+    checkpoint_period: int = 10000,
     target_mixing_coeff: float = 0.999,
+    activation: Literal["relu", "leaky","elu"] = "relu",
     trunc_returns: bool = False,
     trunc_horizon: Optional[int] = None,
     overwrite_validation: bool = False,
@@ -298,21 +330,22 @@ def learn_q(
     model_outdir = outdir / "value"
     model_outdir.mkdir(parents=True, exist_ok=True)
     model_name = (
-        f"q_model_{policy_iter}.jd" if not trunc_returns else f"q_model_trunc_{policy_iter}.jd"
+        f"q_model_{policy_iter}" if not trunc_returns else f"q_model_trunc_{policy_iter}"
     )
-    model_path = model_outdir / model_name
+    checkpointer = Checkpointer(path=model_outdir, name=model_name, extension="jd")
+    model_path = model_outdir / (model_name + ".jd")
 
     env = make_env(env_name, num=1)
 
     if not overwrite_model and model_path.exists():
-        logging.info(f"Loading Q model from {model_path}")
-        q = cast(QNetwork, torch.load(model_path))
+        q = cast(QNetwork, checkpointer.load())
     else:
         q = QNetwork(
             policy,
             n_actions=env.ac_space.eltype.n,
             discount_rate=discount_rate,
             value_init=value_init,
+            activation=activation,
         )
 
     val_data = get_rollouts(
@@ -349,6 +382,8 @@ def learn_q(
             batch_size=batch_size,
             val_data=val_data,
             val_period=val_period,
+            checkpoint_period=checkpoint_period,
+            checkpointer=checkpointer,
             target_mixing_coeff=target_mixing_coeff,
             q=q,
             optim=optim,
