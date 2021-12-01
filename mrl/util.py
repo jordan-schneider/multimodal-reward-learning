@@ -320,9 +320,9 @@ def np_gather(
         logging.debug(f"Reading from {path}")
         array = np.load(path)
         logging.debug(f"array shape={array.shape}")
-        shards.append(array[np.linalg.norm(array, axis=1) > 0])
+        shards.append(array[np.any(array != 0, axis=1)])
     data = np.concatenate(shards)
-    logging.debug(f"{len(data)} total rows")
+    logging.debug(f"data has shape {data.shape}")
 
     complete_rows = data[:, 1] != 0
     incomplete_rows = np.where(np.logical_not(complete_rows))[0]
@@ -343,9 +343,15 @@ def np_gather(
     indices = None
 
     if rng:
+        assert (
+            len(complete_rows) >= n_complete_rows
+        ), f"Asking for {n_complete_rows} items from {len(complete_rows)} in {indir}"
         complete_indices = rng.choice(
             complete_rows, size=n_complete_rows, replace=False
         )
+        assert (
+            len(incomplete_rows) >= n_incomplete_rows
+        ), f"Asking for {n_incomplete_rows} items from {len(incomplete_rows)} in {indir}"
         incomplete_indices = rng.choice(
             incomplete_rows, size=n_incomplete_rows, replace=False
         )
@@ -358,13 +364,15 @@ def np_gather(
 
 
 def setup_logging(
-    level: Literal["INFO", "DEBUG"], outdir: Optional[Path] = None
+    level: Literal["INFO", "DEBUG"],
+    outdir: Optional[Path] = None,
+    name: str = "log.txt",
 ) -> None:
     FORMAT = "%(levelname)s:%(filename)s:%(lineno)d:%(asctime)s:%(message)s"
 
     logging.basicConfig(level=level, format=FORMAT)
     if outdir is not None:
-        fh = logging.FileHandler(filename=str(outdir / "log.txt"))
+        fh = logging.FileHandler(filename=str(outdir / name))
         fh.setLevel(level)
         fh.setFormatter(logging.Formatter(FORMAT))
         logging.getLogger().addHandler(fh)

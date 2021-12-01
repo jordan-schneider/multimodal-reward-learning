@@ -68,7 +68,7 @@ def gen_mixed_state_preferences(
         feature_a, feature_b = gen_random.gen_state_pairs(timesteps=batch_timesteps)
         feature_diffs = feature_a - feature_b
         for feature_diff in feature_diffs:
-            if np.linalg.norm(feature_diff) == 0:
+            if np.all(feature_diff == 0):
                 continue
             for reward_index, reward in enumerate(rewards):
                 feature_diff, opinion = orient_diff(
