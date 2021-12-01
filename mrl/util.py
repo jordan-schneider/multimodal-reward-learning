@@ -63,7 +63,9 @@ def make_env(name: EnvName, num: int, **kwargs) -> ProcgenGym3Env:
     if name == "miner":
         env = ProcgenGym3Env(num=1, env_name="miner")
     elif name == "miner_reward":
-        assert "reward_weights" in kwargs.keys(), "Must supply reward_weights to Miner reward env."
+        assert (
+            "reward_weights" in kwargs.keys()
+        ), "Must supply reward_weights to Miner reward env."
         env = Miner(num=num, **kwargs)
     elif name == "probe-1":
         env = Probe1(num=num, **kwargs)
@@ -96,7 +98,9 @@ def procgen_rollout(
         if check_occupancies:
             timesteps_written_to[t] = timesteps_written_to.get(t, 0) + 1
         reward, state, first = env.observe()
-        state = cast(np.ndarray, state)  # env.observe typing dones't account for wrapper
+        state = cast(
+            np.ndarray, state
+        )  # env.observe typing dones't account for wrapper
         states[t] = state
         rewards[t] = reward
         firsts[t] = first
@@ -153,7 +157,9 @@ def procgen_rollout_features(
     tqdm: bool = False,
 ) -> np.ndarray:
     features = ArrayOrList(
-        np.empty((timesteps, env.num, Miner.N_FEATURES)) if timesteps is not None else []
+        np.empty((timesteps, env.num, Miner.N_FEATURES))
+        if timesteps is not None
+        else []
     )
 
     def step():
@@ -201,7 +207,9 @@ def procgen_rollout_dataset(
 ) -> RlDataset:
     state_shape = env.ob_space.shape
 
-    def make_array(shape: Tuple[int, ...], name: str, dtype=np.float32) -> Optional[ArrayOrList]:
+    def make_array(
+        shape: Tuple[int, ...], name: str, dtype=np.float32
+    ) -> Optional[ArrayOrList]:
         if name in flags:
             return ArrayOrList(np.empty(shape, dtype=dtype) if timesteps > 0 else [])
         else:
@@ -271,7 +279,9 @@ def procgen_rollout_dataset(
     )
 
 
-def find_policy_path(policydir: Path, overwrite: bool = False) -> Tuple[Optional[Path], int]:
+def find_policy_path(
+    policydir: Path, overwrite: bool = False
+) -> Tuple[Optional[Path], int]:
     models = list(policydir.glob("model[0-9]*.jd"))
     if len(models) == 0 or overwrite:
         return None, 0
@@ -296,7 +306,11 @@ def np_gather(
     rng: Optional[np.random.Generator] = None,
 ) -> np.ndarray:
     assert frac_complete >= 0 and frac_complete <= 1
-    paths = list(indir.glob(f"{name}.[0-9]*.npy"))
+    paths = [
+        path
+        for path in indir.iterdir()
+        if path.is_file() and re.search(f"/{name}(.[0-9]+)?.npy", str(path))
+    ]
     if len(paths) == 0:
         raise FileNotFoundError(f"No {name} files found in {indir}")
     shards = []
@@ -305,6 +319,7 @@ def np_gather(
         path = paths.pop()
         logging.debug(f"Reading from {path}")
         array = np.load(path)
+        logging.debug(f"array shape={array.shape}")
         shards.append(array[np.linalg.norm(array, axis=1) > 0])
     data = np.concatenate(shards)
     logging.debug(f"{len(data)} total rows")
@@ -318,14 +333,22 @@ def np_gather(
 
     logging.debug(complete_rows)
 
-    logging.debug(f"Asking for {n_complete_rows} from {len(complete_rows)} complete rows.")
-    logging.debug(f"Asking for {n_incomplete_rows} from {len(incomplete_rows)} incomplete rows.")
+    logging.debug(
+        f"Asking for {n_complete_rows} from {len(complete_rows)} complete rows."
+    )
+    logging.debug(
+        f"Asking for {n_incomplete_rows} from {len(incomplete_rows)} incomplete rows."
+    )
 
     indices = None
 
     if rng:
-        complete_indices = rng.choice(complete_rows, size=n_complete_rows, replace=False)
-        incomplete_indices = rng.choice(incomplete_rows, size=n_incomplete_rows, replace=False)
+        complete_indices = rng.choice(
+            complete_rows, size=n_complete_rows, replace=False
+        )
+        incomplete_indices = rng.choice(
+            incomplete_rows, size=n_incomplete_rows, replace=False
+        )
     else:
         complete_indices = complete_rows[:n_complete_rows]
         incomplete_indices = incomplete_rows[:n_incomplete_rows]
@@ -334,7 +357,9 @@ def np_gather(
     return data[indices]
 
 
-def setup_logging(level: Literal["INFO", "DEBUG"], outdir: Optional[Path] = None) -> None:
+def setup_logging(
+    level: Literal["INFO", "DEBUG"], outdir: Optional[Path] = None
+) -> None:
     FORMAT = "%(levelname)s:%(filename)s:%(lineno)d:%(asctime)s:%(message)s"
 
     logging.basicConfig(level=level, format=FORMAT)
