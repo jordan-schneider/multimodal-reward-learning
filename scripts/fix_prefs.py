@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 import fire  # type: ignore
@@ -10,7 +11,9 @@ import numpy as np
 
 def main(rootdir: Path, name: str) -> None:
     rootdir = Path(rootdir)
-    for file in rootdir.rglob(f"{name}.*[0-9]*.npy"):
+    for file in rootdir.rglob(f"{name}*"):
+        if re.search(f"{name}(.[0-9]+)?.npy", str(file)) is None:
+            continue
         arr = np.load(file)
         if len(arr.shape) != 2:
             print(file)
