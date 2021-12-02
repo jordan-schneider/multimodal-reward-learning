@@ -26,11 +26,18 @@ def find_centroid(
     while i < max_iter:
         grad = np.sum(numerator / np.sqrt(1 - (points @ centroid) ** 2), axis=1)
         centroid += grad
+
         if np.any(np.logical_not(np.isfinite(centroid))):
-            break
+            # If any dimensions are inf, then set those dimensions to 1, set all the finite dims to
+            # 0, and normalize.
+            centroid = np.logical_not(np.isfinite(centroid)).astype(centroid.dtype)
+
+        # If you can't normalize because the norm is inf, then scale everything down by 100
+        while not np.isfinite(np.linalg.norm(centroid)):
+            centroid /= 100
+
         centroid /= np.linalg.norm(centroid)
-        if np.any(np.logical_not(np.isfinite(centroid))):
-            break
+
         assert np.allclose(
             np.linalg.norm(centroid), 1.0
         ), f"centroid={centroid} has norm={np.linalg.norm(centroid)} far from 1."
