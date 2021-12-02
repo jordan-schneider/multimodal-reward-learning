@@ -26,7 +26,11 @@ def find_centroid(
     while i < max_iter:
         grad = np.sum(numerator / np.sqrt(1 - (points @ centroid) ** 2), axis=1)
         centroid += grad
+        if np.any(np.logical_not(np.isfinite(centroid))):
+            break
         centroid /= np.linalg.norm(centroid)
+        if np.any(np.logical_not(np.isfinite(centroid))):
+            break
         assert np.allclose(
             np.linalg.norm(centroid), 1.0
         ), f"centroid={centroid} has norm={np.linalg.norm(centroid)} far from 1."

@@ -88,7 +88,9 @@ def analysis_joint(
 
     diffs = np.concatenate(
         [
-            np_gather(path.parent, path.name, n=data_per_modality, frac_complete=frac_complete)
+            np_gather(
+                path.parent, path.name, n=data_per_modality, frac_complete=frac_complete
+            )
             for path in paths
         ]
     )
@@ -126,108 +128,80 @@ def compare_modalities(
     seed: int = 0,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> None:
-    outdir = Path(outdir)
-    outdir.mkdir(parents=True, exist_ok=True)
-    setup_logging(outdir=outdir, level=verbosity)
+    try:
+        outdir = Path(outdir)
+        outdir.mkdir(parents=True, exist_ok=True)
+        setup_logging(outdir=outdir, level=verbosity)
 
-    logging.info(
-        f"outdir={outdir}, traj_path={traj_path}, state_path={state_path}, reward_path={reward_path}, n_samples={n_samples}, max_comparisons={max_comparisons}, frac_complete={frac_complete}, norm_diffs={norm_diffs}, use_hinge={use_hinge}, use_shift={use_shift}, n_trials={n_trials}, save_all={save_all}, seed={seed}, verbosity={verbosity}"
-    )
+        logging.info(
+            f"outdir={outdir}, traj_path={traj_path}, state_path={state_path}, reward_path={reward_path}, n_samples={n_samples}, max_comparisons={max_comparisons}, frac_complete={frac_complete}, norm_diffs={norm_diffs}, use_hinge={use_hinge}, use_shift={use_shift}, n_trials={n_trials}, save_all={save_all}, seed={seed}, verbosity={verbosity}"
+        )
 
-    rng = np.random.default_rng(seed=seed)
+        rng = np.random.default_rng(seed=seed)
 
-    paths: Dict[str, Path] = {}
-    if traj_path is not None:
-        logging.info(f"Loading trajectories from {traj_path}")
-        paths["traj"] = Path(traj_path)
-    if state_path is not None:
-        logging.info(f"Loading states from {state_path}")
-        paths["state"] = Path(state_path)
+        paths: Dict[str, Path] = {}
+        if traj_path is not None:
+            logging.info(f"Loading trajectories from {traj_path}")
+            paths["traj"] = Path(traj_path)
+        if state_path is not None:
+            logging.info(f"Loading states from {state_path}")
+            paths["state"] = Path(state_path)
 
-    if reward_path is not None:
-        logging.info(f"Loading ground truth reward from {reward_path}")
-        true_reward = np.load(reward_path)
+        if reward_path is not None:
+            logging.info(f"Loading ground truth reward from {reward_path}")
+            true_reward = np.load(reward_path)
 
-    logging.info(f"Generating {n_samples} reward samples on the sphere")
-    NDIMS: Final = 5
-    reward_samples = cover_sphere(n_samples, NDIMS, rng)
+        logging.info(f"Generating {n_samples} reward samples on the sphere")
+        NDIMS: Final = 5
+        reward_samples = cover_sphere(n_samples, NDIMS, rng)
 
-    if reward_path is not None:
-        logging.info("Adding ground truth reward as reward sample")
-        reward_samples = np.concatenate((reward_samples, [true_reward]), axis=0)
+        if reward_path is not None:
+            logging.info("Adding ground truth reward as reward sample")
+            reward_samples = np.concatenate((reward_samples, [true_reward]), axis=0)
 
-    np.save(outdir / "reward_samples.npy", reward_samples)
+        np.save(outdir / "reward_samples.npy", reward_samples)
 
-    results = Results(outdir)
-    for trial in range(n_trials):
-        logging.info(f"Starting trial-{trial}")
-        results.start(f"trial-{trial}")
+        results = Results(outdir)
+        for trial in range(n_trials):
+            logging.info(f"Starting trial-{trial}")
+            results.start(f"trial-{trial}")
 
-        diffs = load_comparison_diffs(paths, max_comparisons, frac_complete, rng)
+            diffs = load_comparison_diffs(paths, max_comparisons, frac_complete, rng)
 
-        if norm_diffs:
-            logging.info("Normalizing difference vectors")
-            diffs = {key: normalize(diff) for key, diff in diffs.items()}
+            if norm_diffs:
+                logging.info("Normalizing difference vectors")
+                diffs = {key: normalize(diff) for key, diff in diffs.items()}
 
-        shuffled_diffs = {}
-        for key, diff in diffs.items():
-            shuffled_diffs[key] = diff[rng.permutation(diffs["joint"].shape[0])]
+            shuffled_diffs = {}
+            for key, diff in diffs.items():
+                shuffled_diffs[key] = diff[rng.permutation(diffs["joint"].shape[0])]
 
-        try:
-            results = comparison_analysis(
-                reward_samples=reward_samples,
-                diffs=shuffled_diffs,
-                use_hinge=use_hinge,
-                use_shift=use_shift,
-                results=results,
-                true_reward=true_reward if reward_path is not None else None,
-                save_all=save_all,
-            )
-            if plot_individual:
-                plot_comparison(results, use_gt=reward_path is not None)
-        except AssertionError as e:
-            logging.exception(e)
-        results.close()
+            try:
+                results = comparison_analysis(
+                    reward_samples=reward_samples,
+                    diffs=shuffled_diffs,
+                    use_hinge=use_hinge,
+                    use_shift=use_shift,
+                    results=results,
+                    true_reward=true_reward if reward_path is not None else None,
+                    save_all=save_all,
+                )
+                if plot_individual:
+                    plot_comparison(results, use_gt=reward_path is not None)
+            except AssertionError as e:
+                logging.exception(e)
+            results.close()
 
-    logging.info("Finished all trials, plotting aggregate results")
-
-    dispersion_gt = results.getall("dispersion_gt")
-    sns.relplot(
-        data=dispersion_gt, x="time", y="dispersion_gt", hue="modality", kind="line"
-    ).savefig(outdir / "dispersion_gt.png")
-    plt.close()
-
-    likelihoods_gt = results.getall_gt_likelihood()
-    sns.relplot(
-        data=likelihoods_gt, x="time", y="likelihood_gt", hue="modality", kind="line"
-    ).savefig(outdir / "likelihood_gt.png")
-    plt.close()
-
-    entropies = results.getall("entropies")
-    sns.relplot(data=entropies, x="time", y="entropies", hue="modality", kind="line").savefig(
-        outdir / "entropy.png"
-    )
+        logging.info("Finished all trials, plotting aggregate results")
+        plot_comparisons(results, outdir)
+    except Exception as e:
+        logging.exception(e)
 
 
 def post_hoc_plot_comparisons(outdir: Path) -> None:
     outdir = Path(outdir)
     results = Results(outdir=outdir, load_contents=True)
-    dispersion_gt = results.getall("dispersion_gt")
-    sns.relplot(
-        data=dispersion_gt, x="time", y="dispersion_gt", hue="modality", kind="line"
-    ).savefig(outdir / "dispersion_gt.png")
-    plt.close()
-
-    likelihoods_gt = results.getall_gt_likelihood()
-    sns.relplot(
-        data=likelihoods_gt, x="time", y="likelihood_gt", hue="modality", kind="line"
-    ).savefig(outdir / "likelihood_gt.png")
-    plt.close()
-
-    entropies = results.getall("entropies")
-    sns.relplot(data=entropies, x="time", y="entropies", hue="modality", kind="line").savefig(
-        outdir / "entropy.png"
-    )
+    plot_comparisons(results, outdir)
 
 
 def load_comparison_diffs(
@@ -286,17 +260,23 @@ class Results:
         return self.experiments[self.current_experiment].get(name)
 
     def getall(self, name: str) -> pd.DataFrame:
-        if name in ["centroids", "mean_rewards"]:
-            raise NotImplementedError("Support for converting reward data not implemented.")
+        if not any(name in exp.keys() for exp in self.experiments.values()):
+            raise ValueError(f"No {name} values in any experiment")
 
         out = pd.DataFrame(columns=["trial", "time", name])
         for exp_name, exp in self.experiments.items():
             if name not in exp.keys():
-                logging.warning(f"{name} not present in experiment {exp_name}, skipping")
+                logging.warning(
+                    f"{name} not present in experiment {exp_name}, skipping"
+                )
                 continue
 
             value = exp[name]
             if isinstance(value, np.ndarray):
+                if len(value.shape) > 1:
+                    raise NotImplementedError(
+                        f"Underlying array with {len(value.shape)} dims > 1 not supported"
+                    )
                 df = self.__make_df(name, value)
                 df["trial"] = exp_name
                 out = out.append(df.copy())
@@ -352,7 +332,8 @@ def comparison_analysis(
     reward_likelihood = hinge_likelihood if use_hinge else boltzmann_likelihood
 
     log_likelihoods = {
-        key: reward_likelihood(reward=reward_samples, diffs=diff) for key, diff in diffs.items()
+        key: reward_likelihood(reward=reward_samples, diffs=diff)
+        for key, diff in diffs.items()
     }
 
     if save_all:
@@ -386,17 +367,22 @@ def comparison_analysis(
         mean_rewards[key] = find_means(rewards=reward_samples, likelihoods=l)
         proj_mean_rewards[key] = normalize(mean_rewards[key])
         for t in trange(l.shape[1]):
-            centroid, dist = find_centroid(
-                points=reward_samples,
-                weights=l[:, t],
-                max_iter=10,
-                init=proj_mean_rewards[key][t],
-            )
-            assert np.allclose(
-                np.linalg.norm(centroid), 1.0
-            ), f"centroid={centroid} has norm={np.linalg.norm(centroid)} far from 1."
-            centroids.append(centroid)
-            dispersions.append(dist)
+            try:
+                centroid, dist = find_centroid(
+                    points=reward_samples,
+                    weights=l[:, t],
+                    max_iter=10,
+                    init=proj_mean_rewards[key][t],
+                )
+                if np.any(np.isnan(centroid)):
+                    continue
+                assert np.allclose(
+                    np.linalg.norm(centroid), 1.0
+                ), f"centroid={centroid} has norm={np.linalg.norm(centroid)} far from 1."
+                centroids.append(centroid)
+                dispersions.append(dist)
+            except Exception as e:
+                logging.warning(f"Failed to find centroid for time t={t}", exc_info=e)
 
         centroid_per_modality[key] = np.stack(centroids)
         assert np.allclose(np.linalg.norm(centroid_per_modality[key], axis=1), 1.0)
@@ -419,7 +405,9 @@ def comparison_analysis(
     results.update("dispersion_mean", dispersion_mean)
 
     if true_reward is not None:
-        true_reward_index = np.where(np.all(reward_samples == true_reward, axis=1))[0][0]
+        true_reward_index = np.where(np.all(reward_samples == true_reward, axis=1))[0][
+            0
+        ]
         assert true_reward_index == len(list(likelihoods.values())[0]) - 1
 
         n_comparisons = list(diffs.values())[0].shape[0]
@@ -436,37 +424,6 @@ def comparison_analysis(
         results.update("dispersion_gt", dispersions_gt)
 
     return results
-
-
-def plot_comparison(results: Results, use_gt: bool = False) -> None:
-    assert results.current_experiment is not None, "No current experiment"
-    outdir = results.outdir / results.current_experiment
-    if likelihoods := results.get("likelihoods"):
-        plot_liklihoods(likelihoods, outdir)
-
-        if use_gt:
-            plot_gt_likelihood(likelihoods, outdir)
-
-    if entropies := results.get("entropies"):
-        plot_entropies(entropies, outdir)
-    if counts := results.get("counts"):
-        plot_counts(counts, outdir)
-
-    if dispersion_mean := results.get("dispersion_mean"):
-        plot_dispersions(dispersion_mean, outdir, outname="dispersion_mean")
-
-    if centroid_per_modality := results.get("centroid_per_modality"):
-        plot_rewards(rewards=centroid_per_modality, outdir=outdir, outname="centroids")
-
-    if mean_rewards := results.get("mean_rewards"):
-        plot_rewards(rewards=mean_rewards, outdir=outdir, outname="mean_rewards")
-
-    if dispersion_centroid_per_modality := results.get("dispersions_centroid"):
-        plot_dispersions(dispersion_centroid_per_modality, outdir, outname="dispersion_centroid")
-
-    if dispersions_gt := results.get("dispersion_gt"):
-        assert use_gt
-        plot_dispersions(dispersions_gt, outdir, outname="dispersion_gt")
 
 
 def analysis(
@@ -550,7 +507,9 @@ def log_big_shifts(diffs: np.ndarray, mean_rewards: np.ndarray) -> None:
 
 
 def cover_sphere(n_samples: int, ndims: int, rng: np.random.Generator) -> np.ndarray:
-    samples = rng.multivariate_normal(mean=np.zeros(ndims), cov=np.eye(ndims), size=(n_samples))
+    samples = rng.multivariate_normal(
+        mean=np.zeros(ndims), cov=np.eye(ndims), size=(n_samples)
+    )
     samples = normalize(samples)
     return samples
 
@@ -582,7 +541,10 @@ def mean_geodesic_dispersion(
     assert not np.any(np.all(dists == 0.0, axis=0))
 
     weighted_dists = np.stack(
-        [np.average(dists[:, i], weights=likelihoods[:, i]) for i in range(dists.shape[1])]
+        [
+            np.average(dists[:, i], weights=likelihoods[:, i])
+            for i in range(dists.shape[1])
+        ]
     )
 
     if expect_monotonic and __debug__:
@@ -622,7 +584,9 @@ def mean_geodesic_dispersion(
                 contributions_1 = d_1 * l_1 / denominator_1
                 assert np.allclose(np.sum(contributions_1), weighted_dists[t])
                 diffs = contributions_2 - contributions_1
-                assert np.allclose(np.sum(diffs), np.sum(contributions_2) - np.sum(contributions_1))
+                assert np.allclose(
+                    np.sum(diffs), np.sum(contributions_2) - np.sum(contributions_1)
+                )
                 big_diff_indices = np.argsort(diffs)[::-1][:10]
                 big_diff_rewards = reward_samples[big_diff_indices]
                 big_diff_dists = d_2[big_diff_indices] - d_1[big_diff_indices]
@@ -698,7 +662,67 @@ def infogain_sort(rewards: np.ndarray, diffs: np.ndarray) -> np.ndarray:
     # TODO: Finish
 
 
-def plot_gt_likelihood(likelihoods: Union[Dict[str, np.ndarray], np.ndarray], outdir: Path) -> None:
+def plot_comparisons(results: Results, outdir: Path) -> None:
+    """Plot multiple comparison experiments"""
+    dispersion_gt = results.getall("dispersion_gt")
+    sns.relplot(
+        data=dispersion_gt, x="time", y="dispersion_gt", hue="modality", kind="line"
+    ).savefig(outdir / "dispersion_gt.png")
+    plt.close()
+
+    likelihoods_gt = results.getall_gt_likelihood()
+    sns.relplot(
+        data=likelihoods_gt,
+        x="time",
+        y="likelihood_gt",
+        hue="modality",
+        kind="line",
+    ).savefig(outdir / "likelihood_gt.png")
+    plt.close()
+
+    entropies = results.getall("entropies")
+    sns.relplot(
+        data=entropies, x="time", y="entropies", hue="modality", kind="line"
+    ).savefig(outdir / "entropy.png")
+
+
+def plot_comparison(results: Results, use_gt: bool = False) -> None:
+    """Plot single comparison experiment"""
+    assert results.current_experiment is not None, "No current experiment"
+    outdir = results.outdir / results.current_experiment
+    if likelihoods := results.get("likelihoods"):
+        plot_liklihoods(likelihoods, outdir)
+
+        if use_gt:
+            plot_gt_likelihood(likelihoods, outdir)
+
+    if entropies := results.get("entropies"):
+        plot_entropies(entropies, outdir)
+    if counts := results.get("counts"):
+        plot_counts(counts, outdir)
+
+    if dispersion_mean := results.get("dispersion_mean"):
+        plot_dispersions(dispersion_mean, outdir, outname="dispersion_mean")
+
+    if centroid_per_modality := results.get("centroid_per_modality"):
+        plot_rewards(rewards=centroid_per_modality, outdir=outdir, outname="centroids")
+
+    if mean_rewards := results.get("mean_rewards"):
+        plot_rewards(rewards=mean_rewards, outdir=outdir, outname="mean_rewards")
+
+    if dispersion_centroid_per_modality := results.get("dispersions_centroid"):
+        plot_dispersions(
+            dispersion_centroid_per_modality, outdir, outname="dispersion_centroid"
+        )
+
+    if dispersions_gt := results.get("dispersion_gt"):
+        assert use_gt
+        plot_dispersions(dispersions_gt, outdir, outname="dispersion_gt")
+
+
+def plot_gt_likelihood(
+    likelihoods: Union[Dict[str, np.ndarray], np.ndarray], outdir: Path
+) -> None:
     logging.info("Plotting likelihood")
     if isinstance(likelihoods, dict):
         for name, l in likelihoods.items():
@@ -749,7 +773,9 @@ def plot_counts(
     counts: Union[Dict[str, np.ndarray], np.ndarray], outdir: Path, threshold: int = 200
 ) -> None:
     max_count = (
-        max(np.max(c) for c in counts.values()) if isinstance(counts, dict) else np.max(counts)
+        max(np.max(c) for c in counts.values())
+        if isinstance(counts, dict)
+        else np.max(counts)
     )
     if isinstance(counts, dict):
         for name, c in counts.items():
@@ -785,7 +811,11 @@ def plot_counts(
 def plot_rewards(
     rewards: Union[Dict[str, np.ndarray], np.ndarray], outdir: Path, outname: str
 ) -> None:
-    ndims = list(rewards.values())[0].shape[1] if isinstance(rewards, dict) else rewards.shape[1]
+    ndims = (
+        list(rewards.values())[0].shape[1]
+        if isinstance(rewards, dict)
+        else rewards.shape[1]
+    )
     for dim in range(ndims):
         if isinstance(rewards, dict):
             for name, r in rewards.items():
@@ -801,18 +831,24 @@ def plot_rewards(
         plt.close()
 
 
-def plot_liklihoods(likelihoods: Union[Dict[str, np.ndarray], np.ndarray], outdir: Path) -> None:
+def plot_liklihoods(
+    likelihoods: Union[Dict[str, np.ndarray], np.ndarray], outdir: Path
+) -> None:
     def plot(likelihoods: pd.DataFrame, outdir: Path, name: str) -> None:
         df = pd.DataFrame(likelihoods, dtype=np.float128)
         assert df.notnull().all().all()
         assert (df < np.inf).all().all()
         df = df.melt(
-            value_vars=range(likelihoods.shape[1]), var_name="timestep", value_name="likelihood"
+            value_vars=range(likelihoods.shape[1]),
+            var_name="timestep",
+            value_name="likelihood",
         )
 
         n_plots = min(10, likelihoods.shape[1])
         logging.debug(f"n_plots={n_plots}")
-        timesteps = np.arange(0, likelihoods.shape[1], ceil(likelihoods.shape[1] / n_plots))
+        timesteps = np.arange(
+            0, likelihoods.shape[1], ceil(likelihoods.shape[1] / n_plots)
+        )
         assert len(timesteps) == n_plots, f"{len(timesteps)} != {n_plots}"
 
         df = df.loc[df["timestep"].isin(timesteps)]
@@ -824,16 +860,24 @@ def plot_liklihoods(likelihoods: Union[Dict[str, np.ndarray], np.ndarray], outdi
         assert large_df.notnull().all().all()
         assert (large_df.abs() < np.inf).all().all()
 
-        logging.debug(f"small_df min={small_df.likelihood.min()} max={small_df.likelihood.max()}")
-        logging.debug(f"large_df min={large_df.likelihood.min()} max={large_df.likelihood.max()}")
+        logging.debug(
+            f"small_df min={small_df.likelihood.min()} max={small_df.likelihood.max()}"
+        )
+        logging.debug(
+            f"large_df min={large_df.likelihood.min()} max={large_df.likelihood.max()}"
+        )
 
         if len(small_df) > 0:
-            fig, _ = joypy.joyplot(small_df, hist=True, by="timestep", overlap=0, bins=100)
+            fig, _ = joypy.joyplot(
+                small_df, hist=True, by="timestep", overlap=0, bins=100
+            )
             fig.savefig(outdir / f"{name}.small.png")
             plt.close(fig)
 
         if len(large_df) > 0:
-            fig, _ = joypy.joyplot(large_df, hist=True, by="timestep", overlap=0, bins=100)
+            fig, _ = joypy.joyplot(
+                large_df, hist=True, by="timestep", overlap=0, bins=100
+            )
             fig.savefig(outdir / f"{name}.large.png")
             plt.close(fig)
 
