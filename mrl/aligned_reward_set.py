@@ -1,5 +1,6 @@
 import logging
 import time
+from itertools import product
 from pathlib import Path
 from typing import Optional
 
@@ -12,26 +13,35 @@ from scipy.optimize import linprog  # type: ignore
 
 from mrl.envs.miner import Miner
 from mrl.preferences import get_policy
-from mrl.util import procgen_rollout_dataset, procgen_rollout_features, setup_logging
+from mrl.util import (procgen_rollout_dataset, procgen_rollout_features,
+                      setup_logging)
 
 
-def make_aligned_reward_set(
-    reward: np.ndarray,
+def get_features(
     n_states: int,
     n_trajs: int,
     env: Miner,
     policy: PhasicValueModel,
+    outdir: Optional[Path],
     tqdm: bool = False,
-    out: Optional[Path] = None,
 ) -> np.ndarray:
+    if outdir is not None and (outdir / "ars_features.npy").is_file():
+        logging.info("Loading features from file")
+        features = np.load(outdir / "ars_features.npy")
+        if len(features) >= n_states + n_trajs:
+            logging.info(f"n_states={n_states} n_trajs={n_trajs}")
+            return np.concatenate((features[:n_states], features[-n_trajs:]))
+
     logging.info("Generating states")
     state_features = procgen_rollout_features(
         env=env,
         policy=policy,
-        timesteps=n_states,
+        timesteps=n_states // env.num,
         tqdm=tqdm,
     ).reshape(-1, 5)
-    assert state_features.shape[0] == n_states
+    assert (
+        state_features.shape[0] == n_states
+    ), f"state features shape={state_features.shape} when {n_states} states requested"
 
     logging.info("Generating trajs")
     trajs = procgen_rollout_dataset(
@@ -52,36 +62,68 @@ def make_aligned_reward_set(
         traj_features.shape[1] == state_features.shape[1]
     ), f"traj and state feature dims don't match {traj_features.shape}, {state_features.shape}"
 
-    features = np.concatenate((state_features, traj_features), axis=0)
+    features = np.concatenate(
+        (state_features[:n_states], traj_features[:n_trajs]), axis=0
+    )
+    if outdir is not None:
+        np.save(outdir / "ars_features.npy", features)
+
+    return features
+
+
+def make_aligned_reward_set(
+    reward: np.ndarray,
+    n_states: int,
+    n_trajs: int,
+    env: Miner,
+    policy: PhasicValueModel,
+    tqdm: bool = False,
+    outdir: Optional[Path] = None,
+) -> np.ndarray:
+    features = get_features(n_states, n_trajs, env, policy, outdir, tqdm)
+    logging.info(f"Features shape={features.shape}")
 
     logging.info("Finding non-redundant constraint set")
     start = time.time()
 
-    total = len(features) * len(features)
+    total = len(features) * len(features) - len(features)
+    logging.info(f"{total} total comparisons")
 
     iterations = 0
     diffs = np.empty((0, features.shape[1]))
-    for i in range(len(features)):
-        for j in range(len(features)):
-            iterations += 1
-            if i == j:
-                continue
-            diff = features[i] - features[j]
-            opinion = np.sign(reward @ diff)
-            if opinion == 0:
-                continue
-            diff *= opinion
+    if outdir is not None and (outdir / "aligned_reward_set.npy").is_file():
+        diffs = np.load(outdir / "aligned_reward_set.npy")
+        iterations = len(diffs)
 
-            if len(diffs) < 2 or not is_redundant(diff, diffs):
-                diffs = np.append(diffs, [diff], axis=0)
-                if out is not None:
-                    np.save(out, diffs)
+    np.random.shuffle(features)
 
-        if iterations == 100:
+    order1 = np.arange(len(features))
+    np.random.shuffle(order1)
+    order2 = np.arange(len(features))
+    np.random.shuffle(order2)
+
+    for i, j in product(order1, order2):
+        if i == j:
+            continue
+        iterations += 1
+        
+        diff = features[i] - features[j]
+        opinion = np.sign(reward @ diff)
+        if opinion == 0:
+            continue
+        diff *= opinion
+
+        if len(diffs) < 2 or not is_redundant(diff, diffs):
+            diffs = np.append(diffs, [diff], axis=0)
+            if outdir is not None:
+                np.save(outdir / "aligned_reward_set.npy", diffs)
+            logging.info(f"{len(diffs)} total diffs")
+
+        if iterations == 1000:
             stop = time.time()
             duration = stop - start
             logging.info(
-                f"First 100 iterations took {duration} seconds. {total} total iters expected to take {duration * total / 100}"
+                f"First 1000 iterations took {duration:0.1f} seconds. {total} total iters expected to take {duration * total / 1000: 0.1f} seconds."
             )
         if iterations % (total // 1000) == 0:
             logging.info(
@@ -95,7 +137,7 @@ def is_redundant(
     halfspace: np.ndarray, halfspaces: np.ndarray, epsilon: float = 1e-4
 ) -> bool:
     # Let h be a halfspace constraint in the set of contraints H.
-    # We have a constraint c^w >= 0 we want to see if we can minimize c^T w and get it to go below 0
+    # We have a constraint c^T w >= 0 we want to see if we can minimize c^T w and get it to go below 0
     # if not then this constraint is satisfied by the constraints in H, if we can, then we need to
     # add c back into H.
     # Thus, we want to minimize c^T w subject to Hw >= 0.
@@ -148,7 +190,13 @@ def main(
     policy = get_policy(policy_path, actype=env.ac_space, num=n_envs)
 
     diffs = make_aligned_reward_set(
-        reward, n_states=n_states, n_trajs=n_trajs, env=env, policy=policy, tqdm=True
+        reward,
+        n_states=n_states,
+        n_trajs=n_trajs,
+        env=env,
+        policy=policy,
+        tqdm=True,
+        outdir=outdir,
     )
     np.save(outdir / "aligned_reward_set.npy", diffs)
 
