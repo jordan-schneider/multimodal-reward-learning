@@ -253,7 +253,7 @@ def procgen_rollout_dataset(
 
             cur_trajs += np.sum(first)
             t += 1
-        record(timesteps - 1, env, state, reward, first)
+        record(t, env, state, reward, first)
     elif timesteps > 0:
         times = trange(timesteps - 1) if tqdm else range(timesteps - 1)
 
