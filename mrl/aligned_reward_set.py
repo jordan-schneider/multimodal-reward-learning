@@ -13,7 +13,8 @@ from scipy.optimize import linprog  # type: ignore
 
 from mrl.envs.miner import Miner
 from mrl.preferences import get_policy
-from mrl.util import procgen_rollout_dataset, procgen_rollout_features, setup_logging
+from mrl.util import (procgen_rollout_dataset, procgen_rollout_features,
+                      setup_logging)
 
 
 def get_features(
@@ -108,8 +109,9 @@ def make_aligned_reward_set(
         iterations += 1
 
         diff = features[i] - features[j]
-        opinion = np.sign(reward @ diff)
-        if opinion == 0:
+        return_diff = reward @ diff
+        opinion = np.sign(return_diff)
+        if opinion == 0 or np.abs(return_diff) < 1e-16:
             continue
         diff *= opinion
 

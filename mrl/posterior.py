@@ -1,8 +1,7 @@
 import logging
-import pickle as pkl
 from math import ceil
 from pathlib import Path
-from typing import Any, Dict, Final, List, Literal, Optional, Sequence, Union
+from typing import Any, Dict, Final, Literal, Optional, Sequence, Union
 
 import fire  # type: ignore
 import joypy  # type: ignore
@@ -152,8 +151,10 @@ def compare_modalities(
             logging.info(f"Loading ground truth reward from {reward_path}")
             true_reward = np.load(reward_path)
 
-        if aligned_reward_set_path is not None:
-            aligned_reward_set = AlignedRewardSet(Path(aligned_reward_set_path))
+            if aligned_reward_set_path is not None:
+                aligned_reward_set = AlignedRewardSet(
+                    Path(aligned_reward_set_path), true_reward
+                )
 
         logging.info(f"Generating {n_samples} reward samples on the sphere")
         NDIMS: Final = 5
@@ -330,18 +331,27 @@ class Results:
 
 
 class AlignedRewardSet:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, true_reward: np.ndarray) -> None:
         self.diffs = np.load(path)
+        assert np.all(true_reward @ self.diffs.T >= 0)
+        self.diffs = self.diffs[true_reward @ self.diffs.T > 1e-16]
+        assert np.all(true_reward @ self.diffs.T > 1e-16)
+
+        self.true_reward = true_reward
 
     def prob_aligned(self, rewards: np.ndarray, densities: np.ndarray) -> np.ndarray:
         assert rewards.shape[1] == 5
         assert densities.shape[0] == rewards.shape[0]
         assert len(densities.shape) <= 2
 
-        # TODO: Consider using log probs + exp sum trick here?
+        aligned_reward_indices = np.all((rewards @ self.diffs.T) > 0, axis=1)
+        prob_aligned = np.sum(densities[aligned_reward_indices], axis=0)
+        if np.sum(aligned_reward_indices) == 0:
+            logging.warning("No aligned rewards")
+        elif np.allclose(prob_aligned, 0, atol=0.001):
+            logging.debug("There are some aligned rewards, but all likelihoods are 0")
 
-        aligned_reward_indices = np.all(rewards @ self.diffs.T > 0, axis=1)
-        return np.sum(densities[aligned_reward_indices], axis=0)
+        return prob_aligned
 
 
 def comparison_analysis(

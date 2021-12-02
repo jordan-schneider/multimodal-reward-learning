@@ -372,7 +372,7 @@ def setup_logging(
 
     logging.basicConfig(level=level, format=FORMAT)
     if outdir is not None:
-        fh = logging.FileHandler(filename=str(outdir / name))
+        fh = logging.FileHandler(filename=str(outdir / name), mode="w")
         fh.setLevel(level)
         fh.setFormatter(logging.Formatter(FORMAT))
         logging.getLogger().addHandler(fh)
