@@ -13,8 +13,7 @@ from scipy.optimize import linprog  # type: ignore
 
 from mrl.envs.miner import Miner
 from mrl.preferences import get_policy
-from mrl.util import (procgen_rollout_dataset, procgen_rollout_features,
-                      setup_logging)
+from mrl.util import procgen_rollout_dataset, procgen_rollout_features, setup_logging
 
 
 def get_features(
@@ -102,11 +101,12 @@ def make_aligned_reward_set(
     order2 = np.arange(len(features))
     np.random.shuffle(order2)
 
+    last_new = 0
     for i, j in product(order1, order2):
         if i == j:
             continue
         iterations += 1
-        
+
         diff = features[i] - features[j]
         opinion = np.sign(reward @ diff)
         if opinion == 0:
@@ -115,6 +115,7 @@ def make_aligned_reward_set(
 
         if len(diffs) < 2 or not is_redundant(diff, diffs):
             diffs = np.append(diffs, [diff], axis=0)
+            last_new = iterations
             if outdir is not None:
                 np.save(outdir / "aligned_reward_set.npy", diffs)
             logging.info(f"{len(diffs)} total diffs")
@@ -129,6 +130,10 @@ def make_aligned_reward_set(
             logging.info(
                 f"{iterations}/{total} pairs considered ({iterations / total * 100 : 0.2f}%)"
             )
+
+        if iterations - last_new > 1e7:
+            logging.info(f"1e7 iterations since last new diff, stopping.")
+            break
 
     return diffs
 
