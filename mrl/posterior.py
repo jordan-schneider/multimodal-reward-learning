@@ -116,6 +116,7 @@ def compare_modalities(
     traj_path: Optional[Path] = None,
     state_path: Optional[Path] = None,
     reward_path: Optional[Path] = None,
+    aligned_reward_set_path: Optional[Path] = None,
     n_samples: int = 100_000,
     max_comparisons: int = 1000,
     frac_complete: float = 0.1,
@@ -134,7 +135,7 @@ def compare_modalities(
         setup_logging(outdir=outdir, level=verbosity)
 
         logging.info(
-            f"outdir={outdir}, traj_path={traj_path}, state_path={state_path}, reward_path={reward_path}, n_samples={n_samples}, max_comparisons={max_comparisons}, frac_complete={frac_complete}, norm_diffs={norm_diffs}, use_hinge={use_hinge}, use_shift={use_shift}, n_trials={n_trials}, save_all={save_all}, seed={seed}, verbosity={verbosity}"
+            f"outdir={outdir}, traj_path={traj_path}, state_path={state_path}, reward_path={reward_path}, aligned_reward_set_path={aligned_reward_set_path} n_samples={n_samples}, max_comparisons={max_comparisons}, frac_complete={frac_complete}, norm_diffs={norm_diffs}, use_hinge={use_hinge}, use_shift={use_shift}, n_trials={n_trials}, save_all={save_all}, seed={seed}, verbosity={verbosity}"
         )
 
         rng = np.random.default_rng(seed=seed)
@@ -150,6 +151,9 @@ def compare_modalities(
         if reward_path is not None:
             logging.info(f"Loading ground truth reward from {reward_path}")
             true_reward = np.load(reward_path)
+
+        if aligned_reward_set_path is not None:
+            aligned_reward_set = AlignedRewardSet(Path(aligned_reward_set_path))
 
         logging.info(f"Generating {n_samples} reward samples on the sphere")
         NDIMS: Final = 5
@@ -184,6 +188,9 @@ def compare_modalities(
                     use_shift=use_shift,
                     results=results,
                     true_reward=true_reward if reward_path is not None else None,
+                    aligned_reward_set=aligned_reward_set
+                    if aligned_reward_set_path is not None
+                    else None,
                     save_all=save_all,
                 )
                 if plot_individual:
@@ -255,12 +262,15 @@ class Results:
         self.experiments[self.current_experiment][name] = value
         dump(value, self.outdir / self.current_experiment / name)
 
+    def has(self, name: str) -> bool:
+        return any(name in exp.keys() for exp in self.experiments.values())
+
     def get(self, name: str) -> Any:
         assert self.current_experiment is not None, "No current experiment"
         return self.experiments[self.current_experiment].get(name)
 
     def getall(self, name: str) -> pd.DataFrame:
-        if not any(name in exp.keys() for exp in self.experiments.values()):
+        if not self.has(name):
             raise ValueError(f"No {name} values in any experiment")
 
         out = pd.DataFrame(columns=["trial", "time", name])
@@ -319,12 +329,28 @@ class Results:
         self.current_experiment = None
 
 
+class AlignedRewardSet:
+    def __init__(self, path: Path) -> None:
+        self.diffs = np.load(path)
+
+    def prob_aligned(self, rewards: np.ndarray, densities: np.ndarray) -> np.ndarray:
+        assert rewards.shape[1] == 5
+        assert densities.shape[0] == rewards.shape[0]
+        assert len(densities.shape) <= 2
+
+        # TODO: Consider using log probs + exp sum trick here?
+
+        aligned_reward_indices = np.all(rewards @ self.diffs.T > 0, axis=1)
+        return np.sum(densities[aligned_reward_indices], axis=0)
+
+
 def comparison_analysis(
     reward_samples: np.ndarray,
     diffs: Dict[str, np.ndarray],
     use_hinge: bool,
     use_shift: bool,
     results: Results,
+    aligned_reward_set: Optional[AlignedRewardSet],
     true_reward: Optional[np.ndarray] = None,
     save_all: bool = False,
 ) -> Results:
@@ -346,10 +372,19 @@ def comparison_analysis(
 
     if not save_all:
         # Subsample 1% of the sampled rewards and reduce precision to save disk space by default.
-        samples = {k: v[::100].astype(np.float32) for k, v in likelihoods.items()}
-        results.update("likelihoods", samples)
+        likelihood_samples = {
+            k: v[::100].astype(np.float32) for k, v in likelihoods.items()
+        }
+        results.update("likelihoods", likelihood_samples)
     else:
         results.update("likelihoods", likelihoods)
+
+    if aligned_reward_set is not None:
+        prob_aligned = {
+            key: aligned_reward_set.prob_aligned(rewards=reward_samples, densities=l)
+            for key, l in likelihoods.items()
+        }
+        results.update("prob_aligned", prob_aligned)
 
     entropies = {key: entropy(l) for key, l in likelihoods.items()}
     results.update("entropies", entropies)
@@ -664,26 +699,44 @@ def infogain_sort(rewards: np.ndarray, diffs: np.ndarray) -> np.ndarray:
 
 def plot_comparisons(results: Results, outdir: Path) -> None:
     """Plot multiple comparison experiments"""
-    dispersion_gt = results.getall("dispersion_gt")
-    sns.relplot(
-        data=dispersion_gt, x="time", y="dispersion_gt", hue="modality", kind="line"
-    ).savefig(outdir / "dispersion_gt.png")
-    plt.close()
+    if results.has("dispersion_gt"):
+        dispersion_gt = results.getall("dispersion_gt")
+        sns.relplot(
+            data=dispersion_gt, x="time", y="dispersion_gt", hue="modality", kind="line"
+        ).savefig(outdir / "dispersion_gt.png")
+        plt.close()
+    else:
+        logging.warning("Results did not have dispersion gt")
 
-    likelihoods_gt = results.getall_gt_likelihood()
-    sns.relplot(
-        data=likelihoods_gt,
-        x="time",
-        y="likelihood_gt",
-        hue="modality",
-        kind="line",
-    ).savefig(outdir / "likelihood_gt.png")
-    plt.close()
+    if results.has("prob_aligned"):
+        prob_aligned = results.getall("prob_aligned")
+        sns.relplot(
+            data=prob_aligned,
+            x="time",
+            y="prob_aligned",
+            hue="modality",
+            kind="line",
+        ).savefig(outdir / "prob_aligned.png")
+    elif results.has("likelihood"):
+        likelihoods_gt = results.getall_gt_likelihood()
+        sns.relplot(
+            data=likelihoods_gt,
+            x="time",
+            y="likelihood_gt",
+            hue="modality",
+            kind="line",
+        ).savefig(outdir / "likelihood_gt.png")
+        plt.close()
+    else:
+        logging.warning("Results has neither prob aligned or likelihood")
 
-    entropies = results.getall("entropies")
-    sns.relplot(
-        data=entropies, x="time", y="entropies", hue="modality", kind="line"
-    ).savefig(outdir / "entropy.png")
+    if results.has("entropies"):
+        entropies = results.getall("entropies")
+        sns.relplot(
+            data=entropies, x="time", y="entropies", hue="modality", kind="line"
+        ).savefig(outdir / "entropy.png")
+    else:
+        logging.warning("Results does not have entropies")
 
 
 def plot_comparison(results: Results, use_gt: bool = False) -> None:
