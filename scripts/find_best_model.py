@@ -1,4 +1,5 @@
 import pickle as pkl
+import re
 from pathlib import Path
 from typing import Dict
 
@@ -17,13 +18,20 @@ def main(rootdir: Path, out: Path, horizon: int = 10_000) -> None:
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    rootdir = Path(rootdir)
     finished_trajs: Dict[Path, int] = {}
-    for model_path in rootdir.rglob("model[0-9]*.jd"):
+    if out.exists():
+        finished_trajs = pkl.load(out.open("rb"))
+
+    rootdir = Path(rootdir)
+    for model_path in rootdir.rglob("*"):
+        # print(model_path)
+        if model_path in finished_trajs.keys():
+            continue
+        if re.search("model(9[0-9][059]|1000)\.jd", str(model_path)) is None:
+            continue
         print(f"Loading model from {model_path}")
-        policy = torch.load(model_path)
         device = torch.device("cuda:0")
-        policy = policy.to(device=device)
+        policy = torch.load(model_path, map_location=device)
         policy.device = device
 
         data = procgen_rollout_features(env, policy, timesteps=horizon, tqdm=True)
