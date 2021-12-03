@@ -115,12 +115,20 @@ def make_aligned_reward_set(
             continue
         diff *= opinion
 
-        if len(diffs) < 2 or not is_redundant(diff, diffs):
+        try:
+            if len(diffs) < 2 or is_redundant(diff, diffs):
+                diffs = np.append(diffs, [diff], axis=0)
+                last_new = iterations
+                if outdir is not None:
+                    np.save(outdir / "aligned_reward_set.npy", diffs)
+                logging.info(f"{len(diffs)} total diffs")
+        except Exception as e:
+            logging.warning("Unable to solve LP, adding item to set anyway")
             diffs = np.append(diffs, [diff], axis=0)
             last_new = iterations
             if outdir is not None:
                 np.save(outdir / "aligned_reward_set.npy", diffs)
-            logging.info(f"{len(diffs)} total diffs")
+            logging.info(f"{len(diffs)} total diffs") 
 
         if iterations == 1000:
             stop = time.time()
