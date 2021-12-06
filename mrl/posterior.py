@@ -364,9 +364,9 @@ def comparison_analysis(
     true_reward: Optional[np.ndarray] = None,
     save_all: bool = False,
 ) -> Results:
-    logging.debug(diffs["joint"])
     reward_likelihood = hinge_likelihood if use_hinge else boltzmann_likelihood
 
+    logging.info("Computing p(reward|diff)")
     log_likelihoods = {
         key: reward_likelihood(reward=reward_samples, diffs=diff)
         for key, diff in diffs.items()
@@ -375,11 +375,13 @@ def comparison_analysis(
     if save_all:
         results.update("log_likelihoods", log_likelihoods)
 
+    logging.info("Normalizing and totaling likelihoods")
     likelihoods = {
         key: cum_likelihoods(log_likelihoods=l, shift=use_shift)
         for key, l in log_likelihoods.items()
     }
 
+    logging.info("Saving total likelihoods")
     if not save_all:
         # Subsample 1% of the sampled rewards and reduce precision to save disk space by default.
         likelihood_samples = {
@@ -390,18 +392,22 @@ def comparison_analysis(
         results.update("likelihoods", likelihoods)
 
     if aligned_reward_set is not None:
+        logging.info("Computing P(aligned)")
         prob_aligned = {
             key: aligned_reward_set.prob_aligned(rewards=reward_samples, densities=l)
             for key, l in likelihoods.items()
         }
         results.update("prob_aligned", prob_aligned)
 
+    logging.info("Computing posterior entropies")
     entropies = {key: entropy(l) for key, l in likelihoods.items()}
     results.update("entropies", entropies)
 
+    logging.info("Computing nonzero likelihood counts")
     counts = {key: np.sum(l > 0.0, axis=0) for key, l in likelihoods.items()}
     results.update("counts", counts)
 
+    logging.info("Finding centroid dispersion statistics")
     centroid_per_modality = {}
     dispersion_centroid_per_modality = {}
     mean_rewards = {}
@@ -438,6 +444,7 @@ def comparison_analysis(
     results.update("proj_mean_rewards", proj_mean_rewards)
     results.update("dispersions_centroid", dispersion_centroid_per_modality)
 
+    logging.info("Finding mean dispersion")
     dispersion_mean = {
         key: mean_geodesic_dispersion(
             reward_samples=reward_samples,
@@ -450,6 +457,7 @@ def comparison_analysis(
     results.update("dispersion_mean", dispersion_mean)
 
     if true_reward is not None:
+        logging.info("Finding gt dispersion")
         true_reward_index = np.where(np.all(reward_samples == true_reward, axis=1))[0][
             0
         ]
