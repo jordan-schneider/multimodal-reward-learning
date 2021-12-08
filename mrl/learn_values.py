@@ -15,10 +15,17 @@ from procgen import ProcgenGym3Env
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import trange  # type: ignore
 
-from mrl.offline_buffer import RlDataset
+from mrl.dataset.offline_buffer import RlDataset
 from mrl.online_batcher import BatchGenerator
-from mrl.util import (EnvName, find_best_gpu, find_policy_path, make_env,
-                      procgen_rollout, reinit)
+from mrl.util import (
+    EnvName,
+    find_best_gpu,
+    find_policy_path,
+    make_env,
+    procgen_rollout,
+    reinit,
+    setup_logging,
+)
 from mrl.writer import SequentialWriter
 
 
@@ -36,13 +43,17 @@ class Checkpointer:
         if len(models) == 0 or overwrite:
             return None, 0
 
-        model_iters = [re.search(f"{self.name}\.([0-9]+)\.jd", model.name).group(1) for model in models]
+        model_iters = [
+            re.search(f"{self.name}\.([0-9]+)\.jd", model.name).group(1)
+            for model in models
+        ]
         model_iter = max(model_iters)
         model_path = models[np.argmax(model_iters)]
         logging.info(f"Loading Q model from {model_path}")
         latest_model = cast(torch.nn.Module, torch.load(model_path))
 
-        return latest_model, model_iter
+        return latest_model, int(model_iter)
+
 
 class QNetwork(torch.nn.Module):
     def __init__(
@@ -50,7 +61,7 @@ class QNetwork(torch.nn.Module):
         policy: PhasicValueModel,
         n_actions: int,
         discount_rate: float,
-        activation: Literal["relu","leaky","elu"] = "relu",
+        activation: Literal["relu", "leaky", "elu"] = "relu",
         value_init: bool = False,
         device: Optional[torch.device] = None,
     ):
@@ -59,6 +70,7 @@ class QNetwork(torch.nn.Module):
         self.discount_rate = discount_rate
 
         self.enc = deepcopy(policy.get_encoder(policy.true_vf_key))
+        # TODO: Put set_activation code back in somehow
         self.enc.cnn.set_activation(activation)
         if not value_init:
             reinit(self.enc)
@@ -165,12 +177,14 @@ def train_q(
         final_states = batch.states[:-1][batch.dones]
         if len(final_states) > 0:
             logging.debug("Processing final states")
-            
+
             if __debug__:
-                pos_states = torch.sum(final_states[:,0,0,0] > 0)
-                neg_states = torch.sum(final_states[:,0,0,0] < 0)
+                pos_states = torch.sum(final_states[:, 0, 0, 0] > 0)
+                neg_states = torch.sum(final_states[:, 0, 0, 0] < 0)
                 assert pos_states + neg_states == len(final_states)
-                logging.debug(f"{pos_states} positive states, {neg_states} negative states")
+                logging.debug(
+                    f"{pos_states} positive states, {neg_states} negative states"
+                )
 
             q_pred_final = q.state_value(final_states).cpu()
             writer.add_histogram("train/q_pred_final", q_pred_final)
@@ -188,7 +202,10 @@ def train_q(
         if val_counter > val_period:
             val_counter = 0
             val_loss = eval_q_rmse(
-                q_fn=q.forward, data=val_data, discount_rate=q.discount_rate, writer=writer
+                q_fn=q.forward,
+                data=val_data,
+                discount_rate=q.discount_rate,
+                writer=writer,
             )
             writer.add_scalar("val/rmse", val_loss)
             val_log_step += 1
@@ -200,7 +217,7 @@ def train_q(
                 # params, as opposed to "mul" and "add", which would make new tensors.
                 p_targ.data.mul_(target_mixing_coeff)
                 p_targ.data.add_((1 - target_mixing_coeff) * p.data)
-        
+
         if batch_counter % checkpoint_period == 0:
             checkpointer.save(model=q, counter=batch_counter)
 
@@ -230,7 +247,9 @@ def train_q_trunc_returns(
         n = len(states)
 
         optim.zero_grad()
-        q_pred = q.forward(states.to(device=q.device), actions.to(device=q.device)).cpu()
+        q_pred = q.forward(
+            states.to(device=q.device), actions.to(device=q.device)
+        ).cpu()
         logging.debug(f"q_pred={q_pred}")
         assert q_pred.shape == (n,), f"q_pred={q_pred.shape} not expected ({n})"
         loss = torch.sum((q_pred - partial_returns) ** 2)
@@ -275,9 +294,13 @@ def get_rollouts(
         val_missing = val_env_steps
 
     if val_missing > 0:
-        states, actions, rewards, firsts = procgen_rollout(env, policy, val_missing, tqdm=True)
+        states, actions, rewards, firsts = procgen_rollout(
+            env, policy, val_missing, tqdm=True
+        )
         if val_data is not None:
-            val_data.append_gym3(states=states, actions=actions, rewards=rewards, firsts=firsts)
+            val_data.append_gym3(
+                states=states, actions=actions, rewards=rewards, firsts=firsts
+            )
         else:
             val_data = RlDataset.from_gym3(
                 states=states, actions=actions, rewards=rewards, firsts=firsts
@@ -302,9 +325,9 @@ def learn_q(
     train_env_steps: int = 10_000_000,
     val_env_steps: int = 100_000,
     val_period: int = 2000 * 10,
-    checkpoint_period: int = 10000,
+    checkpoint_period: int = 10_000,
     target_mixing_coeff: float = 0.999,
-    activation: Literal["relu", "leaky","elu"] = "relu",
+    activation: Literal["relu", "leaky", "elu"] = "relu",
     trunc_returns: bool = False,
     trunc_horizon: Optional[int] = None,
     overwrite_validation: bool = False,
@@ -330,7 +353,9 @@ def learn_q(
     model_outdir = outdir / "value"
     model_outdir.mkdir(parents=True, exist_ok=True)
     model_name = (
-        f"q_model_{policy_iter}" if not trunc_returns else f"q_model_trunc_{policy_iter}"
+        f"q_model_{policy_iter}"
+        if not trunc_returns
+        else f"q_model_trunc_{policy_iter}"
     )
     checkpointer = Checkpointer(path=model_outdir, name=model_name, extension="jd")
     model_path = model_outdir / (model_name + ".jd")
@@ -338,7 +363,10 @@ def learn_q(
     env = make_env(env_name, num=1)
 
     if not overwrite_model and model_path.exists():
-        q = cast(QNetwork, checkpointer.load())
+        q = cast(QNetwork, checkpointer.load()[0])
+        assert (
+            q is not None
+        ), f"Cannot load q network despite something being at model_path={model_path}"
     else:
         q = QNetwork(
             policy,
@@ -422,7 +450,11 @@ def eval_q_rmse(
 ) -> float:
     loss = 0.0
     for traj in data.trajs(include_incomplete=False):
-        assert traj.states is not None and traj.actions is not None and traj.rewards is not None
+        assert (
+            traj.states is not None
+            and traj.actions is not None
+            and traj.rewards is not None
+        )
         assert len(traj.states) > 0, "0 states in this traj"
         assert len(traj.actions) > 0, "0 actions in this traj"
         assert len(traj.rewards) > 0, "0 rewards in this traj"
@@ -460,13 +492,19 @@ def eval_q_partial_rmse(
         np.array_split(actions, len(actions) // 100),
         np.array_split(partial_returns, len(partial_returns) // 100),
     ):
-        values = q_fn(state_batch.to(device=device), action_batch.to(device=device)).detach().cpu()
+        values = (
+            q_fn(state_batch.to(device=device), action_batch.to(device=device))
+            .detach()
+            .cpu()
+        )
         errors = values - return_batch
         loss += torch.sqrt(torch.mean(errors ** 2)).item()
     return loss
 
 
-def eval_q(datadir: Path, discount_rate: float = 0.999, env_interactions: int = 1_000_000) -> None:
+def eval_q(
+    datadir: Path, discount_rate: float = 0.999, env_interactions: int = 1_000_000
+) -> None:
     datadir = Path(datadir)
     policy_path, iter = find_policy_path(datadir / "models")
     q_path = datadir / f"q_model_{iter}.jd"
@@ -480,7 +518,9 @@ def eval_q(datadir: Path, discount_rate: float = 0.999, env_interactions: int = 
     writer = SequentialWriter(SummaryWriter(log_dir=datadir / "logs" / "eval_q"))
 
     logging.info("Gathering environment interactions")
-    data = RlDataset.from_gym3(*procgen_rollout(env, policy, env_interactions, tqdm=True))
+    data = RlDataset.from_gym3(
+        *procgen_rollout(env, policy, env_interactions, tqdm=True)
+    )
     pkl.dump(data, open(datadir / "eval_rollouts.pkl", "wb"))
 
     logging.info("Evaluating loss")
@@ -530,7 +570,9 @@ def refine_v(
     model_outdir = outdir / "value"
     model_outdir.mkdir(parents=True, exist_ok=True)
     model_outname = (
-        f"v_model_{policy_iter}.jd" if not trunc_returns else f"v_model_trunc_{policy_iter}.jd"
+        f"v_model_{policy_iter}.jd"
+        if not trunc_returns
+        else f"v_model_trunc_{policy_iter}.jd"
     )
     outpath = model_outdir / model_outname
 
@@ -641,7 +683,9 @@ def eval_v_partial_rmse(
     discount_rate: float,
     device: torch.device,
 ) -> float:
-    states, _, partial_returns = data.truncated_returns(horizon=k, discount_rate=discount_rate)
+    states, _, partial_returns = data.truncated_returns(
+        horizon=k, discount_rate=discount_rate
+    )
 
     loss = 0.0
     for state_batch, return_batch in zip(

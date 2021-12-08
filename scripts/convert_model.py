@@ -12,8 +12,8 @@ def main(rootdir: Path) -> None:
         model = torch.load(file, map_location="cpu")
         if isinstance(model, torch.nn.Module):
             print(file)
-            torch.save(model.state_dict(), file)
             os.rename(file, file.with_suffix(file.suffix + ".old"))
+            torch.save(model.state_dict(), file)
 
 
 if __name__ == "__main__":

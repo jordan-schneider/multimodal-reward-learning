@@ -13,10 +13,10 @@ from phasic_policy_gradient.ppg import PhasicValueModel
 from procgen import ProcgenGym3Env
 from tqdm import trange  # type: ignore
 
+from mrl.dataset.offline_buffer import RlDataset
 from mrl.envs import Miner
 from mrl.envs.probe_envs import OneActionNoObsOneTimestepOneReward as Probe1
 from mrl.envs.probe_envs import OneActionTwoObsOneTimestepDeterministicReward as Probe2
-from mrl.offline_buffer import RlDataset
 
 
 def dump(obj: Any, path: Path) -> None:
@@ -282,7 +282,7 @@ def procgen_rollout_dataset(
 def find_policy_path(
     policydir: Path, overwrite: bool = False
 ) -> Tuple[Optional[Path], int]:
-    models = list(policydir.glob("model[0-9]*.jd"))
+    models = list(policydir.glob("model*.jd"))
     if len(models) == 0 or overwrite:
         return None, 0
 

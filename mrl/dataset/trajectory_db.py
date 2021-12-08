@@ -1,0 +1,182 @@
+from itertools import product
+from pathlib import Path
+from typing import Dict, List, Literal, Optional, Sequence, Tuple, Union
+
+import arrow
+import numpy as np
+import pandas as pd  # type: ignore
+
+
+def count_items(arr: np.ndarray, item_shape: Tuple[int, ...]) -> int:
+    if len(arr.shape) == len(item_shape) + 1 and arr.shape[1:] == item_shape:
+        return arr.shape[0]
+    elif arr.shape == item_shape:
+        return 0
+
+    raise ValueError(f"arr shape={arr.shape} incompatible with item shape={item_shape}")
+
+
+def not_all_equal(x: Sequence) -> bool:
+    return any(x[0] == x[i] for i in range(1, len(x)))
+
+
+def batch(
+    xs: Sequence[Union[Sequence[np.ndarray], np.ndarray, None]]
+) -> List[Optional[Sequence[np.ndarray]]]:
+    outs: List[Optional[Sequence[np.ndarray]]] = []
+    for x in xs:
+        if isinstance(x, np.ndarray):
+            outs.append([x])
+        else:
+            outs.append(x)
+    return outs
+
+
+class FeatureDataset:
+    def __init__(self, rng: np.random.Generator):
+        self.df = pd.DataFrame(
+            columns=[
+                "policy",
+                "datetime",
+                "length",
+                "states",
+                "features",
+                "actions",
+                "total_feature",
+            ]
+        )
+        self.states: Dict[str, Optional[np.ndarray]] = {}
+
+        self.rng = rng
+
+    def init_df(self):
+        self.df["policy"] = self.df["policy"].astype("string")
+        self.df["length"] = self.df["length"].astype("int")
+
+    def append(
+        self,
+        policy: Path,
+        time: arrow.Arrow,
+        states: Union[Sequence[np.ndarray], np.ndarray, None] = None,
+        state_features: Union[Sequence[np.ndarray], np.ndarray, None] = None,
+        actions: Union[Sequence[np.ndarray], np.ndarray, None] = None,
+    ) -> None:
+        if states is None and state_features is None and actions is None:
+            raise ValueError(
+                "Must provide at least one of states, state_features, or actions."
+            )
+        types = [type(a) for a in (states, state_features, actions) if a is not None]
+        if not_all_equal(types):
+            raise ValueError(f"Provided types are not all the same: {types}")
+
+        state_by_traj, feature_by_traj, action_by_traj = batch(
+            (states, state_features, actions)
+        )
+
+        lens = [
+            len(a)
+            for a in (state_by_traj, feature_by_traj, action_by_traj)
+            if a is not None
+        ]
+        if not_all_equal(lens):
+            raise ValueError(
+                f"Was given unequal number of trajectory components: {lens}"
+            )
+        n_trajs = lens[0]
+
+        init = len(self.df) == 0
+
+        for traj in range(n_trajs):
+            traj_state = state_by_traj[traj] if state_by_traj is not None else None
+            traj_feature = (
+                feature_by_traj[traj] if feature_by_traj is not None else None
+            )
+            traj_action = action_by_traj[traj] if action_by_traj is not None else None
+
+            lens = [
+                len(arr)
+                for arr in (traj_state, traj_feature, traj_action)
+                if arr is not None
+            ]
+            if not_all_equal(lens):
+                raise ValueError(f"Length of trajectory {traj} not consistent: {lens}")
+
+            self.df.loc[len(self.df)] = (
+                str(policy),
+                time.datetime,
+                lens[0],
+                traj_state,
+                traj_feature,
+                traj_action,
+                np.sum(traj_feature, axis=0) if traj_feature is not None else None,
+            )
+            self.states[str(policy)] = None
+
+        if init:
+            self.init_df()
+
+    def get_state_comparisons(
+        self, n: int, how: Literal["even"] = "even"
+    ) -> np.ndarray:
+        if n <= 0:
+            return np.array([])
+
+        if how == "even":
+            return self.get_even_states(n)
+        else:
+            raise NotImplementedError("Only even sampling supported at the moment")
+
+    def get_trajectory_comparisons(
+        self, n: int, how: Literal["even"] = "even"
+    ) -> np.ndarray:
+        if n <= 0:
+            return np.array([])
+
+        if how == "even":
+            return self.get_even_trajs(n)
+
+    def get_policy_states(self, policy: str) -> np.ndarray:
+        if (out := self.states.get(policy, None)) is not None:
+            return out
+
+        states_of_policy = self.df[self.df["policy"] == policy]
+        out = np.concatenate(states_of_policy["features"].to_numpy(), axis=0)
+
+        self.states[policy] = out
+        return out
+
+    def get_even_states(self, n: int) -> np.ndarray:
+        policies = self.df["policy"].unique()
+        n_policies = len(policies)
+        states_per_model_pair = max(1, n // (n_policies ** 2))
+
+        out = []
+        for first, second in product(policies, policies):
+            firsts = self.rng.choice(
+                self.get_policy_states(first),
+                size=states_per_model_pair,
+                replace=False,
+            )
+            seconds = self.rng.choice(
+                self.get_policy_states(second),
+                size=states_per_model_pair,
+                replace=False,
+            )
+            out.append(firsts - seconds)
+        return np.concatenate(out, axis=0)
+
+    def get_even_trajs(self, n: int) -> np.ndarray:
+        policies = self.df["policy"].unique()
+        n_policies = len(policies)
+        trajs_per_model_pair = max(1, n // (n_policies ** 2))
+
+        out = []
+        for first, second in product(policies, policies):
+            firsts = self.df[self.df["policy"] == first]["total_feature"].sample(
+                n=trajs_per_model_pair, random_state=self.rng
+            )
+            seconds = self.df[self.df["policy"] == second]["total_feature"].sample(
+                n=trajs_per_model_pair, random_state=self.rng
+            )
+            out.append(firsts - seconds)
+        return np.stack(out)
