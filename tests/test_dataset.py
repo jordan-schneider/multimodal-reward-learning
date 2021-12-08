@@ -6,7 +6,7 @@ import torch
 from hypothesis import given
 from hypothesis.extra.numpy import arrays
 from hypothesis.strategies import booleans, floats, integers, just, shared, tuples
-from mrl.offline_buffer import RlDataset, SarsDataset
+from mrl.dataset.offline_buffer import RlDataset, SarsDataset
 from torch.testing import assert_equal
 
 
@@ -18,7 +18,9 @@ normal_floats = floats(allow_nan=False, allow_infinity=False)
 traj_length = shared(integers(1, 100))
 
 states_strategy = arrays(
-    shape=tuples(traj_length, just(64), just(64), just(3)), elements=normal_floats, dtype=float
+    shape=tuples(traj_length, just(64), just(64), just(3)),
+    elements=normal_floats,
+    dtype=float,
 )
 actions_strategy = arrays(
     shape=traj_length, elements=integers(min_value=0, max_value=15), dtype=int
@@ -36,7 +38,10 @@ dones_strategy = arrays(shape=traj_length, elements=booleans(), dtype=bool).filt
     dones_np=dones_strategy,
 )
 def test_sars_dataset_index(
-    states_np: np.ndarray, actions_np: np.ndarray, rewards_np: np.ndarray, dones_np: np.ndarray
+    states_np: np.ndarray,
+    actions_np: np.ndarray,
+    rewards_np: np.ndarray,
+    dones_np: np.ndarray,
 ) -> None:
     logging.basicConfig(level="DEBUG")
     states, actions, rewards, dones = np2t(states_np, actions_np, rewards_np, dones_np)
@@ -46,7 +51,9 @@ def test_sars_dataset_index(
     for dataset_index in range(l):
         while dones[raw_index]:
             raw_index += 1
-        actual_states, actual_actions, actual_rewards, actual_nextstates = dataset[dataset_index]
+        actual_states, actual_actions, actual_rewards, actual_nextstates = dataset[
+            dataset_index
+        ]
         assert_equal(
             actual_states,
             states[raw_index],
@@ -71,14 +78,19 @@ def test_sars_dataset_index(
         raw_index += 1
 
 
-@given(timesteps=integers(min_value=1, max_value=1000), n_envs=integers(min_value=1, max_value=10))
+@given(
+    timesteps=integers(min_value=1, max_value=1000),
+    n_envs=integers(min_value=1, max_value=10),
+)
 def test_trajs(timesteps: int, n_envs: int) -> None:
     states = np.empty((timesteps, n_envs, 64, 64, 3))
     actions = np.empty((timesteps, n_envs), dtype=np.int8)
     rewards = np.empty((timesteps, n_envs))
     firsts = np.ones((timesteps, n_envs), dtype=bool)
 
-    data = RlDataset.from_gym3(states=states, actions=actions, rewards=rewards, firsts=firsts)
+    data = RlDataset.from_gym3(
+        states=states, actions=actions, rewards=rewards, firsts=firsts
+    )
     n_trajs = 0
     for traj in data.trajs(include_incomplete=True):
         n_trajs += 1

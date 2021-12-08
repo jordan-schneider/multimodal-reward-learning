@@ -450,6 +450,7 @@ class Generator:
         return data_a.trajs(), data_b.trajs()
 
 
+# TODO: Move to own file
 class RandomPolicy(PhasicValueModel):
     def __init__(self, actype: ValType, num: int):
         self.actype = actype

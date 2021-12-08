@@ -6,7 +6,7 @@ import torch
 from gym3 import Env  # type: ignore
 from phasic_policy_gradient.ppg import PhasicValueModel
 
-from mrl.offline_buffer import RlDataset, SarsDataset
+from mrl.dataset.offline_buffer import RlDataset, SarsDataset
 from mrl.util import procgen_rollout
 
 
