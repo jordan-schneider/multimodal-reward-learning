@@ -19,6 +19,12 @@ from mrl.envs.probe_envs import OneActionNoObsOneTimestepOneReward as Probe1
 from mrl.envs.probe_envs import OneActionTwoObsOneTimestepDeterministicReward as Probe2
 
 
+def set_seed(seed: int) -> None:
+    "Sets numpy and torch random seeds. Use np.random.default_rng() for finer control of numpy randomness."
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+
 def dump(obj: Any, path: Path) -> None:
     def is_torch(obj):
         torch_classes = (torch.Tensor, torch.nn.Module)

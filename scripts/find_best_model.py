@@ -1,50 +1,103 @@
 import pickle as pkl
 import re
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Tuple
 
 import fire  # type: ignore
 import numpy as np
 import torch
 from gym3 import ExtractDictObWrapper  # type: ignore
 from mrl.envs import Miner
-from mrl.util import procgen_rollout_features
+from mrl.util import find_best_gpu, procgen_rollout_dataset
+from phasic_policy_gradient.train import make_model
 
 
-def main(rootdir: Path, out: Path, horizon: int = 10_000) -> None:
-    env = Miner(np.ones(5), 1)
+def main(
+    rootdir: Path,
+    out: Path,
+    horizon: int = 10_000,
+    seed: int = 0,
+    overwrite: bool = False,
+    use_only_last: bool = True,
+    print_all: bool = False,
+) -> None:
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    env = Miner(np.ones(5), num=1, rand_seed=seed)
     env = ExtractDictObWrapper(env, "rgb")
+
+    policy = make_model(env, arch="shared")
 
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    finished_trajs: Dict[Path, int] = {}
+    finished_trajs: Dict[Path, Tuple[int, int]] = {}
     if out.exists():
         finished_trajs = pkl.load(out.open("rb"))
 
     rootdir = Path(rootdir)
-    for model_path in rootdir.rglob("*"):
-        # print(model_path)
-        if model_path in finished_trajs.keys():
+    model_paths = rootdir.rglob("*") if rootdir.is_dir() else [rootdir]
+    for model_path in model_paths:
+        if not overwrite and model_path in finished_trajs.keys():
+            print(f"Skipping existing model {model_path}")
             continue
-        if re.search("model(9[0-9][059]|1000)\.jd", str(model_path)) is None:
+        if (
+            use_only_last
+            and re.search("model(9[0-9][059]|1000)\.jd$", str(model_path)) is None
+        ):
+            # print(f"Skipping non model file {model_path}")
             continue
         print(f"Loading model from {model_path}")
-        device = torch.device("cuda:0")
-        policy = torch.load(model_path, map_location=device)
-        policy.device = device
+        device = find_best_gpu()
+        policy.load_state_dict(torch.load(model_path, map_location=device))
+        policy = policy.to(device=device)
 
-        data = procgen_rollout_features(env, policy, timesteps=horizon, tqdm=True)
-        finished_trajs[model_path] = np.sum(data[:1] != 0)
+        data = procgen_rollout_dataset(
+            env, policy, timesteps=horizon, flags=["feature", "first"], tqdm=True
+        )
+        assert data.dones is not None
+        assert data.features is not None
+        finished_trajs[model_path] = (np.sum(data.features.numpy()[:, 1] != 0), horizon)
+
+        if print_all:
+            print(f"{model_path} finished {finished_trajs[model_path][0]}/{horizon}")
 
         pkl.dump(finished_trajs, out.open("wb"))
 
-    best_path = max(finished_trajs, key=finished_trajs.get)
-    finishes = finished_trajs[best_path]
+    best_path, finishes, _ = get_best(finished_trajs)
     print(
         f"Best model with {finishes}/{horizon} {finishes / horizon * 100:0.2f}% at {best_path}"
     )
 
 
+def get_best(finished_trajs: Dict[Path, Tuple[int, int]]) -> Tuple[Path, int, int]:
+    best_path = max(
+        finished_trajs,
+        key=lambda p: finished_trajs[p][0] / finished_trajs[p][1],
+    )
+    finishes, horizon = finished_trajs[best_path]
+    return best_path, finishes, horizon
+
+
+def print_current_best(finishes_path: Path) -> None:
+    finished_trajs = pkl.load(open(finishes_path, "rb"))
+    best_path, finishes, horizon = get_best(finished_trajs)
+    print(
+        f"Best model with {finishes}/{horizon} {finishes / horizon * 100:0.2f}% at {best_path}"
+    )
+
+
+def change_horizon(path: Path, horizon: int) -> None:
+    finished_trajs = pkl.load(open(path, "rb"))
+    for key, value in finished_trajs.items():
+        if isinstance(value, tuple):
+            value = value[0]
+        finished_trajs[key] = (value, horizon)
+    pkl.dump(finished_trajs, open(path, "wb"))
+
+
 if __name__ == "__main__":
-    fire.Fire(main)
+    fire.Fire(
+        {"find": main, "print": print_current_best, "fix-horizon": change_horizon}
+    )
