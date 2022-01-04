@@ -13,6 +13,7 @@ from typing import (
     Union,
 )
 
+import bitmath
 import fire  # type: ignore
 import joypy  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
@@ -167,6 +168,7 @@ def compare_modalities(
     n_trials: int = 1,
     plot_individual: bool = False,
     save_all: bool = False,
+    max_ram: str = "100G",
     seed: int = 0,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> None:
@@ -202,12 +204,14 @@ def compare_modalities(
 
         np.save(outdir / "reward_samples.npy", reward_samples)
 
+        max_ram_nbytes = int(bitmath.parse_string_unsafe(max_ram).bytes)
         trial_batches = load_comparison_diffs(
             paths=paths,
             max_comparisons=max_comparisons,
             n_trials=n_trials,
             frac_complete=frac_complete,
             use_done_feature=use_done_feature,
+            ram_free=max_ram_nbytes,
             rng=rng,
         )
 
@@ -288,13 +292,11 @@ def load_comparison_diffs(
     n_trials: int,
     frac_complete: Optional[float],
     use_done_feature: bool,
+    ram_free: int,
     rng: np.random.Generator,
 ) -> Generator[Dict[str, np.ndarray], None, None]:
     all_diffs = {
-        key: np_gather(
-            in_path.parent,
-            in_path.name,
-        )
+        key: np_gather(in_path.parent, in_path.name, ram_free // len(paths))
         for key, in_path in paths.items()
     }
 
