@@ -307,6 +307,7 @@ def find_best_gpu() -> torch.device:
 def np_gather(
     indir: Path,
     name: str,
+    max_nbytes: int = -1,
 ) -> np.ndarray:
     paths = [
         path
@@ -317,10 +318,13 @@ def np_gather(
         raise FileNotFoundError(f"No {name} files found in {indir}")
     shards = []
 
-    while len(paths) > 0:
+    nbytes = 0
+    while len(paths) > 0 and (max_nbytes == -1 or nbytes < max_nbytes):
         path = paths.pop()
         array = np.load(path)
-        shards.append(array[np.any(array != 0, axis=1)])
+        nonzero_array = array[np.any(array != 0, axis=1)]
+        nbytes += nonzero_array.nbytes
+        shards.append(nonzero_array)
     data = np.concatenate(shards)
     logging.info(f"Loaded array with shape {data.shape} from {indir}")
     return data
