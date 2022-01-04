@@ -1,7 +1,17 @@
 import logging
 from math import ceil
 from pathlib import Path
-from typing import Any, Dict, Final, Literal, Optional, Sequence, Union
+from typing import (
+    Any,
+    Dict,
+    Final,
+    Generator,
+    Literal,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import fire  # type: ignore
 import joypy  # type: ignore
@@ -15,224 +25,35 @@ from mrl.reward_model.boltzmann import boltzmann_likelihood
 from mrl.reward_model.hinge import hinge_likelihood
 from mrl.reward_model.logspace import cum_likelihoods
 from mrl.sphere import find_centroid
-from mrl.util import dump, load, np_gather, setup_logging
+from mrl.util import dump, load, np_gather, sample_data, setup_logging
+
+# TODO: Take classes out of this file.
 
 
-def one_modality_analysis(
-    in_path: Path,
-    outdir: Path,
-    n_samples: int = 1000,
-    max_preferences: int = 1000,
-    frac_complete: float = 0.1,
-    temperature: float = 1.0,
-    approximate: bool = False,
-    norm_diffs: bool = False,
-    use_hinge: bool = False,
-    reward_path: Optional[Path] = None,
-    seed: int = 0,
-    verbosity: Literal["INFO", "DEBUG"] = "INFO",
-) -> None:
-    setup_logging(level=verbosity)
-    in_path, outdir = Path(in_path), Path(outdir)
-    outdir.mkdir(parents=True, exist_ok=True)
-    diffs = np_gather(in_path.parent, in_path.name, max_preferences, frac_complete)
-    true_reward = np.load(reward_path) if reward_path is not None else None
+class AlignedRewardSet:
+    def __init__(
+        self, path: Path, true_reward: np.ndarray, use_done_feature: bool = False
+    ) -> None:
+        self.diffs = np.load(path)
 
-    analysis(
-        outdir=outdir,
-        diffs=diffs,
-        n_reward_samples=n_samples,
-        rng=np.random.default_rng(seed=seed),
-        temperature=temperature,
-        approximate=approximate,
-        norm_diffs=norm_diffs,
-        use_hinge=use_hinge,
-        true_reward=true_reward,
-    )
+        assert np.all(true_reward @ self.diffs.T >= 0)
+        self.diffs = self.diffs[true_reward @ self.diffs.T > 1e-16]
+        assert np.all(true_reward @ self.diffs.T > 1e-16)
 
+        self.true_reward = true_reward
 
-def analysis_joint(
-    outdir: Path,
-    traj_path: Optional[Path] = None,
-    state_path: Optional[Path] = None,
-    action_path: Optional[Path] = None,
-    reward_path: Optional[Path] = None,
-    n_reward_samples: int = 100_000,
-    data_per_modality: int = 1000,
-    frac_complete: float = 0.1,
-    temperature: float = 1.0,
-    approximate: bool = False,
-    norm_diffs: bool = False,
-    use_hinge: bool = False,
-    seed: int = 0,
-    verbosity: Literal["DEBUG", "INFO"] = "INFO",
-) -> None:
-    outdir = Path(outdir)
-    outdir.mkdir(parents=True, exist_ok=True)
-    rng = np.random.default_rng(seed=seed)
-    setup_logging(level=verbosity)
+    def prob_aligned(self, rewards: np.ndarray, densities: np.ndarray) -> np.ndarray:
+        assert densities.shape[0] == rewards.shape[0]
+        assert len(densities.shape) <= 2
 
-    outname = ""
-    paths = []
-    if traj_path is not None:
-        paths.append(Path(traj_path))
-        outname += "traj."
-    if state_path is not None:
-        paths.append(Path(state_path))
-        outname += "state."
-    if action_path is not None:
-        paths.append(Path(action_path))
-        outname += "action."
-    outname += "dispersion.png"
+        aligned_reward_indices = np.all((rewards @ self.diffs.T) > 0, axis=1)
+        prob_aligned = np.sum(densities[aligned_reward_indices], axis=0)
+        if np.sum(aligned_reward_indices) == 0:
+            logging.warning("No aligned rewards")
+        elif np.allclose(prob_aligned, 0, atol=0.001):
+            logging.debug("There are some aligned rewards, but all likelihoods are 0")
 
-    diffs = np.concatenate(
-        [
-            np_gather(
-                path.parent, path.name, n=data_per_modality, frac_complete=frac_complete
-            )
-            for path in paths
-        ]
-    )
-    rng.shuffle(diffs)
-
-    true_reward = np.load(reward_path) if reward_path is not None else None
-
-    analysis(
-        outdir,
-        diffs,
-        n_reward_samples,
-        rng,
-        temperature=temperature,
-        approximate=approximate,
-        norm_diffs=norm_diffs,
-        use_hinge=use_hinge,
-        true_reward=true_reward,
-    )
-
-
-def compare_modalities(
-    outdir: Path,
-    traj_path: Optional[Path] = None,
-    state_path: Optional[Path] = None,
-    reward_path: Optional[Path] = None,
-    aligned_reward_set_path: Optional[Path] = None,
-    n_samples: int = 100_000,
-    max_comparisons: int = 1000,
-    frac_complete: float = 0.1,
-    norm_diffs: bool = False,
-    use_hinge: bool = False,
-    use_shift: bool = False,
-    n_trials: int = 1,
-    plot_individual: bool = False,
-    save_all: bool = False,
-    seed: int = 0,
-    verbosity: Literal["INFO", "DEBUG"] = "INFO",
-) -> None:
-    try:
-        outdir = Path(outdir)
-        outdir.mkdir(parents=True, exist_ok=True)
-        setup_logging(outdir=outdir, level=verbosity)
-
-        logging.info(
-            f"outdir={outdir}, traj_path={traj_path}, state_path={state_path}, reward_path={reward_path}, aligned_reward_set_path={aligned_reward_set_path} n_samples={n_samples}, max_comparisons={max_comparisons}, frac_complete={frac_complete}, norm_diffs={norm_diffs}, use_hinge={use_hinge}, use_shift={use_shift}, n_trials={n_trials}, save_all={save_all}, seed={seed}, verbosity={verbosity}"
-        )
-
-        rng = np.random.default_rng(seed=seed)
-
-        paths: Dict[str, Path] = {}
-        if traj_path is not None:
-            logging.info(f"Loading trajectories from {traj_path}")
-            paths["traj"] = Path(traj_path)
-        if state_path is not None:
-            logging.info(f"Loading states from {state_path}")
-            paths["state"] = Path(state_path)
-
-        if reward_path is not None:
-            logging.info(f"Loading ground truth reward from {reward_path}")
-            true_reward = np.load(reward_path)
-
-            if aligned_reward_set_path is not None:
-                aligned_reward_set = AlignedRewardSet(
-                    Path(aligned_reward_set_path), true_reward
-                )
-
-        logging.info(f"Generating {n_samples} reward samples on the sphere")
-        NDIMS: Final = 5
-        reward_samples = cover_sphere(n_samples, NDIMS, rng)
-
-        if reward_path is not None:
-            logging.info("Adding ground truth reward as reward sample")
-            reward_samples = np.concatenate((reward_samples, [true_reward]), axis=0)
-
-        np.save(outdir / "reward_samples.npy", reward_samples)
-
-        results = Results(outdir)
-        for trial in range(n_trials):
-            logging.info(f"Starting trial-{trial}")
-            results.start(f"trial-{trial}")
-
-            diffs = load_comparison_diffs(paths, max_comparisons, frac_complete, rng)
-
-            if norm_diffs:
-                logging.info("Normalizing difference vectors")
-                diffs = {key: normalize(diff) for key, diff in diffs.items()}
-
-            shuffled_diffs = {}
-            for key, diff in diffs.items():
-                shuffled_diffs[key] = diff[rng.permutation(diffs["joint"].shape[0])]
-
-            try:
-                results = comparison_analysis(
-                    reward_samples=reward_samples,
-                    diffs=shuffled_diffs,
-                    use_hinge=use_hinge,
-                    use_shift=use_shift,
-                    results=results,
-                    true_reward=true_reward if reward_path is not None else None,
-                    aligned_reward_set=aligned_reward_set
-                    if aligned_reward_set_path is not None
-                    else None,
-                    save_all=save_all,
-                )
-                if plot_individual:
-                    plot_comparison(results, use_gt=reward_path is not None)
-            except AssertionError as e:
-                logging.exception(e)
-            results.close()
-
-        logging.info("Finished all trials, plotting aggregate results")
-        plot_comparisons(results, outdir)
-    except Exception as e:
-        logging.exception(e)
-
-
-def post_hoc_plot_comparisons(outdir: Path) -> None:
-    outdir = Path(outdir)
-    results = Results(outdir=outdir, load_contents=True)
-    plot_comparisons(results, outdir)
-
-
-def load_comparison_diffs(
-    paths: Dict[str, Path],
-    max_comparisons: int,
-    frac_complete: float,
-    rng: np.random.Generator,
-):
-    diffs = {
-        key: np_gather(
-            in_path.parent,
-            in_path.name,
-            n=max_comparisons,
-            rng=rng,
-            frac_complete=frac_complete,
-        )
-        for key, in_path in paths.items()
-    }
-    diffs["joint"] = np.concatenate(
-        [diff[: max_comparisons // len(paths)] for diff in diffs.values()]
-    )
-    rng.shuffle(diffs["joint"])
-    return diffs
+        return prob_aligned
 
 
 class Results:
@@ -330,28 +151,183 @@ class Results:
         self.current_experiment = None
 
 
-class AlignedRewardSet:
-    def __init__(self, path: Path, true_reward: np.ndarray) -> None:
-        self.diffs = np.load(path)
-        assert np.all(true_reward @ self.diffs.T >= 0)
-        self.diffs = self.diffs[true_reward @ self.diffs.T > 1e-16]
-        assert np.all(true_reward @ self.diffs.T > 1e-16)
+def compare_modalities(
+    outdir: Path,
+    traj_path: Optional[Path] = None,
+    state_path: Optional[Path] = None,
+    reward_path: Optional[Path] = None,
+    aligned_reward_set_path: Optional[Path] = None,
+    n_samples: int = 100_000,
+    max_comparisons: int = 1000,
+    frac_complete: Optional[float] = None,
+    norm_diffs: bool = False,
+    use_hinge: bool = False,
+    use_shift: bool = False,
+    use_done_feature: bool = False,
+    n_trials: int = 1,
+    plot_individual: bool = False,
+    save_all: bool = False,
+    seed: int = 0,
+    verbosity: Literal["INFO", "DEBUG"] = "INFO",
+) -> None:
+    try:
+        outdir = Path(outdir)
+        outdir.mkdir(parents=True, exist_ok=True)
+        setup_logging(outdir=outdir, level=verbosity)
 
-        self.true_reward = true_reward
+        logging.info(
+            f"outdir={outdir}, traj_path={traj_path}, state_path={state_path}, reward_path={reward_path}, aligned_reward_set_path={aligned_reward_set_path} n_samples={n_samples}, max_comparisons={max_comparisons}, frac_complete={frac_complete}, norm_diffs={norm_diffs}, use_hinge={use_hinge}, use_shift={use_shift}, use_done_feature={use_done_feature}, n_trials={n_trials}, save_all={save_all}, seed={seed}, verbosity={verbosity}"
+        )
 
-    def prob_aligned(self, rewards: np.ndarray, densities: np.ndarray) -> np.ndarray:
-        assert rewards.shape[1] == 5
-        assert densities.shape[0] == rewards.shape[0]
-        assert len(densities.shape) <= 2
+        if not use_done_feature:
+            frac_complete = None
 
-        aligned_reward_indices = np.all((rewards @ self.diffs.T) > 0, axis=1)
-        prob_aligned = np.sum(densities[aligned_reward_indices], axis=0)
-        if np.sum(aligned_reward_indices) == 0:
-            logging.warning("No aligned rewards")
-        elif np.allclose(prob_aligned, 0, atol=0.001):
-            logging.debug("There are some aligned rewards, but all likelihoods are 0")
+        rng = np.random.default_rng(seed=seed)
 
-        return prob_aligned
+        paths = collect_paths(traj_path, state_path)
+
+        true_reward, aligned_reward_set = load_ground_truth(
+            reward_path, aligned_reward_set_path, use_done_feature
+        )
+
+        logging.info(f"Generating {n_samples} reward samples on the sphere")
+        reward_samples = cover_sphere(
+            n_samples=n_samples, ndims=4 + int(use_done_feature), rng=rng
+        )
+
+        if true_reward is not None:
+            logging.info("Adding ground truth reward as reward sample")
+            # We're doing this so we can evalute the likelihood of the gt reward later.
+            reward_samples = np.concatenate((reward_samples, [true_reward]), axis=0)
+
+        np.save(outdir / "reward_samples.npy", reward_samples)
+
+        trial_batches = load_comparison_diffs(
+            paths=paths,
+            max_comparisons=max_comparisons,
+            n_trials=n_trials,
+            frac_complete=frac_complete,
+            use_done_feature=use_done_feature,
+            rng=rng,
+        )
+
+        results = Results(outdir)
+        for trial, diffs in enumerate(trial_batches):
+            logging.info(f"Starting trial-{trial}")
+            results.start(f"trial-{trial}")
+
+            if norm_diffs:
+                logging.info("Normalizing difference vectors")
+                diffs = {key: normalize(diff) for key, diff in diffs.items()}
+
+            try:
+                results = comparison_analysis(
+                    reward_samples=reward_samples,
+                    diffs=diffs,
+                    use_hinge=use_hinge,
+                    use_shift=use_shift,
+                    results=results,
+                    true_reward=true_reward if reward_path is not None else None,
+                    aligned_reward_set=aligned_reward_set
+                    if aligned_reward_set_path is not None
+                    else None,
+                    save_all=save_all,
+                )
+                if plot_individual:
+                    plot_comparison(results, use_gt=reward_path is not None)
+            except AssertionError as e:
+                logging.exception(e)
+            results.close()
+
+        logging.info("Finished all trials, plotting aggregate results")
+        plot_comparisons(results, outdir)
+    except Exception as e:
+        logging.exception(e)
+
+
+def load_ground_truth(
+    reward_path, aligned_reward_set_path, use_done_feature
+) -> Tuple[Optional[np.ndarray], Optional[AlignedRewardSet]]:
+    true_reward, aligned_reward_set = None, None
+    if reward_path is not None:
+        logging.info(f"Loading ground truth reward from {reward_path}")
+        true_reward = np.load(reward_path)
+        if not use_done_feature:
+            true_reward = np.delete(true_reward, 1)
+            true_reward /= np.linalg.norm(true_reward)
+            assert np.allclose(np.linalg.norm(true_reward), 1)
+
+        if aligned_reward_set_path is not None:
+            aligned_reward_set = AlignedRewardSet(
+                Path(aligned_reward_set_path), true_reward
+            )
+
+    return true_reward, aligned_reward_set
+
+
+def collect_paths(traj_path, state_path):
+    paths: Dict[str, Path] = {}
+    if traj_path is not None:
+        logging.info(f"Loading trajectories from {traj_path}")
+        paths["traj"] = Path(traj_path)
+    if state_path is not None:
+        logging.info(f"Loading states from {state_path}")
+        paths["state"] = Path(state_path)
+    return paths
+
+
+def post_hoc_plot_comparisons(outdir: Path) -> None:
+    outdir = Path(outdir)
+    results = Results(outdir=outdir, load_contents=True)
+    plot_comparisons(results, outdir)
+
+
+def load_comparison_diffs(
+    paths: Dict[str, Path],
+    max_comparisons: int,
+    n_trials: int,
+    frac_complete: Optional[float],
+    use_done_feature: bool,
+    rng: np.random.Generator,
+) -> Generator[Dict[str, np.ndarray], None, None]:
+    all_diffs = {
+        key: np_gather(
+            in_path.parent,
+            in_path.name,
+        )
+        for key, in_path in paths.items()
+    }
+
+    for key, diff in all_diffs.items():
+        logging.info(f"Loaded {diff.shape[0]} total {key} diffs")
+
+    if not use_done_feature:
+        for key, diff in all_diffs.items():
+            all_diffs[key] = np.delete(diff, 1, axis=1)
+
+    remaining_diffs = dict(all_diffs)
+    for trial in range(n_trials):
+        trial_diffs: Dict[str, np.ndarray] = {}
+        for key, diff in remaining_diffs.items():
+            logging.debug(
+                f"{diff.shape[0]} of {all_diffs[key].shape[0]} remaining diffs"
+            )
+            sample, indices = sample_data(
+                data=diff,
+                n=max_comparisons,
+                frac_complete=frac_complete,
+                rng=rng,
+            )
+            trial_diffs[key] = sample
+            remaining_diffs[key] = np.delete(diff, indices, axis=0)
+
+        trial_diffs["joint"] = np.concatenate(
+            [diff[: max_comparisons // len(paths)] for diff in trial_diffs.values()]
+        )
+        for key, diff in trial_diffs.items():
+            trial_diffs[key] = diff[rng.permutation(diff.shape[0])]
+
+        yield trial_diffs
 
 
 def comparison_analysis(
@@ -579,7 +555,9 @@ def mean_geodesic_dispersion(
     logging.debug(
         f"reward samples shape={reward_samples.shape}, target rewards shape={target_rewards.shape}"
     )
-    assert np.allclose(np.linalg.norm(reward_samples, axis=1), 1)
+    assert np.allclose(
+        np.linalg.norm(reward_samples, axis=1), 1
+    ), "Reward samples not normalized"
     assert np.allclose(np.linalg.norm(target_rewards, axis=1), 1)
     dots = np.clip(reward_samples @ target_rewards.T, -1.0, 1.0)
 
@@ -973,9 +951,7 @@ def plot_entropies(entropies: Dict[str, np.ndarray], outdir: Path) -> None:
 if __name__ == "__main__":
     fire.Fire(
         {
-            "single": one_modality_analysis,
             "compare": compare_modalities,
-            "joint": analysis_joint,
             "plot-compare": post_hoc_plot_comparisons,
         }
     )

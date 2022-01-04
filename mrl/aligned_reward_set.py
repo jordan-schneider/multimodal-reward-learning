@@ -13,8 +13,7 @@ from scipy.optimize import linprog  # type: ignore
 
 from mrl.envs.miner import Miner
 from mrl.preferences import get_policy
-from mrl.util import (procgen_rollout_dataset, procgen_rollout_features,
-                      setup_logging)
+from mrl.util import procgen_rollout_dataset, procgen_rollout_features, setup_logging
 
 
 def get_features(
@@ -77,10 +76,13 @@ def make_aligned_reward_set(
     n_trajs: int,
     env: Miner,
     policy: PhasicValueModel,
+    use_done_feature: bool = False,
     tqdm: bool = False,
     outdir: Optional[Path] = None,
 ) -> np.ndarray:
     features = get_features(n_states, n_trajs, env, policy, outdir, tqdm)
+    if not use_done_feature:
+        features = np.delete(features, 1, axis=1)
     logging.info(f"Features shape={features.shape}")
 
     logging.info("Finding non-redundant constraint set")
@@ -128,7 +130,7 @@ def make_aligned_reward_set(
             last_new = iterations
             if outdir is not None:
                 np.save(outdir / "aligned_reward_set.npy", diffs)
-            logging.info(f"{len(diffs)} total diffs") 
+            logging.info(f"{len(diffs)} total diffs")
 
         if iterations == 1000:
             stop = time.time()
@@ -192,12 +194,16 @@ def main(
     n_trajs: int = 10_000,
     n_envs: int = 100,
     seed: int = 0,
+    use_done_feature: bool = False,
 ):
-    reward = np.load(reward_path)
     outdir = Path(outdir)
     outdir.mkdir(exist_ok=True, parents=True)
 
     setup_logging(level="INFO", outdir=outdir, name="aligned_reward_set.log")
+
+    reward = np.load(reward_path)
+    if not use_done_feature:
+        reward = np.delete(reward, 1)
 
     torch.manual_seed(seed)
 
@@ -210,6 +216,7 @@ def main(
         n_trajs=n_trajs,
         env=env,
         policy=policy,
+        use_done_feature=use_done_feature,
         tqdm=True,
         outdir=outdir,
     )
