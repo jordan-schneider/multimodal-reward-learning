@@ -322,9 +322,13 @@ def np_gather(
     while len(paths) > 0 and (max_nbytes == -1 or nbytes < max_nbytes):
         path = paths.pop()
         array = np.load(path)
-        nonzero_array = array[np.any(array != 0, axis=1)]
-        nbytes += nonzero_array.nbytes
-        shards.append(nonzero_array)
+        finite_rows = np.all(np.isfinite(array), axis=1)
+        nonzero_rows = np.any(array != 0, axis=1)
+        if not np.all(finite_rows) or not np.all(nonzero_rows):
+            array = array[finite_rows & nonzero_rows]
+            np.save(path, array)
+        nbytes += array.nbytes
+        shards.append(array)
     data = np.concatenate(shards)
     logging.info(f"Loaded array with shape {data.shape} from {indir}")
     return data
