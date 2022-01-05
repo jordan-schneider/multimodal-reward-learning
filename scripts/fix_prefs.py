@@ -5,11 +5,21 @@ from pathlib import Path
 import fire  # type: ignore
 import numpy as np
 
-# Some data was concatenated instead of stacked in a way that flattened the array. This script tries
-# to find all of those files and fixes their shape
+
+def remove_nans(rootdir: Path, name: str) -> None:
+    rootdir = Path(rootdir)
+    for file in rootdir.rglob(f"{name}*"):
+        if re.search(f"{name}(.[0-9]+)?.npy", str(file)) is None:
+            continue
+        arr = np.load(file)
+        arr = arr[np.all(np.isfinite(arr), axis=1)]
+        np.save(file, arr)
 
 
-def main(rootdir: Path, name: str) -> None:
+def fix_shape(rootdir: Path, name: str) -> None:
+    # Some data was concatenated instead of stacked in a way that flattened the array. This script tries
+    # to find all of those files and fixes their shape
+
     rootdir = Path(rootdir)
     for file in rootdir.rglob(f"{name}*"):
         if re.search(f"{name}(.[0-9]+)?.npy", str(file)) is None:
@@ -28,4 +38,4 @@ def main(rootdir: Path, name: str) -> None:
 
 
 if __name__ == "__main__":
-    fire.Fire(main)
+    fire.Fire({"fix-shape": fix_shape, "remove-nans": remove_nans})
