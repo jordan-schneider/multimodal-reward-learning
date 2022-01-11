@@ -16,9 +16,7 @@ from gym3.extract_dict_ob import ExtractDictObWrapper  # type: ignore
 from phasic_policy_gradient.ppg import PhasicValueModel
 
 from mrl.envs import Miner
-from mrl.random_policy import RandomPolicy
 from mrl.util import (
-    batch,
     get_policy,
     np_gather,
     procgen_rollout_dataset,
@@ -134,6 +132,7 @@ def gen_traj_preferences(
         temperature=temperature,
         replications=replications,
     )
+    outname = str(outname)
 
     rng = np.random.default_rng()
 
@@ -348,8 +347,7 @@ class Generator:
         self.env = ExtractDictObWrapper(env, "rgb")
 
         self.policies = [
-            get_policy(path, actype=env.ac_space, num=n_parallel_envs)
-            for path in policy_paths
+            get_policy(path, env=env, num=n_parallel_envs) for path in policy_paths
         ]
 
         feature = procgen_rollout_features(
