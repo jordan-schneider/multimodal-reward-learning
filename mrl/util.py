@@ -3,13 +3,25 @@ import logging
 import pickle as pkl
 import re
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional, Sequence, Tuple, Union, cast
+from typing import (
+    Any,
+    Dict,
+    Literal,
+    Optional,
+    OrderedDict,
+    Sequence,
+    Tuple,
+    Union,
+    cast,
+)
 
 import numpy as np
 import torch
 from GPUtil import GPUtil  # type: ignore
 from gym3 import ExtractDictObWrapper  # type: ignore
+from gym3.types import ValType  # type: ignore
 from phasic_policy_gradient.ppg import PhasicValueModel
+from phasic_policy_gradient.train import make_model
 from procgen import ProcgenGym3Env
 from tqdm import trange  # type: ignore
 
@@ -17,6 +29,18 @@ from mrl.dataset.offline_buffer import RlDataset
 from mrl.envs import Miner
 from mrl.envs.probe_envs import OneActionNoObsOneTimestepOneReward as Probe1
 from mrl.envs.probe_envs import OneActionTwoObsOneTimestepDeterministicReward as Probe2
+from mrl.random_policy import RandomPolicy
+
+
+def batch(obs: torch.Tensor, obs_dims: int) -> torch.Tensor:
+    if len(obs.shape) == obs_dims:
+        return obs.reshape((1, *obs.shape))
+    elif len(obs.shape) == obs_dims + 1:
+        return obs
+    else:
+        raise ValueError(
+            f"Expected obersvation to have {obs_dims} or {obs_dims + 1} dimensions, but has shape {obs.shape}"
+        )
 
 
 def set_seed(seed: int) -> None:
@@ -153,6 +177,26 @@ class ArrayOrList:
         else:
             assert isinstance(self.val, np.ndarray)
             return self.val
+
+
+def get_policy(
+    path: Optional[Path],
+    env: ProcgenGym3Env,
+    num: Optional[int] = None,
+    device: torch.device = torch.device("cpu"),
+) -> PhasicValueModel:
+    if path is not None:
+        state_dict = cast(
+            OrderedDict[str, torch.Tensor], torch.load(path, map_location=device)
+        )
+        policy = make_model(env, arch="shared")
+        policy.load_state_dict(state_dict)
+        policy.to(device=device)
+        return policy
+    elif num is not None:
+        return RandomPolicy(actype=env.ac_space, num=num)
+    else:
+        raise ValueError("Either path or num must be specified")
 
 
 def procgen_rollout_features(
