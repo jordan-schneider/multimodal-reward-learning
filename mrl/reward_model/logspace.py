@@ -80,14 +80,6 @@ def cum_likelihoods(log_likelihoods: np.ndarray, shift: bool):
     if shift:
         log_total_likelihoods = log_shift(log_total_likelihoods)
 
-    for i in range(log_total_likelihoods.shape[1]):
-        total_shift = tmp[:, i] - log_total_likelihoods[:, i]
-        assert np.allclose(
-            total_shift[0],
-            total_shift,
-            rtol=0.01,
-        ), f"Shift at time {i} not constant. Shift from {tmp[:,i]} to {log_total_likelihoods[:,i]} for total_shift={total_shift}"
-
     total_likelihoods = np.exp(log_total_likelihoods)
 
     if np.any(total_likelihoods == 0):

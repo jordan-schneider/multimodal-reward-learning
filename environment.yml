@@ -21,6 +21,7 @@ dependencies:
     - arrow
     - tqdm
     - fire
+    - argh
     - scipy
     - gputil
     # Dev
