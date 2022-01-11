@@ -25,7 +25,8 @@ def test_first(seed: int) -> None:
     _, _, first = env.observe()
     assert first
 
-    path = find_dangerous_path_above(state=env.make_latent_states()[0])
+    start_state = env.make_latent_states()[0]
+    path = find_dangerous_path_above(state=start_state)
     if path is not None:
         success = follow_path(env, path)
         if not success:
@@ -35,7 +36,9 @@ def test_first(seed: int) -> None:
 
         env.act(np.array([NONE]))
         _, _, first = env.observe()
-        assert first, "Not first after death"
+        assert (
+            first
+        ), f"Not first after death. start_state=\n{start_state.grid}, path={path}, current_state=\n{env.make_latent_states()[0].grid}"
 
 
 @settings(deadline=3000)
@@ -167,14 +170,17 @@ def test_safe_at_start(seed):
     start_state = env.make_latent_states()[0]
     agent_pos = start_state.agent_pos
     danger, t = cast(
-        Tuple[bool, int], env.in_danger(start_state, return_time_to_die=True, debug=True)
+        Tuple[bool, int],
+        env.in_danger(start_state, return_time_to_die=True, debug=True),
     )
     assert (
         not danger
     ), f"Agent (pos={agent_pos}) should not be in danger at start of game, but is at t={t} for grid=\n{start_state.grid}"
 
 
-def flood_search(state: Miner.MinerState, goals: List[Tuple[int, int]]) -> Optional[List[Action]]:
+def flood_search(
+    state: Miner.MinerState, goals: List[Tuple[int, int]]
+) -> Optional[List[Action]]:
     """Perform a flood search for a path to one of the goal states.
 
     Not guaranteed to be the shortest path, or even a valid path, as falling objects can block the
@@ -246,7 +252,10 @@ def find_dangerous_path_above(state: Miner.MinerState) -> Optional[List[Action]]
 
     # If there is an object directly above the agent and it can go down, move down.
     # If there's an object directly above and below, quit the heuristic.
-    if agent_y + 1 < grid_height and state.grid[agent_x][agent_y + 1] in DANGEROUS_OBJECTS:
+    if (
+        agent_y + 1 < grid_height
+        and state.grid[agent_x][agent_y + 1] in DANGEROUS_OBJECTS
+    ):
         if agent_y - 1 > 0 and state.grid[agent_x][agent_y - 1] in PATHABLE_OBJECTS:
             return []
         else:
@@ -357,7 +366,10 @@ def follow_path(env: Miner, path: Sequence[Action]) -> bool:
     for action in path:
         env.act(np.array([action]))
         state = env.make_latent_states()[0]
-        if state.agent_pos[0] == old_agent_pos[0] and state.agent_pos[1] == old_agent_pos[1]:
+        if (
+            state.agent_pos[0] == old_agent_pos[0]
+            and state.agent_pos[1] == old_agent_pos[1]
+        ):
             # We tried to path through an immobile rock, I'm not going to deal with this case
             return False
     return True
@@ -369,7 +381,9 @@ def follow_path(env: Miner, path: Sequence[Action]) -> bool:
     reward_weights=arrays(
         np.float64,
         (Miner.N_FEATURES,),
-        elements=floats(min_value=1e10, max_value=1e10, allow_nan=False, allow_infinity=False),
+        elements=floats(
+            min_value=1e10, max_value=1e10, allow_nan=False, allow_infinity=False
+        ),
     ),
 )
 def test_reward(seed: int, reward_weights: np.ndarray) -> None:
@@ -386,7 +400,9 @@ def test_reward(seed: int, reward_weights: np.ndarray) -> None:
     seed=integers(0, 2 ** 31 - 1),
 )
 def test_normalized_features(seed: int, actions: List[int]) -> None:
-    env = Miner(reward_weights=np.zeros(5), num=1, rand_seed=seed, normalize_features=True)
+    env = Miner(
+        reward_weights=np.zeros(5), num=1, rand_seed=seed, normalize_features=True
+    )
     for action in actions:
         env.act(np.array([action]))
         features = env.make_features()

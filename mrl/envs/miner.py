@@ -1,14 +1,20 @@
+import logging
 from typing import Any, Dict, Final, List, Optional, Tuple, Union, cast
 
 import numpy as np
-from procgen import ProcgenGym3Env  # type: ignore
+from mrl.envs.util import recover_grid
+from procgen import ProcgenGym3Env
 
-__DIST_ARRAY = np.array([[np.abs(x) + np.abs(y) for x in range(-34, 35)] for y in range(-34, 35)])
+__DIST_ARRAY = np.array(
+    [[np.abs(x) + np.abs(y) for x in range(-34, 35)] for y in range(-34, 35)]
+)
 DIAMOND_PERCENT = 12 / 400.0  # from miner.cpp
 
 
 def get_dist_array(agent_x: int, agent_y: int, width: int, height: int) -> np.ndarray:
-    return __DIST_ARRAY[34 - agent_x : 34 - agent_x + width, 34 - agent_y : 34 - agent_y + height]
+    return __DIST_ARRAY[
+        34 - agent_x : 34 - agent_x + width, 34 - agent_y : 34 - agent_y + height
+    ]
 
 
 class Miner(ProcgenGym3Env):
@@ -49,9 +55,9 @@ class Miner(ProcgenGym3Env):
             **kwargs,
         )
         self.states = self.make_latent_states()
-        self.last_diamonds = np.ones(num) * -1
+        self.last_diamonds = np.ones(num, dtype=int) * -1
         self.diamonds = np.array(
-            [Miner.diamonds_remaining(state) for state in self.states], dtype=np.float32
+            [Miner.diamonds_remaining(state) for state in self.states], dtype=int
         )
         self.firsts = [True] * num
 
@@ -66,12 +72,10 @@ class Miner(ProcgenGym3Env):
         self.diamonds = np.array(
             [Miner.diamonds_remaining(state) for state in self.states], dtype=np.float32
         )
-        if self.use_normalized_features:
-            max_diamonds = DIAMOND_PERCENT * self.states[0].grid.size
-            self.diamonds /= max_diamonds
 
-    def observe(self) -> Tuple[Any, Any, Any]:
+    def observe(self) -> Tuple[np.ndarray, Any, Any]:
         _, observations, self.firsts = super().observe()
+        logging.debug(f"firsts={self.firsts}")
 
         # compute features
         self.features = self.make_features()
@@ -109,7 +113,7 @@ class Miner(ProcgenGym3Env):
             agent_pos: Tuple[int, int],
             exit_pos: Tuple[int, int],
         ) -> None:
-            self.grid: np.ndarray = grid.transpose()[: grid_size[0], : grid_size[1]]
+            self.grid = recover_grid(grid, grid_size)
             assert len(self.grid.shape) == 2
             self.agent_pos = tuple(agent_pos)
             self.exit_pos = tuple(exit_pos)
@@ -148,24 +152,33 @@ class Miner(ProcgenGym3Env):
                 )
             ]
         )
+
         exits = np.array(
             [
                 Miner.reached_exit(state, n_diamonds)
                 for state, n_diamonds in zip(self.states, self.diamonds)
             ]
         )
+        logging.debug(f"exits={exits}")
+
+        diamonds = np.array(self.diamonds, dtype=np.float32)
 
         assert len(pickup) == self.num
         assert len(exits) == self.num
         assert len(dangers) == self.num
         assert len(dists) == self.num
-        assert len(self.diamonds) == self.num
+        assert len(diamonds) == self.num
 
         if self.use_normalized_features:
             max_dist = float(self.states[0].grid.shape[0] * 2 - 1)
             dists /= max_dist
 
-        features = np.array([pickup, exits, dangers, dists, self.diamonds], dtype=np.float32).T
+            max_diamonds = DIAMOND_PERCENT * self.states[0].grid.size
+            diamonds /= max_diamonds
+
+        features = np.array(
+            [pickup, exits, dangers, dists, diamonds], dtype=np.float32
+        ).T
         assert features.shape == (self.num, self.N_FEATURES)
 
         return features
@@ -211,7 +224,8 @@ class Miner(ProcgenGym3Env):
         dists = get_dist_array(agent_x, agent_y, width, height)
         diamond_dists = np.ma.array(dists, mask=np.logical_not(diamonds))
         pos_closest_diamond = cast(
-            Tuple[int, int], np.unravel_index(diamond_dists.argmin(), diamond_dists.shape)
+            Tuple[int, int],
+            np.unravel_index(diamond_dists.argmin(), diamond_dists.shape),
         )
         min_dist = diamond_dists[pos_closest_diamond]
 
@@ -229,9 +243,10 @@ class Miner(ProcgenGym3Env):
         if first:
             return False
 
-        assert (
-            n_diamonds <= last_n_diamonds
-        ), f"There are {n_diamonds} this step vs {last_n_diamonds} last step, and first={first}"
+        if n_diamonds > last_n_diamonds:
+            raise Exception(
+                f"There are {n_diamonds} this step vs {last_n_diamonds} last step, and first={first}."
+            )
         return n_diamonds != last_n_diamonds
 
     @staticmethod

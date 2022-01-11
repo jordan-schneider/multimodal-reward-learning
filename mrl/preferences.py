@@ -5,7 +5,7 @@ import logging
 import random
 import re
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple, cast
+from typing import List, Literal, Optional, Tuple
 
 import fire  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
@@ -13,12 +13,13 @@ import numpy as np
 import psutil  # type: ignore
 import torch
 from gym3.extract_dict_ob import ExtractDictObWrapper  # type: ignore
-from gym3.types import ValType  # type: ignore
 from phasic_policy_gradient.ppg import PhasicValueModel
-from torch.distributions import Categorical
 
 from mrl.envs import Miner
+from mrl.random_policy import RandomPolicy
 from mrl.util import (
+    batch,
+    get_policy,
     np_gather,
     procgen_rollout_dataset,
     procgen_rollout_features,
@@ -331,19 +332,6 @@ def orient_diffs(
     return diffs, probs
 
 
-def get_policy(
-    path: Optional[Path], actype: ValType, num: Optional[int] = None
-) -> PhasicValueModel:
-    if path is not None:
-        policy = cast(PhasicValueModel, torch.load(path))
-        policy.to(device=policy.device)
-        return policy
-    elif num is not None:
-        return RandomPolicy(actype, num=num)
-    else:
-        raise ValueError("Either path or num must be specified")
-
-
 class Generator:
     def __init__(
         self,
@@ -433,23 +421,6 @@ class Generator:
         )
 
         return data_a.trajs(), data_b.trajs()
-
-
-# TODO: Move to own file
-class RandomPolicy(PhasicValueModel):
-    def __init__(self, actype: ValType, num: int):
-        self.actype = actype
-        self.act_dist = Categorical(
-            probs=torch.ones(actype.eltype.n) / np.prod(actype.eltype.n)
-        )
-        self.device = torch.device("cpu")
-        self.num = num
-
-    def act(self, ob, first, state_in):
-        return self.act_dist.sample((self.num,)), None, None
-
-    def initial_state(self, batchsize):
-        return None
 
 
 if __name__ == "__main__":
