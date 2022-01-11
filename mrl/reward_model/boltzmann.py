@@ -28,16 +28,21 @@ def boltzmann_likelihood(
     reward = reward.astype(np.float128)
     diffs = diffs.astype(np.float128)
 
+    assert not np.any(np.isnan(reward))
+    assert not np.any(np.isnan(diffs))
+
     # This function assumes that the reward posterior is defined on the unit sphere by restricting
     # the given likelihood to exactly the sphere, rather than taking a quotient space (by projecting
     # the likelihood for all rewards on every ray to their unit length point. If I ever want to do
     # that instead, the likelihood is |w| * log(1/2 * (1 + exp(w @ diffs))) / (w @ diffs) in general
     # and (log(1/2) + log1p(exp(w @ diffs))) / (w @ diffs) in our case, as |w|=1.
     strengths = (reward @ diffs.T) / temperature
+    assert not np.any(np.isnan(strengths))
     if approximate:
         log_likelihoods = strengths
     else:
         exp_strengths = np.exp(-strengths)
+        assert not np.any(np.isnan(exp_strengths))
 
         infs = np.isinf(exp_strengths)
         not_infs = np.logical_not(infs)
@@ -48,7 +53,10 @@ def boltzmann_likelihood(
             # If np.exp(...) is inf, then 1 + np.exp(...) is approximately np.exp(...)
             # so log1p(exp(-reward @ diffs))) \approx rewards @ diffs
             log_likelihoods[infs] = strengths[infs]
-            log_likelihoods[not_infs] = -np.log1p(exp_strengths[not_infs], dtype=np.float128)
+            log_likelihoods[not_infs] = -np.log1p(
+                exp_strengths[not_infs], dtype=np.float128
+            )
+            assert not np.any(np.isnan(log_likelihoods))
         else:
             log_likelihoods = -np.log1p(exp_strengths, dtype=np.float128)
 
@@ -57,6 +65,8 @@ def boltzmann_likelihood(
     if np.any(np.exp(log_likelihoods) == 0):
         logging.warning("Some reward-halfplane pairs have 0 likelihood")
 
-    assert np.all(log_likelihoods <= 0)
+    assert np.all(
+        log_likelihoods <= 0
+    ), f"Max log likelihood is {np.max(log_likelihoods)} not <=0"
 
     return log_likelihoods
