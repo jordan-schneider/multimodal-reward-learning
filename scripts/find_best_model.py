@@ -6,8 +6,7 @@ from typing import Dict, Tuple
 import fire  # type: ignore
 import numpy as np
 import torch
-from gym3 import ExtractDictObWrapper  # type: ignore
-from mrl.envs import Miner
+from mrl.envs.util import FEATURE_ENV_NAMES, make_env
 from mrl.util import find_best_gpu, procgen_rollout_dataset
 from phasic_policy_gradient.train import make_model
 
@@ -15,6 +14,7 @@ from phasic_policy_gradient.train import make_model
 def main(
     rootdir: Path,
     out: Path,
+    env_name: FEATURE_ENV_NAMES,
     horizon: int = 10_000,
     seed: int = 0,
     overwrite: bool = False,
@@ -24,9 +24,7 @@ def main(
     torch.manual_seed(seed)
     np.random.seed(seed)
 
-    # TODO: Swap out miner for make_env
-    env = Miner(np.ones(5), num=1, rand_seed=seed)
-    env = ExtractDictObWrapper(env, "rgb")
+    env = make_env(kind=env_name, num=1, reward=1)
 
     policy = make_model(env, arch="shared")
 

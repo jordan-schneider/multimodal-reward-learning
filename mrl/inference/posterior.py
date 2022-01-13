@@ -336,7 +336,6 @@ def analysis(
     use_hinge: bool,
     true_reward: Optional[np.ndarray] = None,
 ) -> None:
-    # TODO: Try normalizing diffs
     if norm_diffs:
         diffs = normalize(diffs)
     ndims = diffs.shape[1]
@@ -378,7 +377,6 @@ def analysis(
 
     log_big_shifts(diffs, mean_rewards)
 
-    # TODO: Try not exponetiation and using logits as raw probabilities
     dispersions_mean = mean_geodesic_dispersion(
         reward_samples=samples,
         likelihoods=likelihoods,
