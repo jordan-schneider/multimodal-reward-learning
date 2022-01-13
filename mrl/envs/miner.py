@@ -223,7 +223,6 @@ class Miner(FeatureEnv[MinerState]):
         agent_x, agent_y = state.agent_pos
         width, height = state.grid.shape
         diamonds = cast(np.ndarray, np.logical_or(state.grid == 2, state.grid == 4))
-        # TODO(joschnei): Instead of indexing into this, try creating it on the fly, might be faster
         dists = get_dist_array(agent_x, agent_y, width, height)
         diamond_dists = np.ma.array(dists, mask=np.logical_not(diamonds))
         pos_closest_diamond = cast(
