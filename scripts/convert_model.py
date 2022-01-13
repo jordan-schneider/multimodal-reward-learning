@@ -3,7 +3,7 @@ from pathlib import Path
 
 import fire  # type: ignore
 import torch
-from mrl.learn_values import QNetwork
+from mrl.model_training.learn_values import QNetwork
 from phasic_policy_gradient.ppg import PhasicValueModel
 
 
