@@ -2,7 +2,7 @@ from typing import Tuple
 
 import torch
 from mrl.envs.util import make_env
-from mrl.learn_values import QNetwork
+from mrl.model_training.learn_values import QNetwork
 from phasic_policy_gradient.train import make_model
 
 MODEL_PATH = "tests/model.jd"

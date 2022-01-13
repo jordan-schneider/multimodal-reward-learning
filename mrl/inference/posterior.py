@@ -1,155 +1,23 @@
 import logging
 from math import ceil
 from pathlib import Path
-from typing import (
-    Any,
-    Dict,
-    Final,
-    Generator,
-    Literal,
-    Optional,
-    Sequence,
-    Tuple,
-    Union,
-)
+from typing import Dict, Generator, Literal, Optional, Tuple, Union
 
-import bitmath
+import bitmath  # type: ignore
 import fire  # type: ignore
 import joypy  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
 import numpy as np
 import pandas as pd  # type: ignore
 import seaborn as sns  # type: ignore
-from tqdm import trange  # type: ignore
-
+from mrl.aligned_rewards.aligned_reward_set import AlignedRewardSet
+from mrl.inference.results import Results
+from mrl.inference.sphere import find_centroid
 from mrl.reward_model.boltzmann import boltzmann_likelihood
 from mrl.reward_model.hinge import hinge_likelihood
 from mrl.reward_model.logspace import cum_likelihoods
-from mrl.sphere import find_centroid
-from mrl.util import dump, load, np_gather, sample_data, setup_logging
-
-# TODO: Take classes out of this file.
-
-
-class AlignedRewardSet:
-    def __init__(
-        self, path: Path, true_reward: np.ndarray, use_done_feature: bool = False
-    ) -> None:
-        self.diffs = np.load(path)
-
-        assert np.all(true_reward @ self.diffs.T >= 0)
-        self.diffs = self.diffs[true_reward @ self.diffs.T > 1e-16]
-        assert np.all(true_reward @ self.diffs.T > 1e-16)
-
-        self.true_reward = true_reward
-
-    def prob_aligned(self, rewards: np.ndarray, densities: np.ndarray) -> np.ndarray:
-        assert densities.shape[0] == rewards.shape[0]
-        assert len(densities.shape) <= 2
-
-        aligned_reward_indices = np.all((rewards @ self.diffs.T) > 0, axis=1)
-        prob_aligned = np.sum(densities[aligned_reward_indices], axis=0)
-        if np.sum(aligned_reward_indices) == 0:
-            logging.warning("No aligned rewards")
-        elif np.allclose(prob_aligned, 0, atol=0.001):
-            logging.debug("There are some aligned rewards, but all likelihoods are 0")
-
-        return prob_aligned
-
-
-class Results:
-    current_experiment: Optional[str]
-
-    def __init__(self, outdir: Path, load_contents: bool = False):
-        self.outdir = outdir
-        self.outdir.mkdir(parents=True, exist_ok=True)
-
-        self.experiments: Dict[str, Dict[str, Any]] = {}
-
-        if load_contents:
-            for experiment_dir in self.outdir.iterdir():
-                if experiment_dir.is_dir():
-                    experiment_name = experiment_dir.parts[-1]
-                    self.start(experiment_name)
-                    for file in experiment_dir.iterdir():
-                        obj_name = file.stem
-                        self.experiments[experiment_name][obj_name] = load(file)
-
-    def start(self, experiment_name: str):
-        self.experiments[experiment_name] = self.experiments.get(experiment_name, {})
-        self.current_experiment = experiment_name
-        (self.outdir / self.current_experiment).mkdir(exist_ok=True)
-
-    def update(self, name: str, value: Any) -> None:
-        assert self.current_experiment is not None, "No current experiment"
-        self.experiments[self.current_experiment][name] = value
-        dump(value, self.outdir / self.current_experiment / name)
-
-    def has(self, name: str) -> bool:
-        return any(name in exp.keys() for exp in self.experiments.values())
-
-    def get(self, name: str) -> Any:
-        assert self.current_experiment is not None, "No current experiment"
-        return self.experiments[self.current_experiment].get(name)
-
-    def getall(self, name: str) -> pd.DataFrame:
-        if not self.has(name):
-            raise ValueError(f"No {name} values in any experiment")
-
-        out = pd.DataFrame(columns=["trial", "time", name])
-        for exp_name, exp in self.experiments.items():
-            if name not in exp.keys():
-                logging.warning(
-                    f"{name} not present in experiment {exp_name}, skipping"
-                )
-                continue
-
-            value = exp[name]
-            if isinstance(value, np.ndarray):
-                if len(value.shape) > 1:
-                    raise NotImplementedError(
-                        f"Underlying array with {len(value.shape)} dims > 1 not supported"
-                    )
-                df = self.__make_df(name, value)
-                df["trial"] = exp_name
-                out = out.append(df.copy())
-            elif isinstance(value, dict):
-                for modality, v in value.items():
-                    df = self.__make_df([name], v)
-                    df["trial"] = exp_name
-                    df["modality"] = modality
-                    out = out.append(df.copy())
-
-        out = out.reset_index(drop=True)
-        return out
-
-    def getall_gt_likelihood(self) -> pd.DataFrame:
-        out = pd.DataFrame(columns=["trial", "time", "likelihood_gt"])
-        for exp_name, exp in self.experiments.items():
-            likelihoods = exp["likelihoods"]
-            if isinstance(likelihoods, np.ndarray):
-                df = self.__make_df(["likelihood_gt"], likelihoods[-1])
-                df["trial"] = exp_name
-                out = out.append(df.copy())
-            elif isinstance(likelihoods, dict):
-                for modality, v in likelihoods.items():
-                    df = self.__make_df(["likelihood_gt"], v[-1])
-                    df["trial"] = exp_name
-                    df["modality"] = modality
-                    out = out.append(df.copy())
-        out = out.reset_index(drop=True)
-        return out
-
-    @staticmethod
-    def __make_df(columns: Sequence[str], value: np.ndarray) -> pd.DataFrame:
-        assert value.ndim == 1, "Only 1D arrays supported"
-        df = pd.DataFrame(value, columns=columns)
-        df.index.name = "time"
-        df = df.reset_index()
-        return df
-
-    def close(self):
-        self.current_experiment = None
+from mrl.util import np_gather, sample_data, setup_logging
+from tqdm import trange  # type: ignore
 
 
 def compare_modalities(

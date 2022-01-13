@@ -10,14 +10,10 @@ import GPUtil  # type: ignore
 import numpy as np  # type: ignore
 import torch
 from gym3 import ExtractDictObWrapper  # type: ignore
-from phasic_policy_gradient.ppg import PhasicValueModel
-from procgen import ProcgenGym3Env
-from torch.utils.tensorboard import SummaryWriter
-from tqdm import trange  # type: ignore
-
 from mrl.dataset.offline_buffer import RlDataset
 from mrl.envs.util import ENV_NAMES, make_env
-from mrl.online_batcher import BatchGenerator
+from mrl.model_training.online_batcher import BatchGenerator
+from mrl.model_training.writer import SequentialWriter
 from mrl.util import (
     find_best_gpu,
     find_policy_path,
@@ -25,7 +21,10 @@ from mrl.util import (
     reinit,
     setup_logging,
 )
-from mrl.writer import SequentialWriter
+from phasic_policy_gradient.ppg import PhasicValueModel
+from procgen import ProcgenGym3Env
+from torch.utils.tensorboard import SummaryWriter
+from tqdm import trange  # type: ignore
 
 
 class Checkpointer:
@@ -69,7 +68,6 @@ class QNetwork(torch.nn.Module):
         self.discount_rate = discount_rate
 
         self.enc = deepcopy(policy.get_encoder(policy.true_vf_key))
-        # TODO: Put set_activation code back in somehow
         self.enc.cnn.set_activation(activation)
         if not value_init:
             reinit(self.enc)

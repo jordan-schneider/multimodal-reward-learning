@@ -4,9 +4,9 @@ from gym3 import ExtractDictObWrapper  # type: ignore
 from hypothesis import given, settings
 from hypothesis.extra.numpy import arrays
 from hypothesis.strategies import floats, integers
-from mrl.aligned_reward_set import make_aligned_reward_set
+from mrl.aligned_rewards.make_ars import make_aligned_reward_set
+from mrl.dataset.random_policy import RandomPolicy
 from mrl.envs.miner import Miner
-from mrl.random_policy import RandomPolicy
 
 
 @given(

@@ -50,23 +50,3 @@ def find_centroid(
 
         i += 1
     return best_centroid, best_dist
-
-
-# rng = np.random.default_rng()
-# points = rng.uniform(low=-1, high=1, size=(1000, 5))
-# points = normalize(points)
-# points = np.abs(points)
-# weights = rng.uniform(size=1000)
-
-# weighted_mean = np.average(points, weights=weights, axis=0)
-
-# results = [find_centroid(points, weights, tolerance=1e-10, max_iter=10000, init=p) for p in points]
-# results.append(find_centroid(points, weights, tolerance=1e-10, max_iter=10000, init=weighted_mean))
-
-# centroid, dist = min(results, key=lambda x: x[1])
-# print(centroid)
-# print(dist)
-
-# print(np.where([np.all(r[0] == centroid) for r in results]))
-
-# print(min([mean_geodesic_distance(p, points, weights) for p in points]))

@@ -8,13 +8,11 @@ import numpy as np
 import torch
 from argh import arg  # type: ignore
 from gym3 import ExtractDictObWrapper  # type: ignore
-from phasic_policy_gradient.ppg import PhasicValueModel  # Type: ignore
-from phasic_policy_gradient.train import make_model
-
+from mrl.dataset.random_policy import RandomPolicy
 from mrl.dataset.trajectory_db import FeatureDataset
 from mrl.envs import Miner
-from mrl.random_policy import RandomPolicy
 from mrl.util import find_best_gpu, procgen_rollout_dataset
+from phasic_policy_gradient.train import make_model
 
 
 @arg("--policies", type=Path, nargs="+")
