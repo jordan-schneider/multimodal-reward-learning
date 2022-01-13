@@ -6,7 +6,7 @@ from hypothesis import given
 from hypothesis.extra.numpy import arrays
 from hypothesis.strategies import integers
 from mrl.envs import Miner
-from mrl.preferences import RandomPolicy
+from mrl.random_policy import RandomPolicy
 from mrl.util import procgen_rollout
 
 

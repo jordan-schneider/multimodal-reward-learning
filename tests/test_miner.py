@@ -179,7 +179,7 @@ def test_safe_at_start(seed):
 
 
 def flood_search(
-    state: Miner.MinerState, goals: List[Tuple[int, int]]
+    state: Miner.State, goals: List[Tuple[int, int]]
 ) -> Optional[List[Action]]:
     """Perform a flood search for a path to one of the goal states.
 
@@ -246,7 +246,7 @@ def flood_search(
     return None
 
 
-def find_dangerous_path_above(state: Miner.MinerState) -> Optional[List[Action]]:
+def find_dangerous_path_above(state: Miner.State) -> Optional[List[Action]]:
     agent_x, agent_y = state.agent_pos
     grid_height = state.grid.shape[1]
 
@@ -271,7 +271,7 @@ def find_dangerous_path_above(state: Miner.MinerState) -> Optional[List[Action]]
     return None
 
 
-def find_dangerous_object_candidates(state: Miner.MinerState) -> List[Tuple[int, int]]:
+def find_dangerous_object_candidates(state: Miner.State) -> List[Tuple[int, int]]:
     """Find all dangerous objects with two empty spaces underneath"""
     danger_objs: List[Tuple[int, int]] = []
     for x, row in enumerate(state.grid):
@@ -285,7 +285,7 @@ def find_dangerous_object_candidates(state: Miner.MinerState) -> List[Tuple[int,
     return danger_objs
 
 
-def find_path_to_dangerous_state(state: Miner.MinerState) -> Optional[List[Action]]:
+def find_path_to_dangerous_state(state: Miner.State) -> Optional[List[Action]]:
     """Tries to find a path to a dangerous state, where an object is about to fall on you.
 
     The pathing does not model changes in the state from falling objects, and so sometimes the

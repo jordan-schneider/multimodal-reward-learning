@@ -16,12 +16,11 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import trange  # type: ignore
 
 from mrl.dataset.offline_buffer import RlDataset
+from mrl.envs.util import ENV_NAMES, make_env
 from mrl.online_batcher import BatchGenerator
 from mrl.util import (
-    EnvName,
     find_best_gpu,
     find_policy_path,
-    make_env,
     procgen_rollout,
     reinit,
     setup_logging,
@@ -44,7 +43,7 @@ class Checkpointer:
             return None, 0
 
         model_iters = [
-            re.search(f"{self.name}\.([0-9]+)\.jd", model.name).group(1)
+            re.search(f"{self.name}\.([0-9]+)\.jd", model.name).group(1)  # type: ignore
             for model in models
         ]
         model_iter = max(model_iters)
@@ -316,7 +315,7 @@ def get_rollouts(
 def learn_q(
     indir: Path,
     outdir: Path,
-    env_name: EnvName = "miner",
+    env_name: ENV_NAMES = "miner",
     value_init: bool = False,
     lr: float = 10e-3,
     discount_rate: float = 0.999,
@@ -532,7 +531,7 @@ def eval_q(
 def refine_v(
     indir: Path,
     outdir: Path,
-    env_name: EnvName = "miner",
+    env_name: ENV_NAMES = "miner",
     lr: float = 10e-3,
     discount_rate: float = 0.999,
     batch_size: int = 64,

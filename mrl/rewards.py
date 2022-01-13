@@ -6,6 +6,7 @@ from mpi4py.MPI import Comm  # type: ignore
 from numpy.random import Generator
 
 from mrl.envs import Miner
+from mrl.envs.util import ENV_NAMES
 
 
 def make_original_reward() -> np.ndarray:
@@ -14,7 +15,7 @@ def make_original_reward() -> np.ndarray:
     return reward
 
 
-def make_near_original_rewards(rootdir: Path, replications: int) -> None:
+def make_miner_near_original_rewards(rootdir: Path, replications: int) -> None:
     n = replications ** (1.0 / 3.0)
     assert (
         n.is_integer()
@@ -35,7 +36,12 @@ def make_near_original_rewards(rootdir: Path, replications: int) -> None:
         np.save(repl_dir / "reward.npy", reward)
 
 
-def make_reward(
+def make_maze_near_original_rewards(rootdir: Path, replications: int):
+    # TODO: Implement
+    raise NotImplementedError()
+
+
+def make_miner_reward(
     path: Path,
     rng: Generator,
     fix_sign: bool = False,
@@ -54,8 +60,19 @@ def make_reward(
     np.save(path / "reward.npy", reward)
 
 
+def make_maze_rewards(
+    path: Path,
+    rng: Generator,
+    fix_sign: bool = False,
+    use_original: bool = False,
+):
+    # TODO: implement
+    raise NotImplementedError()
+
+
 def make_rewards(
     path: Path,
+    env: ENV_NAMES,
     rng: Generator,
     comm: Comm,
     overwrite: bool = False,
@@ -67,11 +84,22 @@ def make_rewards(
     if comm.rank == 0:
         if use_near_original:
             if overwrite or not (path / "0" / "reward.npy").exists():
-                make_near_original_rewards(path, replications)
+                if env == "miner":
+                    make_miner_near_original_rewards(path, replications)
+                elif env == "maze":
+                    make_maze_near_original_rewards(path, replications)
+
         else:
             for repl in range(replications):
                 if overwrite or not (path / str(repl) / "reward.npy").exists():
-                    make_reward(path / str(repl), rng, fix_reward_sign, use_original)
+                    if env == "miner":
+                        make_miner_reward(
+                            path / str(repl), rng, fix_reward_sign, use_original
+                        )
+                    elif env == "maze":
+                        make_maze_rewards(
+                            path / str(repl), rng, fix_reward_sign, use_original
+                        )
     comm.Barrier()
 
 

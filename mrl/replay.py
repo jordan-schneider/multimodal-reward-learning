@@ -9,17 +9,23 @@ from phasic_policy_gradient.ppg import PhasicValueModel
 from phasic_policy_gradient.roller import Roller
 from PIL import Image  # type: ignore
 
-from mrl.envs.miner import Miner
+from mrl.envs.util import ENV_NAMES, make_env
 
 
-def replay(model_path: Path, n_videos: int, outdir: Path, horizon: int = 1000) -> None:
+def replay(
+    env_name: ENV_NAMES,
+    model_path: Path,
+    n_videos: int,
+    outdir: Path,
+    horizon: int = 1000,
+) -> None:
     model = cast(PhasicValueModel, torch.load(model_path))
     model = model.to(model.device)
 
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    env = Miner(np.zeros(Miner.N_FEATURES), n_videos, render_mode="rgb_array")
+    env = make_env(kind=env_name, reward=0, num=n_videos, render_mode="rgb_array")
     env = ExtractDictObWrapper(env, "rgb")
 
     writer_kwargs = {

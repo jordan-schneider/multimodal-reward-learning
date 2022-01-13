@@ -1,9 +1,9 @@
 import logging
-from typing import Any, Dict, Final, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, Final, List, Optional, Tuple, Type, Union, cast
 
 import numpy as np
-from mrl.envs.util import recover_grid
-from procgen import ProcgenGym3Env
+from mrl.envs.feature_envs import FeatureEnv, StateInterface
+from mrl.envs.gym3_util import recover_grid
 
 __DIST_ARRAY = np.array(
     [[np.abs(x) + np.abs(y) for x in range(-34, 35)] for y in range(-34, 35)]
@@ -17,7 +17,44 @@ def get_dist_array(agent_x: int, agent_y: int, width: int, height: int) -> np.nd
     ]
 
 
-class Miner(ProcgenGym3Env):
+class MinerState(StateInterface):
+    GRID_ITEM_NAMES = {
+        1: "boulder",
+        2: "diamond",
+        3: "moving_boulder",
+        4: "moving_diamond",
+        5: "enemy",
+        6: "exit",
+        9: "dirt",
+        10: "oob_wall",
+        100: "space",
+    }
+
+    def __init__(
+        self,
+        grid_size: Tuple[int, int],
+        grid: np.ndarray,
+        agent_pos: Tuple[int, int],
+        exit_pos: Tuple[int, int],
+    ) -> None:
+        self.grid = recover_grid(grid, grid_size)
+        assert len(self.grid.shape) == 2
+        self.agent_pos = agent_pos
+        self.exit_pos = exit_pos
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, MinerState):
+            return False
+        if not np.array_equal(self.grid, other.grid):
+            return False
+        if not self.agent_pos == other.agent_pos:
+            return False
+        if not self.exit_pos == other.exit_pos:
+            return False
+        return True
+
+
+class Miner(FeatureEnv[MinerState]):
     ACTION_DICT: Final = {
         "up": 5,
         "down": 3,
@@ -25,7 +62,11 @@ class Miner(ProcgenGym3Env):
         "right": 7,
         "stay": 4,
     }
-    N_FEATURES: Final = 5
+    N_FEATURES = 5
+
+    class State(MinerState):
+        # Allows the typing for Miner.State to work.
+        pass
 
     def __init__(
         self,
@@ -87,53 +128,15 @@ class Miner(ProcgenGym3Env):
 
         return rewards, observations, self.firsts
 
-    def get_last_features(self) -> np.ndarray:
-        # This is only a function because gym3.Wrapper doens't pass attributres through
-        if self.features is None:
-            self.features = self.make_features()
-        return self.features
-
-    class MinerState:
-        GRID_ITEM_NAMES = {
-            1: "boulder",
-            2: "diamond",
-            3: "moving_boulder",
-            4: "moving_diamond",
-            5: "enemy",
-            6: "exit",
-            9: "dirt",
-            10: "oob_wall",
-            100: "space",
-        }
-
-        def __init__(
-            self,
-            grid_size: Tuple[int, int],
-            grid: np.ndarray,
-            agent_pos: Tuple[int, int],
-            exit_pos: Tuple[int, int],
-        ) -> None:
-            self.grid = recover_grid(grid, grid_size)
-            assert len(self.grid.shape) == 2
-            self.agent_pos = tuple(agent_pos)
-            self.exit_pos = tuple(exit_pos)
-
-        def __eq__(self, other: Any) -> bool:
-            correct_class = isinstance(other, Miner.MinerState)
-            grid_equal = np.array_equal(self.grid, other.grid)
-            agent_pos_equal = self.agent_pos == other.agent_pos
-            exit_pos_equal = self.exit_pos == other.exit_pos
-            return correct_class and grid_equal and agent_pos_equal and exit_pos_equal
-
     def make_latent_states(self) -> List[MinerState]:
         infos = self.get_info()
         return [self.make_latent_state(info) for info in infos]
 
     @staticmethod
     def make_latent_state(info: Dict[str, Any]) -> MinerState:
-        return Miner.MinerState(
-            info["grid_size"], info["grid"], info["agent_pos"], info["exit_pos"]
-        )
+        agent_pos = cast(Tuple[int, int], tuple(info["agent_pos"]))
+        exit_pos = cast(Tuple[int, int], tuple(info["exit_pos"]))
+        return Miner.State(info["grid_size"], info["grid"], agent_pos, exit_pos)
 
     def make_features(self) -> np.ndarray:
         dangers = np.array([self.in_danger(state) for state in self.states])

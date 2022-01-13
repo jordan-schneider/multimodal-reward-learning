@@ -1,6 +1,6 @@
 import pickle as pkl
 from pathlib import Path
-from typing import List, cast
+from typing import List
 
 import argh  # type: ignore
 import arrow
@@ -13,7 +13,7 @@ from phasic_policy_gradient.train import make_model
 
 from mrl.dataset.trajectory_db import FeatureDataset
 from mrl.envs import Miner
-from mrl.preferences import RandomPolicy
+from mrl.random_policy import RandomPolicy
 from mrl.util import find_best_gpu, procgen_rollout_dataset
 
 

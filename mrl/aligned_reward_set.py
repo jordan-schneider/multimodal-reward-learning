@@ -2,16 +2,17 @@ import logging
 import time
 from itertools import product
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 import fire  # type: ignore
 import numpy as np
 import torch
 from gym3 import ExtractDictObWrapper  # type: ignore
 from phasic_policy_gradient.ppg import PhasicValueModel
+from procgen.env import ProcgenGym3Env
 from scipy.optimize import linprog  # type: ignore
 
-from mrl.envs.miner import Miner
+from mrl.envs.util import ENV_NAMES, FEATURE_ENV_NAMES, make_env
 from mrl.preferences import get_policy
 from mrl.util import procgen_rollout_dataset, procgen_rollout_features, setup_logging
 
@@ -19,7 +20,7 @@ from mrl.util import procgen_rollout_dataset, procgen_rollout_features, setup_lo
 def get_features(
     n_states: int,
     n_trajs: int,
-    env: Miner,
+    env: ProcgenGym3Env,
     policy: PhasicValueModel,
     outdir: Optional[Path],
     tqdm: bool = False,
@@ -74,7 +75,7 @@ def make_aligned_reward_set(
     reward: np.ndarray,
     n_states: int,
     n_trajs: int,
-    env: Miner,
+    env: ProcgenGym3Env,
     policy: PhasicValueModel,
     use_done_feature: bool = False,
     tqdm: bool = False,
@@ -131,21 +132,21 @@ def make_aligned_reward_set(
             if outdir is not None:
                 np.save(outdir / "aligned_reward_set.npy", diffs)
             logging.info(f"{len(diffs)} total diffs")
+        if total > 1000:
+            if iterations == 1000:
+                stop = time.time()
+                duration = stop - start
+                logging.info(
+                    f"First 1000 iterations took {duration:0.1f} seconds. {total} total iters expected to take {duration * total / 1000: 0.1f} seconds."
+                )
+            if iterations % (total // 1000) == 0:
+                logging.info(
+                    f"{iterations}/{total} pairs considered ({iterations / total * 100 : 0.2f}%)"
+                )
 
-        if iterations == 1000:
-            stop = time.time()
-            duration = stop - start
-            logging.info(
-                f"First 1000 iterations took {duration:0.1f} seconds. {total} total iters expected to take {duration * total / 1000: 0.1f} seconds."
-            )
-        if iterations % (total // 1000) == 0:
-            logging.info(
-                f"{iterations}/{total} pairs considered ({iterations / total * 100 : 0.2f}%)"
-            )
-
-        if iterations - last_new > 1e7:
-            logging.info(f"1e7 iterations since last new diff, stopping.")
-            break
+            if iterations - last_new > 1e7:
+                logging.info(f"1e7 iterations since last new diff, stopping.")
+                break
 
     return diffs
 
@@ -188,6 +189,7 @@ def is_redundant(
 
 def main(
     reward_path: Path,
+    env_name: FEATURE_ENV_NAMES,
     outdir: Path,
     policy_path: Optional[Path] = None,
     n_states: int = 10_000,
@@ -207,8 +209,8 @@ def main(
 
     torch.manual_seed(seed)
 
-    env = ExtractDictObWrapper(Miner(reward_weights=reward, num=n_envs), "rgb")
-    policy = get_policy(policy_path, actype=env.ac_space, num=n_envs)
+    env = make_env(kind=env_name, reward=reward, num=n_envs, extract_rgb=False)
+    policy = get_policy(policy_path, env=env, num=n_envs)
 
     diffs = make_aligned_reward_set(
         reward,

@@ -1,7 +1,9 @@
 from typing import Tuple
 
 import torch
+from mrl.envs.util import make_env
 from mrl.learn_values import QNetwork
+from phasic_policy_gradient.train import make_model
 
 MODEL_PATH = "tests/model.jd"
 EPSILON = 1e-4
@@ -25,7 +27,9 @@ def model_weight_stats(model: torch.nn.Module) -> Tuple[float, float]:
 
 
 def test_init():
-    model = torch.load(MODEL_PATH)
+    env = make_env(kind="miner", num=1, reward=0)
+    model = make_model(env, arch="detach")
+    model.load_state_dict(torch.load(MODEL_PATH, map_location=torch.device("cpu")))
 
     random_init_q = QNetwork(model, n_actions=16, discount_rate=1.0)
 
@@ -42,7 +46,9 @@ def test_init():
 
 
 def test_forward():
-    model = torch.load(MODEL_PATH)
+    env = make_env(kind="miner", num=1, reward=0)
+    model = make_model(env, arch="detach")
+    model.load_state_dict(torch.load(MODEL_PATH, map_location=torch.device("cpu")))
 
     obs = torch.ones((1, 64, 64, 3)).to(device=model.device)
     action = torch.ones((1, 1), dtype=torch.int64).to(device=model.device)
