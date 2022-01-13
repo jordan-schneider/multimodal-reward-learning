@@ -18,17 +18,14 @@ from typing import (
 import numpy as np
 import torch
 from GPUtil import GPUtil  # type: ignore
-from gym3 import ExtractDictObWrapper  # type: ignore
-from gym3.types import ValType  # type: ignore
 from phasic_policy_gradient.ppg import PhasicValueModel
 from phasic_policy_gradient.train import make_model
 from procgen import ProcgenGym3Env
 from tqdm import trange  # type: ignore
 
 from mrl.dataset.offline_buffer import RlDataset
-from mrl.envs import Miner
-from mrl.envs.probe_envs import OneActionNoObsOneTimestepOneReward as Probe1
-from mrl.envs.probe_envs import OneActionTwoObsOneTimestepDeterministicReward as Probe2
+from mrl.envs.feature_envs import FeatureEnv
+from mrl.envs.util import get_root_env
 from mrl.random_policy import RandomPolicy
 
 
@@ -84,26 +81,6 @@ def reinit(n: torch.nn.Module) -> None:
             m.reset_parameters()
 
     n.apply(_init)
-
-
-EnvName = Literal["miner", "miner_reward", "probe-1", "probe-2"]
-
-
-def make_env(name: EnvName, num: int, **kwargs) -> ProcgenGym3Env:
-    if name == "miner":
-        env = ProcgenGym3Env(num=1, env_name="miner")
-    elif name == "miner_reward":
-        assert (
-            "reward_weights" in kwargs.keys()
-        ), "Must supply reward_weights to Miner reward env."
-        env = Miner(num=num, **kwargs)
-    elif name == "probe-1":
-        env = Probe1(num=num, **kwargs)
-    elif name == "probe-2":
-        env = Probe2(num=num, **kwargs)
-
-    env = ExtractDictObWrapper(env, "rgb")
-    return env
 
 
 def procgen_rollout(
@@ -206,15 +183,19 @@ def procgen_rollout_features(
     n_trajs: Optional[int] = None,
     tqdm: bool = False,
 ) -> np.ndarray:
+
+    root_env = get_root_env(env)
+    assert isinstance(root_env, FeatureEnv)
+
     features = ArrayOrList(
-        np.empty((timesteps, env.num, Miner.N_FEATURES))
+        np.empty((timesteps, env.num, root_env.N_FEATURES))
         if timesteps is not None
         else []
     )
 
     def step():
         _, state, first = env.observe()
-        features[t] = env.callmethod("get_last_features")
+        features[t] = root_env.features
         action, _, _ = policy.act(
             torch.tensor(state, device=policy.device),
             torch.tensor(first, device=policy.device),
@@ -230,12 +211,12 @@ def procgen_rollout_features(
             _, _, first = step()
             cur_trajs += np.sum(first)
             t += 1
-        features[t] = env.callmethod("get_last_features")
+        features[t] = root_env.features
     elif timesteps is not None:
         times = trange(timesteps - 1) if tqdm else range(timesteps - 1)
         for t in times:
             step()
-        features[timesteps - 1] = env.callmethod("get_last_features")
+        features[timesteps - 1] = root_env.features
     else:
         raise ValueError("Must specify either timesteps or n_trajs")
     return features.numpy()
@@ -257,6 +238,9 @@ def procgen_rollout_dataset(
 ) -> RlDataset:
     state_shape = env.ob_space.shape
 
+    root_env = get_root_env(env)
+    assert isinstance(root_env, FeatureEnv)
+
     def make_array(
         shape: Tuple[int, ...], name: str, dtype=np.float32
     ) -> Optional[ArrayOrList]:
@@ -269,9 +253,15 @@ def procgen_rollout_dataset(
     actions = make_array((timesteps - 1, env.num), "action", dtype=np.uint8)
     rewards = make_array((timesteps, env.num), "reward")
     firsts = make_array((timesteps, env.num), "first", dtype=bool)
-    features = make_array((timesteps, env.num, Miner.N_FEATURES), "feature")
+    features = make_array((timesteps, env.num, root_env.N_FEATURES), "feature")
 
-    def record(t: int, env: ProcgenGym3Env, state, reward, first) -> None:
+    def record(
+        t: int,
+        feature: Optional[np.ndarray],
+        state: Optional[np.ndarray],
+        reward: Optional[np.ndarray],
+        first: Optional[np.ndarray],
+    ) -> None:
         if states is not None:
             states[t] = state
         if rewards is not None:
@@ -279,11 +269,11 @@ def procgen_rollout_dataset(
         if firsts is not None:
             firsts[t] = first
         if features is not None:
-            features[t] = env.callmethod("get_last_features")
+            features[t] = feature
 
     def step():
         reward, state, first = env.observe()
-        record(t, env, state, reward, first)
+        record(t, root_env.features, state, reward, first)
         action, _, _ = policy.act(
             torch.tensor(state, device=policy.device),
             torch.tensor(first, device=policy.device),
@@ -303,7 +293,7 @@ def procgen_rollout_dataset(
 
             cur_trajs += np.sum(first)
             t += 1
-        record(t, env, state, reward, first)
+        record(t, root_env.features, state, reward, first)
     elif timesteps > 0:
         times = trange(timesteps - 1) if tqdm else range(timesteps - 1)
 
@@ -311,7 +301,7 @@ def procgen_rollout_dataset(
             step()
 
         reward, state, first = env.observe()
-        record(timesteps - 1, env, state, reward, first)
+        record(timesteps - 1, root_env.features, state, reward, first)
     else:
         raise ValueError("Must speficy n_trajs if timesteps=-1")
 

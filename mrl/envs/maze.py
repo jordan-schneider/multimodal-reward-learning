@@ -2,11 +2,32 @@ import logging
 from typing import Any, Dict, Final, List, Optional, Sequence, Set, Tuple, cast
 
 import numpy as np
-from mrl.envs.util import recover_grid
-from procgen import ProcgenGym3Env
+from mrl.envs.feature_envs import FeatureEnv, StateInterface
+from mrl.envs.gym3_util import recover_grid
 
 
-class Maze(ProcgenGym3Env):
+class MazeState(StateInterface):
+    def __init__(
+        self,
+        grid_size: Tuple[int, int],
+        grid: np.ndarray,
+        agent_pos: Tuple[int, int],
+    ) -> None:
+        self.grid = recover_grid(grid, grid_size)
+        assert len(self.grid.shape) == 2
+        self.agent_pos = agent_pos
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, MazeState):
+            return False
+        if not np.array_equal(self.grid, other.grid):
+            return False
+        if not self.agent_pos == other.agent_pos:
+            return False
+        return True
+
+
+class Maze(FeatureEnv[MazeState]):
     ACTION_DICT: Final = {
         "up": 5,
         "down": 3,
@@ -15,26 +36,11 @@ class Maze(ProcgenGym3Env):
         "stay": 4,
     }
     STATE_ID_MOVABLE: Final = (2, 100)
+    N_FEATURES = 2
 
-    class MazeState:
-        def __init__(
-            self,
-            grid_size: Tuple[int, int],
-            grid: np.ndarray,
-            agent_pos: Tuple[int, int],
-        ) -> None:
-            self.grid = recover_grid(grid, grid_size)
-            assert len(self.grid.shape) == 2
-            self.agent_pos = agent_pos
-
-        def __eq__(self, other: Any) -> bool:
-            if not isinstance(other, Maze.MazeState):
-                return False
-            if not np.array_equal(self.grid, other.grid):
-                return False
-            if not self.agent_pos == other.agent_pos:
-                return False
-            return True
+    class State(MazeState):
+        # Allows the typing for Maze.State to work
+        pass
 
     def __init__(
         self,
@@ -124,9 +130,9 @@ class Maze(ProcgenGym3Env):
                 elif state.agent_pos != (*path[0],):
                     # I'm assuming the way the maze works is that there's exactly one path out.
                     # Mazegen uses Kruskal's algorithm, this is true of minimum spanning trees.
-                    self.shortest_paths[i] = np.concatenate(
-                        ([state.agent_pos], path), axis=0
-                    )
+                    path.insert(0, state.agent_pos)
+                    self.shortest_paths[i] = path
+
                 else:
                     # Current and previous postion are the same, you bumped into a wall, do nothing
                     pass
@@ -135,10 +141,10 @@ class Maze(ProcgenGym3Env):
         return self.shortest_paths
 
     def find_shortest_path(self, state: MazeState) -> List[Tuple[int, int]]:
-        State = Tuple[int, int]
+        Position = Tuple[int, int]
 
-        def get_neighbors(x: int, y: int) -> List[State]:
-            neighbors: List[State] = []
+        def get_neighbors(x: int, y: int) -> List[Position]:
+            neighbors: List[Position] = []
             if x > 0 and state.grid[x - 1, y] in self.STATE_ID_MOVABLE:
                 neighbors.append((x - 1, y))
             if (
@@ -158,9 +164,9 @@ class Maze(ProcgenGym3Env):
         current_state = state.agent_pos
         goal_state = self.get_goal_state(state)
 
-        previous: Dict[State, Optional[State]] = {current_state: None}
-        visited: Set[State] = {current_state}
-        queue: List[Tuple[State, State]] = []
+        previous: Dict[Position, Optional[Position]] = {current_state: None}
+        visited: Set[Position] = {current_state}
+        queue: List[Tuple[Position, Position]] = []
 
         first_neighbors = get_neighbors(*current_state)
         queue.extend([(current_state, neighbor) for neighbor in first_neighbors])
@@ -182,8 +188,8 @@ class Maze(ProcgenGym3Env):
                 f"No path from current {current_state} to goal {goal_state} in\n {state.grid}"
             )
 
-        trace_state: Optional[State] = goal_state
-        path: List[State] = []
+        trace_state: Optional[Position] = goal_state
+        path: List[Position] = []
         while trace_state is not None:
             path.append(trace_state)
             trace_state = previous[trace_state]
@@ -206,4 +212,4 @@ class Maze(ProcgenGym3Env):
     @staticmethod
     def make_latent_state(info: Dict[str, Any]) -> MazeState:
         agent_pos = cast(Tuple[int, int], tuple(info["agent_pos"]))
-        return Maze.MazeState(info["grid_size"], info["grid"], agent_pos)
+        return MazeState(info["grid_size"], info["grid"], agent_pos)

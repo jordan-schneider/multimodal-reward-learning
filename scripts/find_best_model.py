@@ -24,6 +24,7 @@ def main(
     torch.manual_seed(seed)
     np.random.seed(seed)
 
+    # TODO: Swap out miner for make_env
     env = Miner(np.ones(5), num=1, rand_seed=seed)
     env = ExtractDictObWrapper(env, "rgb")
 

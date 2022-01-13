@@ -15,7 +15,7 @@ import torch
 from gym3.extract_dict_ob import ExtractDictObWrapper  # type: ignore
 from phasic_policy_gradient.ppg import PhasicValueModel
 
-from mrl.envs import Miner
+from mrl.envs.util import ENV_NAMES, make_env
 from mrl.util import (
     get_policy,
     np_gather,
@@ -27,6 +27,7 @@ from mrl.util import (
 
 def gen_state_preferences(
     rootdir: Path,
+    env: ENV_NAMES,
     n_states: int,
     n_parallel_envs: int,
     outname: str,
@@ -49,8 +50,9 @@ def gen_state_preferences(
     rng = np.random.default_rng()
 
     generator = Generator(
-        n_parallel_envs,
-        normalize_step_features,
+        kind=env,
+        n_parallel_envs=n_parallel_envs,
+        normalize_features=normalize_step_features,
         policy_paths=list(set([policy_path, None])),
         rng=rng,
     )
@@ -115,6 +117,7 @@ def gen_state_preferences(
 
 def gen_traj_preferences(
     rootdir: Path,
+    env: ENV_NAMES,
     n_trajs: int,
     n_parallel_envs: int,
     outname: str,
@@ -137,8 +140,9 @@ def gen_traj_preferences(
     rng = np.random.default_rng()
 
     generator = Generator(
-        n_parallel_envs,
-        normalize_step_features,
+        kind=env,
+        n_parallel_envs=n_parallel_envs,
+        normalize_features=normalize_step_features,
         policy_paths=[Path(policy_path), None] if policy_path is not None else [None],
         rng=rng,
     )
@@ -334,13 +338,15 @@ def orient_diffs(
 class Generator:
     def __init__(
         self,
+        kind: ENV_NAMES,
         n_parallel_envs: int,
         normalize_features: bool,
         policy_paths: List[Optional[Path]],
         rng: np.random.Generator,
     ) -> None:
-        env = Miner(
-            reward_weights=np.zeros(5),
+        env = make_env(
+            kind=kind,
+            reward=0,
             num=n_parallel_envs,
             normalize_features=normalize_features,
         )

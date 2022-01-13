@@ -1,4 +1,5 @@
 import logging
+from functools import partial
 from typing import Tuple
 
 import numpy as np
@@ -7,7 +8,9 @@ from hypothesis import given
 from hypothesis.extra.numpy import arrays
 from hypothesis.strategies import booleans, floats, integers, just, shared, tuples
 from mrl.dataset.offline_buffer import RlDataset, SarsDataset
-from torch.testing import assert_equal
+from torch.testing import assert_allclose
+
+assert_equal = partial(assert_allclose, atol=0, rtol=0)
 
 
 def np2t(*args: np.ndarray) -> Tuple[torch.Tensor, ...]:
