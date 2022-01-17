@@ -201,7 +201,11 @@ def gen_traj_preferences(
             feature_diff = (
                 torch.sum(traj_a.features, dim=0) - torch.sum(traj_b.features, dim=0)
             ).numpy()
-            assert feature_diff.shape == (4,) or feature_diff.shape == (5,)
+            assert (
+                env != "miner"
+                or feature_diff.shape == (4,)
+                or feature_diff.shape == (5,)
+            )
             if env == "miner" and not use_exit:
                 feature_diff = np.delete(feature_diff, 1)
             if np.linalg.norm(feature_diff) == 0:
@@ -216,7 +220,11 @@ def gen_traj_preferences(
             )
             if oriented_diff.shape[0] == 0:
                 continue
-            assert oriented_diff.shape == (4,) or feature_diff.shape == (5,)
+            assert (
+                env != "miner"
+                or oriented_diff.shape == (4,)
+                or oriented_diff.shape == (5,)
+            )
             diff_batch.append(oriented_diff)
             probs_batch.append(probs)
 
