@@ -36,12 +36,12 @@ def make_env(
 ) -> ProcgenGym3Env:
     if kind == "maze":
         assert reward is not None
-        if isinstance(reward, float):
+        if not isinstance(reward, np.ndarray):
             reward = np.full(shape=2, fill_value=reward)
         env = Maze(reward, num, **kwargs)
     elif kind == "miner":
         assert reward is not None
-        if isinstance(reward, float):
+        if not isinstance(reward, np.ndarray):
             reward = np.full(shape=5, fill_value=reward)
         env = Miner(reward, num, **kwargs)
     elif kind == "probe-1":

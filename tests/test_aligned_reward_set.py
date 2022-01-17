@@ -1,36 +1,48 @@
 import numpy as np
 import torch
-from gym3 import ExtractDictObWrapper  # type: ignore
 from hypothesis import given, settings
 from hypothesis.extra.numpy import arrays
 from hypothesis.strategies import floats, integers
 from mrl.aligned_rewards.make_ars import make_aligned_reward_set
 from mrl.dataset.random_policy import RandomPolicy
-from mrl.envs.miner import Miner
+from mrl.envs.util import make_env
+from mrl.inference.posterior import cover_sphere
 
 
 @given(
     reward=arrays(
-        dtype=np.float32, shape=(5,), elements=floats(-1.0, 1.0, width=32)
+        dtype=np.float32,
+        shape=(5,),
+        elements=floats(-1.0, 1.0, width=32).filter(lambda x: np.all(np.abs(x) > 0.1)),
     ).filter(lambda r: np.any(r != 0)),
-    n_states=integers(min_value=2, max_value=10),
-    n_trajs=integers(min_value=2, max_value=10),
     seed=integers(0, 2 ** 31 - 1),
 )
-@settings(deadline=None)
-def test_aligned_reward_set_consistent(
-    reward: np.ndarray, n_states: int, n_trajs: int, seed: int
-) -> None:
+@settings(deadline=None, max_examples=100)
+def test_aligned_reward_set_nonredundant(reward: np.ndarray, seed: int) -> None:
     torch.manual_seed(seed)
 
     reward = reward / np.linalg.norm(reward)
-    env = ExtractDictObWrapper(Miner(reward_weights=reward, num=1), "rgb")
+    env = make_env(kind="miner", num=1, reward=reward)
 
     policy = RandomPolicy(env.ac_space, 1)
     assert policy.device == torch.device("cpu")
 
     diffs = make_aligned_reward_set(
-        reward, n_states, n_trajs, env, policy, use_done_feature=True, tqdm=False
+        reward=reward,
+        n_states=2,
+        n_trajs=2,
+        env=env,
+        policy=policy,
+        tqdm=False,
     )
 
-    assert np.all(diffs @ reward > 0)
+    reward_samples = cover_sphere(
+        n_samples=100_000, ndims=5, rng=np.random.default_rng(seed)
+    )
+    agreement = (diffs @ reward_samples.T > 0).T
+    reward_aligned = np.all(agreement, axis=1)
+
+    for i in range(diffs.shape[0]):
+        agreement_leave_out = np.concatenate((agreement[:i], agreement[i + 1 :]))
+        reward_aligned_leave_out = np.all(agreement_leave_out, axis=1)
+        assert not np.array_equal(reward_aligned, reward_aligned_leave_out)

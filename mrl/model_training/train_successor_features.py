@@ -7,11 +7,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 from gym3.extract_dict_ob import ExtractDictObWrapper  # type: ignore
-from tqdm import trange  # type: ignore
-
 from mrl.envs import Maze, Miner
 from mrl.envs.util import FEATURE_ENV_NAMES, make_env
 from mrl.util import batch, find_best_gpu, get_policy, setup_logging
+from tqdm import trange  # type: ignore
 
 # TODO: Figure out where to put this
 MINER_GRID_ITEMS_TO_ONE_HOT_POS: Final = {1: 0, 2: 1, 3: 2, 4: 3, 6: 4, 9: 5, 100: 6}
@@ -177,7 +176,6 @@ def main(
 
     for t in trange(n_batches):
         for i in range(batch_size):
-            logging.debug(f"Step {i}/{batch_size}")
             rewards, obs, firsts = rgb_env.observe()
             obs = torch.tensor(obs)
             firsts = torch.tensor(firsts)

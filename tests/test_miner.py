@@ -17,11 +17,13 @@ DANGEROUS_OBJECTS: Final = (1, 2, 3, 4)
 PATHABLE_OBJECTS: Final = (9, 100)
 DIAMONDS = (1, 3)
 
+N_FEATURES = 5
+
 
 @settings(deadline=3000)
 @given(seed=integers(0, 2 ** 31 - 1))
 def test_first(seed: int) -> None:
-    env = Miner(reward_weights=np.zeros(Miner.N_FEATURES), num=1, rand_seed=seed)
+    env = Miner(reward_weights=np.zeros(N_FEATURES), num=1, rand_seed=seed)
     _, _, first = env.observe()
     assert first
 
@@ -47,7 +49,7 @@ def test_first(seed: int) -> None:
     seed=integers(0, 2 ** 31 - 1),
 )
 def test_grid_items(actions: List[int], seed: int) -> None:
-    env = Miner(reward_weights=np.zeros(Miner.N_FEATURES), num=1, rand_seed=seed)
+    env = Miner(reward_weights=np.zeros(N_FEATURES), num=1, rand_seed=seed)
     for action in actions:
         env.act(np.array([action]))
         state = env.make_latent_states()[0]
@@ -67,7 +69,7 @@ def test_grid_items(actions: List[int], seed: int) -> None:
     seed=integers(0, 2 ** 31 - 1),
 )
 def test_empty_increasing(actions: List[int], seed: int):
-    env = Miner(reward_weights=np.zeros(Miner.N_FEATURES), num=1, rand_seed=seed)
+    env = Miner(reward_weights=np.zeros(N_FEATURES), num=1, rand_seed=seed)
     last_n_empty = -1
     for action in actions:
         env.act(np.array([action]))
@@ -90,7 +92,7 @@ def test_empty_increasing(actions: List[int], seed: int):
     seed=integers(0, 2 ** 31 - 1),
 )
 def test_diamonds_remaining_decreasing(actions: List[int], seed: int):
-    env = Miner(reward_weights=np.zeros(Miner.N_FEATURES), num=1, rand_seed=seed)
+    env = Miner(reward_weights=np.zeros(N_FEATURES), num=1, rand_seed=seed)
     last_n_diamonds = 35 * 35 + 1  # number of cells + 1
     for action in actions:
         env.act(np.array([action]))
@@ -113,7 +115,7 @@ def test_diamonds_remaining_decreasing(actions: List[int], seed: int):
 )
 def test_start_diamonds_remaining(seed: int):
     frac = 12 / 400.0
-    env = Miner(reward_weights=np.zeros(Miner.N_FEATURES), num=1, rand_seed=seed)
+    env = Miner(reward_weights=np.zeros(N_FEATURES), num=1, rand_seed=seed)
     state = env.make_latent_states()[0]
     diamonds_remaining = env.diamonds_remaining(state)
     assert diamonds_remaining == int(frac * state.grid.size)
@@ -124,7 +126,7 @@ def test_start_diamonds_remaining(seed: int):
     seed=integers(0, 2 ** 31 - 1),
 )
 def test_dist_to_diamond(seed: int):
-    env = Miner(reward_weights=np.zeros(Miner.N_FEATURES), num=1, rand_seed=seed)
+    env = Miner(reward_weights=np.zeros(N_FEATURES), num=1, rand_seed=seed)
     start_state = env.make_latent_states()[0]
     diamonds_remaining = Miner.diamonds_remaining(start_state)
     starting_dist, pos = cast(
@@ -166,7 +168,7 @@ def test_dist_to_diamond(seed: int):
     seed=integers(0, 2 ** 31 - 1),
 )
 def test_safe_at_start(seed):
-    env = Miner(reward_weights=np.zeros(Miner.N_FEATURES), num=1, rand_seed=seed)
+    env = Miner(reward_weights=np.zeros(N_FEATURES), num=1, rand_seed=seed)
     start_state = env.make_latent_states()[0]
     agent_pos = start_state.agent_pos
     danger, t = cast(
@@ -318,7 +320,7 @@ def test_in_danger(seed):
     # into two below it. Then we can find a path to underneath the object, move down, and be in
     # danger.
 
-    env = Miner(reward_weights=np.zeros(Miner.N_FEATURES), num=1, rand_seed=seed)
+    env = Miner(reward_weights=np.zeros(N_FEATURES), num=1, rand_seed=seed)
     start_state = env.make_latent_states()[0]
 
     path = find_path_to_dangerous_state(start_state)
@@ -380,7 +382,7 @@ def follow_path(env: Miner, path: Sequence[Action]) -> bool:
     seed=integers(0, 2 ** 31 - 1),
     reward_weights=arrays(
         np.float64,
-        (Miner.N_FEATURES,),
+        (N_FEATURES,),
         elements=floats(
             min_value=1e10, max_value=1e10, allow_nan=False, allow_infinity=False
         ),

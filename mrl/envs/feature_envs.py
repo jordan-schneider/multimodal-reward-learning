@@ -14,8 +14,6 @@ S = TypeVar("S", bound=StateInterface)
 
 
 class FeatureEnv(ProcgenGym3Env, Generic[S]):
-
-    N_FEATURES: int
     _reward_weights: np.ndarray
     features: np.ndarray
 
@@ -23,4 +21,8 @@ class FeatureEnv(ProcgenGym3Env, Generic[S]):
         raise NotImplementedError()
 
     def make_latent_states(self) -> List[S]:
+        raise NotImplementedError()
+
+    @property
+    def n_features(self) -> int:
         raise NotImplementedError()
