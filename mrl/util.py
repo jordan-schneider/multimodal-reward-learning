@@ -149,6 +149,9 @@ class ArrayOrList:
         else:
             self.val[key] = value
 
+    def __getitem__(self, key: Union[int, slice]) -> Any:
+        return self.val[key]
+
     def numpy(self) -> np.ndarray:
         if self.list:
             return np.array(self.val)
@@ -184,17 +187,16 @@ def procgen_rollout_features(
     n_trajs: Optional[int] = None,
     tqdm: bool = False,
 ) -> np.ndarray:
-
     root_env = get_root_env(env)
     assert isinstance(root_env, FeatureEnv)
 
     features = ArrayOrList(
-        np.empty((timesteps, env.num, root_env.N_FEATURES))
+        np.empty((timesteps, env.num, root_env._reward_weights.shape[0]))
         if timesteps is not None
         else []
     )
 
-    def step():
+    def step(t: int):
         _, state, first = env.observe()
         features[t] = root_env.features
         action, _, _ = policy.act(
@@ -209,18 +211,160 @@ def procgen_rollout_features(
         cur_trajs = 0
         t = 0
         while cur_trajs < n_trajs and (timesteps is None or t < timesteps):
-            _, _, first = step()
+            _, _, first = step(t)
             cur_trajs += np.sum(first)
             t += 1
         features[t] = root_env.features
     elif timesteps is not None:
         times = trange(timesteps - 1) if tqdm else range(timesteps - 1)
         for t in times:
-            step()
+            step(t)
         features[timesteps - 1] = root_env.features
     else:
         raise ValueError("Must specify either timesteps or n_trajs")
     return features.numpy()
+
+
+class DatasetRoller:
+    def __init__(
+        self,
+        env: ProcgenGym3Env,
+        policy: PhasicValueModel,
+        timesteps: int = -1,
+        n_trajs: Optional[int] = None,
+        flags: Sequence[Literal["state", "action", "reward", "first", "feature"]] = [
+            "state",
+            "action",
+            "reward",
+            "first",
+            "feature",
+        ],
+        tqdm: bool = False,
+    ):
+        self.env = env
+        self.root_env = cast(FeatureEnv, get_root_env(env))
+        assert isinstance(self.root_env, FeatureEnv)
+
+        self.policy = policy
+
+        self.timesteps = timesteps
+        if self.timesteps == 0 or self.timesteps < -1:
+            raise ValueError("timesteps must be positive or -1")
+        self.run_until_done = self.timesteps == -1
+
+        self.n_trajs = n_trajs
+        if n_trajs is not None and n_trajs <= 0:
+            raise ValueError("n_trajs must be positive")
+        if self.run_until_done and self.n_trajs is None:
+            raise ValueError("Must specify n_trajs if timesteps is -1")
+
+        self.fixed_size_arrays = timesteps > -1 and n_trajs is None
+
+        self.flags = flags
+        self.tqdm = tqdm
+
+        state_shape = env.ob_space.shape
+
+        self.states = self.make_array((timesteps + 1, env.num, *state_shape), "state")
+        self.actions = self.make_array((timesteps, env.num), "action", dtype=np.uint8)
+        self.rewards = self.make_array((timesteps + 1, env.num), "reward")
+        self.firsts = self.make_array((timesteps + 1, env.num), "first", dtype=bool)
+        self.features = self.make_array(
+            (timesteps + 1, env.num, self.root_env.n_features), "feature"
+        )
+
+    def make_array(
+        self, shape: Tuple[int, ...], name: str, dtype=np.float32
+    ) -> Optional[ArrayOrList]:
+        if name in self.flags:
+            return ArrayOrList(
+                np.empty(shape, dtype=dtype) if self.fixed_size_arrays else []
+            )
+        else:
+            return None
+
+    def record(
+        self,
+        t: int,
+        feature: Optional[np.ndarray],
+        state: Optional[np.ndarray],
+        reward: Optional[np.ndarray],
+        first: Optional[np.ndarray],
+    ) -> None:
+        self.last_t = t
+        if self.states is not None:
+            self.states[t] = state
+        if self.rewards is not None:
+            self.rewards[t] = reward
+        if self.firsts is not None:
+            self.firsts[t] = first
+        if self.features is not None:
+            self.features[t] = feature
+
+    def step(self, t: int):
+        self.last_t = t
+        reward, state, first = self.env.observe()
+        self.record(t, self.root_env.features, state, reward, first)
+        action, _, _ = self.policy.act(
+            torch.tensor(state, device=self.policy.device),
+            torch.tensor(first, device=self.policy.device),
+            self.policy.initial_state(self.env.num),
+        )
+        action = action.cpu().numpy()
+        self.env.act(action)
+        if self.actions is not None:
+            self.actions[t] = action
+        return state, action, reward, first
+
+    def roll(self) -> RlDataset:
+        if self.n_trajs is not None:
+            self.roll_n_trajs()
+        elif self.timesteps > 0:
+            self.roll_timesteps()
+        else:
+            raise ValueError("Must speficy n_trajs if timesteps=-1")
+
+        states_arr, actions_arr, rewards_arr, firsts_arr, features_arr = (
+            arr.numpy() if arr is not None else None
+            for arr in (
+                self.states,
+                self.actions,
+                self.rewards,
+                self.firsts,
+                self.features,
+            )
+        )
+
+        return RlDataset.from_gym3(
+            states=states_arr,
+            actions=actions_arr,
+            rewards=rewards_arr,
+            firsts=firsts_arr,
+            features=features_arr,
+        )
+
+    def roll_timesteps(self):
+        times = trange(self.timesteps) if self.tqdm else range(self.timesteps - 1)
+
+        for t in times:
+            self.step(t)
+
+        reward, state, first = self.env.observe()
+        self.record(self.timesteps, self.root_env.features, state, reward, first)
+
+    def roll_n_trajs(self):
+        assert self.n_trajs is not None
+        cur_trajs = -1  # -1 because the first step has first=True
+        t = 0
+        while cur_trajs < self.n_trajs and (self.run_until_done or t < self.timesteps):
+            _, _, _, first = self.step(t)
+
+            cur_trajs += np.sum(first)
+            t += 1
+
+        if t == self.timesteps:
+            reward, state, first = self.env.observe()
+            self.record(self.timesteps, self.root_env.features, state, reward, first)
 
 
 def procgen_rollout_dataset(
@@ -237,87 +381,8 @@ def procgen_rollout_dataset(
     ],
     tqdm: bool = False,
 ) -> RlDataset:
-    state_shape = env.ob_space.shape
-
-    root_env = get_root_env(env)
-    assert isinstance(root_env, FeatureEnv)
-
-    def make_array(
-        shape: Tuple[int, ...], name: str, dtype=np.float32
-    ) -> Optional[ArrayOrList]:
-        if name in flags:
-            return ArrayOrList(np.empty(shape, dtype=dtype) if timesteps > 0 else [])
-        else:
-            return None
-
-    states = make_array((timesteps, env.num, *state_shape), "state")
-    actions = make_array((timesteps - 1, env.num), "action", dtype=np.uint8)
-    rewards = make_array((timesteps, env.num), "reward")
-    firsts = make_array((timesteps, env.num), "first", dtype=bool)
-    features = make_array((timesteps, env.num, root_env.N_FEATURES), "feature")
-
-    def record(
-        t: int,
-        feature: Optional[np.ndarray],
-        state: Optional[np.ndarray],
-        reward: Optional[np.ndarray],
-        first: Optional[np.ndarray],
-    ) -> None:
-        if states is not None:
-            states[t] = state
-        if rewards is not None:
-            rewards[t] = reward
-        if firsts is not None:
-            firsts[t] = first
-        if features is not None:
-            features[t] = feature
-
-    def step():
-        reward, state, first = env.observe()
-        record(t, root_env.features, state, reward, first)
-        action, _, _ = policy.act(
-            torch.tensor(state, device=policy.device),
-            torch.tensor(first, device=policy.device),
-            policy.initial_state(env.num),
-        )
-        action = action.cpu().numpy()
-        env.act(action)
-        if actions is not None:
-            actions[t] = action
-        return state, action, reward, first
-
-    if n_trajs is not None and n_trajs > 0 and timesteps != 0:
-        cur_trajs = 0
-        t = 0
-        while cur_trajs < n_trajs and (timesteps < 0 or t < timesteps):
-            state, _, reward, first = step()
-
-            cur_trajs += np.sum(first)
-            t += 1
-        record(t, root_env.features, state, reward, first)
-    elif timesteps > 0:
-        times = trange(timesteps - 1) if tqdm else range(timesteps - 1)
-
-        for t in times:
-            step()
-
-        reward, state, first = env.observe()
-        record(timesteps - 1, root_env.features, state, reward, first)
-    else:
-        raise ValueError("Must speficy n_trajs if timesteps=-1")
-
-    states_arr, actions_arr, rewards_arr, firsts_arr, features_arr = (
-        arr.numpy() if arr is not None else None
-        for arr in (states, actions, rewards, firsts, features)
-    )
-
-    return RlDataset.from_gym3(
-        states=states_arr,
-        actions=actions_arr,
-        rewards=rewards_arr,
-        firsts=firsts_arr,
-        features=features_arr,
-    )
+    roller = DatasetRoller(env, policy, timesteps, n_trajs, flags, tqdm)
+    return roller.roll()
 
 
 def find_policy_path(
@@ -349,6 +414,7 @@ def np_gather(
         for path in indir.iterdir()
         if path.is_file() and re.search(f"/{name}(.[0-9]+)?.npy", str(path))
     ]
+    logging.info(f"Gathering from {paths}")
     if len(paths) == 0:
         raise FileNotFoundError(f"No {name} files found in {indir}")
     shards = []
@@ -367,6 +433,17 @@ def np_gather(
     data = np.concatenate(shards)
     logging.info(f"Loaded array with shape {data.shape} from {indir}")
     return data
+
+
+def np_remove(indir: Path, name: str) -> None:
+    paths = [
+        path
+        for path in indir.iterdir()
+        if path.is_file() and re.search(f"/{name}(\.[0-9]+)?\.npy", str(path))
+    ]
+    logging.info(f"Removing {paths}")
+    for path in paths:
+        path.unlink()
 
 
 def sample_data(

@@ -162,16 +162,10 @@ def test_finish():
         path = env.get_shortest_paths()[0]
         while len(path) > 2:
             action = find_first_action(path, env.ACTION_DICT)
-            logging.debug(f"action={action}")
 
             env.act(np.array([action]))
 
             path = env.get_shortest_paths()[0]
-            logging.debug(f"path={path}")
-
-            state = env.make_latent_states()[0]
-            goal_state = env.get_goal_state(state)
-            logging.debug(f"agent_pos={state.agent_pos}, goal_pos={goal_state}")
 
         action = find_first_action(path, env.ACTION_DICT)
         env.act(np.array([action]))

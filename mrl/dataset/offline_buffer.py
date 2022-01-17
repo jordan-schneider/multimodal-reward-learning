@@ -74,7 +74,11 @@ class RlDataset:
         """Builds RLDataset from procgen_rollout output arrays"""
         return cls(
             **RlDataset.process_gym3(
-                states=states, actions=actions, rewards=rewards, firsts=firsts, features=features
+                states=states,
+                actions=actions,
+                rewards=rewards,
+                firsts=firsts,
+                features=features,
             )
         )
 
@@ -88,7 +92,11 @@ class RlDataset:
         features: Optional[np.ndarray] = None,
     ) -> RlDataset:
         data = RlDataset.process_gym3(
-            states=states, actions=actions, rewards=rewards, firsts=firsts, features=features
+            states=states,
+            actions=actions,
+            rewards=rewards,
+            firsts=firsts,
+            features=features,
         )
 
         if self.states is not None and data["states"] is not None:
@@ -147,7 +155,9 @@ class RlDataset:
 
         if len(self.dones) == 0:
             # Only one timestep provided
-            yield self.Traj(states=self.states, actions=self.actions, rewards=self.rewards)
+            yield self.Traj(
+                states=self.states, actions=self.actions, rewards=self.rewards
+            )
             return
 
         # We want to include the state for which done=True, and slicing logic requires that we add an additional one
@@ -158,10 +168,18 @@ class RlDataset:
         start = 0
         for done_index in done_indices:
             yield RlDataset.Traj(
-                states=self.states[start:done_index] if self.states is not None else None,
-                actions=self.actions[start:done_index] if self.actions is not None else None,
-                rewards=self.rewards[start:done_index] if self.rewards is not None else None,
-                features=self.features[start:done_index] if self.features is not None else None,
+                states=self.states[start:done_index]
+                if self.states is not None
+                else None,
+                actions=self.actions[start:done_index]
+                if self.actions is not None
+                else None,
+                rewards=self.rewards[start:done_index]
+                if self.rewards is not None
+                else None,
+                features=self.features[start:done_index]
+                if self.features is not None
+                else None,
             )
             start = done_index
 
@@ -185,25 +203,23 @@ class RlDataset:
         )
 
         discounts = torch.pow(
-            torch.ones(horizon, dtype=self.rewards.dtype) * discount_rate, torch.arange(horizon)
+            torch.ones(horizon, dtype=self.rewards.dtype) * discount_rate,
+            torch.arange(horizon),
         )
 
         done_indices = self.dones.nonzero(as_tuple=True)[0] + 1
         returns: List[torch.Tensor] = []
         start_index = 0
         for done_index in done_indices:
-            logging.debug(
-                f"done_index={done_index}, start_index={start_index}, n_returns={len(returns)}"
-            )
             while start_index < done_index:
-                reward_batch = self.rewards[start_index : min(start_index + horizon, done_index)]
+                reward_batch = self.rewards[
+                    start_index : min(start_index + horizon, done_index)
+                ]
                 assert (
                     reward_batch.dtype == discounts.dtype
                 ), f"dtype mismatch, reward_batch={reward_batch.dtype}, discounts={discounts.dtype}"
                 returns.append(reward_batch @ discounts[: len(reward_batch)])
                 start_index += 1
-
-        logging.debug(f"start_index={start_index}, n_returns={len(returns)}")
 
         if len(done_indices) > 0:
             assert (
@@ -222,7 +238,9 @@ class RlDataset:
         last_index = max(start_index, len(self.rewards) - horizon)
         states, actions = self.states[:last_index], self.actions[:last_index]
 
-        assert len(states) == len(returns), f"{len(states)} states but {len(returns)} returns"
+        assert len(states) == len(
+            returns
+        ), f"{len(states)} states but {len(returns)} returns"
 
         returns_torch = torch.stack(returns)
 
@@ -267,13 +285,20 @@ class SarsDataset(RlDataset):
         assert self.states is not None and self.dones is not None
         return len(self.states) - torch.sum(self.dones) - 1
 
-    def __getitem__(self, i: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        assert self.states is not None and self.actions is not None and self.rewards is not None
+    def __getitem__(
+        self, i: int
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        assert (
+            self.states is not None
+            and self.actions is not None
+            and self.rewards is not None
+        )
         j = self.index_map[i]
-        logging.debug(f"Mapping {i} to {j}")
         return self.states[j], self.actions[j], self.rewards[j], self.states[j + 1]
 
-    def make_sars(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def make_sars(
+        self,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         # The torch index typing doesn't handle numpy arrays for some reason.
         states = self.states[self.index_map]  # type: ignore
         actions = self.actions[self.index_map]  # type: ignore
@@ -303,7 +328,11 @@ class SarsDataset(RlDataset):
     ) -> SarsDataset:
         return cls(
             **RlDataset.process_gym3(
-                states=states, actions=actions, rewards=rewards, firsts=firsts, features=features
+                states=states,
+                actions=actions,
+                rewards=rewards,
+                firsts=firsts,
+                features=features,
             )
         )
 
@@ -319,6 +348,10 @@ class SarsDataset(RlDataset):
         return cast(
             SarsDataset,
             super().append_gym3(
-                states=states, actions=actions, rewards=rewards, firsts=firsts, features=features
+                states=states,
+                actions=actions,
+                rewards=rewards,
+                firsts=firsts,
+                features=features,
             ),
         )

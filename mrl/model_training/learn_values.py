@@ -14,13 +14,8 @@ from mrl.dataset.offline_buffer import RlDataset
 from mrl.envs.util import ENV_NAMES, make_env
 from mrl.model_training.online_batcher import BatchGenerator
 from mrl.model_training.writer import SequentialWriter
-from mrl.util import (
-    find_best_gpu,
-    find_policy_path,
-    procgen_rollout,
-    reinit,
-    setup_logging,
-)
+from mrl.util import (find_best_gpu, find_policy_path, procgen_rollout, reinit,
+                      setup_logging)
 from phasic_policy_gradient.ppg import PhasicValueModel
 from procgen import ProcgenGym3Env
 from torch.utils.tensorboard import SummaryWriter
@@ -159,7 +154,6 @@ def train_q(
         loss = torch.zeros(1)
 
         if n > 0:
-            logging.debug("Processing non-final states")
             q_pred = q.forward(states, actions).cpu()
             writer.add_histogram("train/q_pred", q_pred)
 
@@ -173,15 +167,11 @@ def train_q(
 
         final_states = batch.states[:-1][batch.dones]
         if len(final_states) > 0:
-            logging.debug("Processing final states")
 
             if __debug__:
                 pos_states = torch.sum(final_states[:, 0, 0, 0] > 0)
                 neg_states = torch.sum(final_states[:, 0, 0, 0] < 0)
                 assert pos_states + neg_states == len(final_states)
-                logging.debug(
-                    f"{pos_states} positive states, {neg_states} negative states"
-                )
 
             q_pred_final = q.state_value(final_states).cpu()
             writer.add_histogram("train/q_pred_final", q_pred_final)
@@ -247,7 +237,6 @@ def train_q_trunc_returns(
         q_pred = q.forward(
             states.to(device=q.device), actions.to(device=q.device)
         ).cpu()
-        logging.debug(f"q_pred={q_pred}")
         assert q_pred.shape == (n,), f"q_pred={q_pred.shape} not expected ({n})"
         loss = torch.sum((q_pred - partial_returns) ** 2)
 

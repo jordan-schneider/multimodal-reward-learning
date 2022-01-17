@@ -99,10 +99,9 @@ def compare_modalities(
                     use_hinge=use_hinge,
                     use_shift=use_shift,
                     results=results,
-                    true_reward=true_reward if reward_path is not None else None,
-                    aligned_reward_set=aligned_reward_set
-                    if aligned_reward_set_path is not None
-                    else None,
+                    true_reward=true_reward,
+                    aligned_reward_set=aligned_reward_set,
+                    find_centroids=plot_individual,
                     save_all=save_all,
                 )
                 if plot_individual:
@@ -133,6 +132,10 @@ def load_ground_truth(
             aligned_reward_set = AlignedRewardSet(
                 Path(aligned_reward_set_path), true_reward
             )
+        else:
+            logging.warning("No aligned reward set provided")
+    else:
+        logging.warning("No ground truth reward provided")
 
     return true_reward, aligned_reward_set
 
@@ -173,15 +176,13 @@ def load_comparison_diffs(
 
     if not use_done_feature:
         for key, diff in all_diffs.items():
-            all_diffs[key] = np.delete(diff, 1, axis=1)
+            if diff.shape[1] == 5:
+                all_diffs[key] = np.delete(diff, 1, axis=1)
 
     remaining_diffs = dict(all_diffs)
     for trial in range(n_trials):
         trial_diffs: Dict[str, np.ndarray] = {}
         for key, diff in remaining_diffs.items():
-            logging.debug(
-                f"{diff.shape[0]} of {all_diffs[key].shape[0]} remaining diffs"
-            )
             sample, indices = sample_data(
                 data=diff,
                 n=max_comparisons,
@@ -208,6 +209,7 @@ def comparison_analysis(
     results: Results,
     aligned_reward_set: Optional[AlignedRewardSet],
     true_reward: Optional[np.ndarray] = None,
+    find_centroids: bool = False,
     save_all: bool = False,
 ) -> Results:
     reward_likelihood = hinge_likelihood if use_hinge else boltzmann_likelihood
@@ -263,23 +265,26 @@ def comparison_analysis(
         dispersions = []
         mean_rewards[key] = find_means(rewards=reward_samples, likelihoods=l)
         proj_mean_rewards[key] = normalize(mean_rewards[key])
-        for t in trange(l.shape[1]):
-            try:
-                centroid, dist = find_centroid(
-                    points=reward_samples,
-                    weights=l[:, t],
-                    max_iter=10,
-                    init=proj_mean_rewards[key][t],
-                )
-                if np.any(np.isnan(centroid)):
-                    continue
-                assert np.allclose(
-                    np.linalg.norm(centroid), 1.0
-                ), f"centroid={centroid} has norm={np.linalg.norm(centroid)} far from 1."
-                centroids.append(centroid)
-                dispersions.append(dist)
-            except Exception as e:
-                logging.warning(f"Failed to find centroid for time t={t}", exc_info=e)
+        if find_centroids:
+            for t in trange(l.shape[1]):
+                try:
+                    centroid, dist = find_centroid(
+                        points=reward_samples,
+                        weights=l[:, t],
+                        max_iter=10,
+                        init=proj_mean_rewards[key][t],
+                    )
+                    if np.any(np.isnan(centroid)):
+                        continue
+                    assert np.allclose(
+                        np.linalg.norm(centroid), 1.0
+                    ), f"centroid={centroid} has norm={np.linalg.norm(centroid)} far from 1."
+                    centroids.append(centroid)
+                    dispersions.append(dist)
+                except Exception as e:
+                    logging.warning(
+                        f"Failed to find centroid for time t={t}", exc_info=e
+                    )
 
         centroid_per_modality[key] = np.stack(centroids)
         assert np.allclose(np.linalg.norm(centroid_per_modality[key], axis=1), 1.0)
@@ -420,9 +425,6 @@ def mean_geodesic_dispersion(
     # Arc length is angle times radius, and the radius is 1, so the arc length between the mean
     # reward and each sample is just the angle between them, which you can get using the standard
     # cos(theta) = a @ b / (|a| * |b|) trick, and the norm of all vectors is 1.
-    logging.debug(
-        f"reward samples shape={reward_samples.shape}, target rewards shape={target_rewards.shape}"
-    )
     assert np.allclose(
         np.linalg.norm(reward_samples, axis=1), 1
     ), "Reward samples not normalized"
@@ -430,9 +432,6 @@ def mean_geodesic_dispersion(
     dots = np.clip(reward_samples @ target_rewards.T, -1.0, 1.0)
 
     dists = np.arccos(dots)
-    logging.debug(
-        f"samples {reward_samples.shape} likelihoods {likelihoods.shape} targets {target_rewards.shape} dists {dists.shape}"
-    )
     assert dists.shape == (
         len(reward_samples),
         len(target_rewards),
@@ -762,7 +761,6 @@ def plot_liklihoods(
         )
 
         n_plots = min(10, likelihoods.shape[1])
-        logging.debug(f"n_plots={n_plots}")
         timesteps = np.arange(
             0, likelihoods.shape[1], ceil(likelihoods.shape[1] / n_plots)
         )
@@ -776,13 +774,6 @@ def plot_liklihoods(
 
         assert large_df.notnull().all().all()
         assert (large_df.abs() < np.inf).all().all()
-
-        logging.debug(
-            f"small_df min={small_df.likelihood.min()} max={small_df.likelihood.max()}"
-        )
-        logging.debug(
-            f"large_df min={large_df.likelihood.min()} max={large_df.likelihood.max()}"
-        )
 
         if len(small_df) > 0:
             fig, _ = joypy.joyplot(

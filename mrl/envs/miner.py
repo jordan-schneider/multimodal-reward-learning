@@ -62,7 +62,6 @@ class Miner(FeatureEnv[MinerState]):
         "right": 7,
         "stay": 4,
     }
-    N_FEATURES = 5
 
     class State(MinerState):
         # Allows the typing for Miner.State to work.
@@ -82,7 +81,13 @@ class Miner(FeatureEnv[MinerState]):
         normalize_features: bool = False,
         **kwargs,
     ) -> None:
+        if reward_weights.shape[0] not in (4, 5):
+            raise ValueError("Must supply 4 or 5 reward weights.")
+
         self._reward_weights = reward_weights
+        self._n_features = reward_weights.shape[0]
+        self.use_exit_feature = reward_weights.shape[0] == 5
+        self.use_normalized_features = normalize_features
         super().__init__(
             num=num,
             env_name="miner",
@@ -102,9 +107,7 @@ class Miner(FeatureEnv[MinerState]):
         )
         self.firsts = [True] * num
 
-        self.features: Optional[np.ndarray] = None
-
-        self.use_normalized_features = normalize_features
+        self.features = self.make_features()
 
     def act(self, action: np.ndarray) -> None:
         super().act(action)
@@ -116,14 +119,9 @@ class Miner(FeatureEnv[MinerState]):
 
     def observe(self) -> Tuple[np.ndarray, Any, Any]:
         _, observations, self.firsts = super().observe()
-        logging.debug(f"firsts={self.firsts}")
 
         # compute features
         self.features = self.make_features()
-        assert self._reward_weights.shape == (
-            self.N_FEATURES,
-        ), f"reward weights={self._reward_weights}"
-
         rewards = self.features @ self._reward_weights
 
         return rewards, observations, self.firsts
@@ -156,18 +154,9 @@ class Miner(FeatureEnv[MinerState]):
             ]
         )
 
-        exits = np.array(
-            [
-                Miner.reached_exit(state, n_diamonds)
-                for state, n_diamonds in zip(self.states, self.diamonds)
-            ]
-        )
-        logging.debug(f"exits={exits}")
-
         diamonds = np.array(self.diamonds, dtype=np.float32)
 
         assert len(pickup) == self.num
-        assert len(exits) == self.num
         assert len(dangers) == self.num
         assert len(dists) == self.num
         assert len(diamonds) == self.num
@@ -179,15 +168,31 @@ class Miner(FeatureEnv[MinerState]):
             max_diamonds = DIAMOND_PERCENT * self.states[0].grid.size
             diamonds /= max_diamonds
 
-        features = np.array(
-            [pickup, exits, dangers, dists, diamonds], dtype=np.float32
-        ).T
-        assert features.shape == (self.num, self.N_FEATURES)
+        if self.use_exit_feature:
+            exits = np.array(
+                [
+                    Miner.reached_exit(state, n_diamonds)
+                    for state, n_diamonds in zip(self.states, self.diamonds)
+                ]
+            )
+            assert exits.shape[0] == self.num
+
+            features = np.array(
+                [pickup, exits, dangers, dists, diamonds], dtype=np.float32
+            ).T
+        else:
+            features = np.array([pickup, dangers, dists, diamonds], dtype=np.float32).T
+        assert features.shape == (self.num, self._n_features)
 
         return features
 
+    @property
+    def n_features(self) -> int:
+        return self._n_features
+
+    @staticmethod
     def in_danger(
-        self, state: MinerState, return_time_to_die: bool = False, debug: bool = False
+        state: MinerState, return_time_to_die: bool = False, debug: bool = False
     ) -> Union[bool, Tuple[bool, int]]:
         agent_x, agent_y = state.agent_pos
 

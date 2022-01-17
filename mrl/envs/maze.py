@@ -91,7 +91,6 @@ class Maze(FeatureEnv[MazeState]):
         _, observations, firsts = super().observe()
         self.firsts = firsts
         self.features = self.make_features()
-        logging.debug(f"features={self.features}, weights={self._reward_weights}")
         rewards = self.features @ self._reward_weights
 
         return rewards, observations, firsts
@@ -107,9 +106,6 @@ class Maze(FeatureEnv[MazeState]):
         dists = self.get_dists(self.shortest_paths)
         dist_decrease = self.last_dists - dists
         dist_decrease[self.firsts] = 0
-        logging.debug(
-            f"first={self.firsts}, last_dist={self.last_dists}, dist={dists}, decrease={dist_decrease}"
-        )
 
         assert np.all(np.abs(dist_decrease) <= 1)
 
@@ -194,7 +190,6 @@ class Maze(FeatureEnv[MazeState]):
             path.append(trace_state)
             trace_state = previous[trace_state]
         path = list(reversed(path))
-        logging.debug(f"path={path}")
         return path
 
     def get_goal_state(self, state: MazeState) -> Tuple[int, int]:
@@ -213,3 +208,7 @@ class Maze(FeatureEnv[MazeState]):
     def make_latent_state(info: Dict[str, Any]) -> MazeState:
         agent_pos = cast(Tuple[int, int], tuple(info["agent_pos"]))
         return MazeState(info["grid_size"], info["grid"], agent_pos)
+
+    @property
+    def n_features(self) -> int:
+        return self.N_FEATURES

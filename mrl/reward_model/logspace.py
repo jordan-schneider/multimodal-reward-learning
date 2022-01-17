@@ -14,9 +14,7 @@ def log_normalize_logs(x: np.ndarray) -> np.ndarray:
     Returns:
         np.ndarray: Array of log-d values such that np.sum(np.exp(out)) == 1
     """
-    logging.debug(f"min={np.min(x)}, max={np.max(x)}, ratio={np.max(x) - np.min(x)}")
     denom = logsumexp(x, axis=0)
-    logging.debug(f"min denom={np.min(denom)}, max={np.max(denom)}")
     out = x - denom
     if np.any(np.isneginf(out)):
         logging.warning("Some normalized items have -inf log likelihood")
@@ -61,8 +59,6 @@ def cum_likelihoods(log_likelihoods: np.ndarray, shift: bool):
         np.ndarray: An array of cumulative likelihoods.
     """
     assert np.all(np.isfinite(log_likelihoods))
-
-    logging.debug(f"likelihoods shape={log_likelihoods.shape}")
 
     log_total_likelihoods = np.cumsum(log_likelihoods, axis=1)
     assert np.all(np.isfinite(log_total_likelihoods))
