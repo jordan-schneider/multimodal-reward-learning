@@ -101,7 +101,8 @@ def compare_modalities(
                     results=results,
                     true_reward=true_reward,
                     aligned_reward_set=aligned_reward_set,
-                    find_centroids=plot_individual,
+                    compute_centroids=plot_individual,
+                    compute_mean_dispersions=plot_individual,
                     save_all=save_all,
                 )
                 if plot_individual:
@@ -209,7 +210,8 @@ def comparison_analysis(
     results: Results,
     aligned_reward_set: Optional[AlignedRewardSet],
     true_reward: Optional[np.ndarray] = None,
-    find_centroids: bool = False,
+    compute_centroids: bool = False,
+    compute_mean_dispersions: bool = False,
     save_all: bool = False,
 ) -> Results:
     reward_likelihood = hinge_likelihood if use_hinge else boltzmann_likelihood
@@ -230,14 +232,7 @@ def comparison_analysis(
     }
 
     logging.info("Saving total likelihoods")
-    if not save_all:
-        # Subsample 1% of the sampled rewards and reduce precision to save disk space by default.
-        likelihood_samples = {
-            k: v[::100].astype(np.float32) for k, v in likelihoods.items()
-        }
-        results.update("likelihoods", likelihood_samples)
-    else:
-        results.update("likelihoods", likelihoods)
+    save_likelihoods(results, save_all, likelihoods)
 
     if aligned_reward_set is not None:
         logging.info("Computing P(aligned)")
@@ -255,79 +250,132 @@ def comparison_analysis(
     counts = {key: np.sum(l > 0.0, axis=0) for key, l in likelihoods.items()}
     results.update("counts", counts)
 
-    logging.info("Finding centroid dispersion statistics")
-    centroid_per_modality = {}
-    dispersion_centroid_per_modality = {}
-    mean_rewards = {}
-    proj_mean_rewards = {}
-    for key, l in likelihoods.items():
-        centroids = []
-        dispersions = []
-        mean_rewards[key] = find_means(rewards=reward_samples, likelihoods=l)
-        proj_mean_rewards[key] = normalize(mean_rewards[key])
-        if find_centroids:
-            for t in trange(l.shape[1]):
-                try:
-                    centroid, dist = find_centroid(
-                        points=reward_samples,
-                        weights=l[:, t],
-                        max_iter=10,
-                        init=proj_mean_rewards[key][t],
-                    )
-                    if np.any(np.isnan(centroid)):
-                        continue
-                    assert np.allclose(
-                        np.linalg.norm(centroid), 1.0
-                    ), f"centroid={centroid} has norm={np.linalg.norm(centroid)} far from 1."
-                    centroids.append(centroid)
-                    dispersions.append(dist)
-                except Exception as e:
-                    logging.warning(
-                        f"Failed to find centroid for time t={t}", exc_info=e
-                    )
+    logging.info("Computing raw and normalized mean rewards")
+    save_means(reward_samples, likelihoods, results)
 
-        centroid_per_modality[key] = np.stack(centroids)
-        assert np.allclose(np.linalg.norm(centroid_per_modality[key], axis=1), 1.0)
-        dispersion_centroid_per_modality[key] = np.array(dispersions)
-
-    results.update("centroid_per_modality", centroid_per_modality)
-    results.update("mean_rewards", mean_rewards)
-    results.update("proj_mean_rewards", proj_mean_rewards)
-    results.update("dispersions_centroid", dispersion_centroid_per_modality)
-
-    logging.info("Finding mean dispersion")
-    dispersion_mean = {
-        key: mean_geodesic_dispersion(
-            reward_samples=reward_samples,
-            likelihoods=likelihoods[key],
-            target_rewards=proj_mean_rewards[key],
-            expect_monotonic=False,
+    if compute_centroids:
+        logging.info("Finding centroid dispersion statistics")
+        proj_mean_rewards = save_centroid_dispersions(
+            reward_samples, likelihoods, results
         )
-        for key in likelihoods.keys()
-    }
-    results.update("dispersion_mean", dispersion_mean)
+
+    if compute_mean_dispersions:
+        logging.info("Finding mean dispersion")
+        dispersion_mean = {
+            key: mean_geodesic_dispersion(
+                reward_samples=reward_samples,
+                likelihoods=likelihoods[key],
+                target_rewards=proj_mean_rewards[key],
+                expect_monotonic=False,
+            )
+            for key in likelihoods.keys()
+        }
+        results.update("dispersion_mean", dispersion_mean)
 
     if true_reward is not None:
         logging.info("Finding gt dispersion")
-        true_reward_index = np.where(np.all(reward_samples == true_reward, axis=1))[0][
-            0
-        ]
-        assert true_reward_index == len(list(likelihoods.values())[0]) - 1
-
-        n_comparisons = list(diffs.values())[0].shape[0]
-
-        true_reward_copies = np.tile(true_reward, (n_comparisons, 1))
-        dispersions_gt = {
-            key: mean_geodesic_dispersion(
-                reward_samples=reward_samples,
-                likelihoods=l,
-                target_rewards=true_reward_copies,
-            )
-            for key, l in likelihoods.items()
-        }
-        results.update("dispersion_gt", dispersions_gt)
+        save_gt_dispersion(reward_samples, true_reward, diffs, likelihoods, results)
 
     return results
+
+
+def save_gt_dispersion(
+    reward_samples: np.ndarray,
+    true_reward: np.ndarray,
+    diffs: Dict[str, np.ndarray],
+    likelihoods: Dict[str, np.ndarray],
+    results: Results,
+):
+    true_reward_index = np.where(np.all(reward_samples == true_reward, axis=1))[0][0]
+    assert true_reward_index == len(list(likelihoods.values())[0]) - 1
+
+    n_comparisons = list(diffs.values())[0].shape[0]
+
+    true_reward_copies = np.tile(true_reward, (n_comparisons, 1))
+    dispersions_gt = {
+        key: mean_geodesic_dispersion(
+            reward_samples=reward_samples,
+            likelihoods=l,
+            target_rewards=true_reward_copies,
+        )
+        for key, l in likelihoods.items()
+    }
+    results.update("dispersion_gt", dispersions_gt)
+
+
+def save_means(
+    rewards: np.ndarray, likelihoods: Dict[str, np.ndarray], results: Results
+):
+    mean_rewards = {}
+    proj_mean_rewards = {}
+    for key, l in likelihoods.items():
+        mean_rewards[key] = find_means(rewards=rewards, likelihoods=l)
+        proj_mean_rewards[key] = normalize(mean_rewards[key])
+    results.update("mean_rewards", mean_rewards)
+    results.update("proj_mean_rewards", proj_mean_rewards)
+
+
+def find_means(rewards: np.ndarray, likelihoods: np.ndarray) -> np.ndarray:
+    mean_rewards = np.stack(
+        [
+            np.average(rewards, weights=likelihoods[:, t], axis=0)
+            for t in range(likelihoods.shape[1])
+        ]
+    )
+    assert mean_rewards.shape == (
+        likelihoods.shape[1],
+        rewards.shape[1],
+    ), f"mean_rewards shape={mean_rewards.shape}, expected {(likelihoods.shape[1],rewards.shape[1])}"
+    assert np.all(np.isfinite(mean_rewards))
+    return mean_rewards
+
+
+def save_centroid_dispersions(
+    rewards: np.ndarray, likelihoods: Dict[str, np.ndarray], results: Results
+):
+    centroid_per_modality = {}
+    dispersion_centroid_per_modality = {}
+    proj_mean_rewards = results.get("proj_mean_rewards")
+
+    for key, l in likelihoods.items():
+        centroids = []
+        dispersions = []
+        for t in trange(l.shape[1]):
+            try:
+                centroid, dist = find_centroid(
+                    points=rewards,
+                    weights=l[:, t],
+                    max_iter=10,
+                    init=proj_mean_rewards[key][t],
+                )
+                if np.any(np.isnan(centroid)):
+                    continue
+                assert np.allclose(
+                    np.linalg.norm(centroid), 1.0
+                ), f"centroid={centroid} has norm={np.linalg.norm(centroid)} far from 1."
+                centroids.append(centroid)
+                dispersions.append(dist)
+            except Exception as e:
+                logging.warning(f"Failed to find centroid for time t={t}", exc_info=e)
+
+    centroid_per_modality[key] = np.stack(centroids)
+    assert np.allclose(np.linalg.norm(centroid_per_modality[key], axis=1), 1.0)
+    dispersion_centroid_per_modality[key] = np.array(dispersions)
+
+    results.update("centroid_per_modality", centroid_per_modality)
+    results.update("dispersions_centroid", dispersion_centroid_per_modality)
+    return proj_mean_rewards
+
+
+def save_likelihoods(results, save_all, likelihoods):
+    if not save_all:
+        # Subsample 1% of the sampled rewards and reduce precision to save disk space by default.
+        likelihood_samples = {
+            k: v[::100].astype(np.float32) for k, v in likelihoods.items()
+        }
+        results.update("likelihoods", likelihood_samples)
+    else:
+        results.update("likelihoods", likelihoods)
 
 
 def analysis(
@@ -508,21 +556,6 @@ def entropy(likelihoods: np.ndarray) -> np.ndarray:
     """
     l = np.ma.masked_equal(likelihoods, 0.0)
     return -np.sum(l * np.log(l), axis=0)
-
-
-def find_means(rewards: np.ndarray, likelihoods: np.ndarray) -> np.ndarray:
-    mean_rewards = np.stack(
-        [
-            np.average(rewards, weights=likelihoods[:, t], axis=0)
-            for t in range(likelihoods.shape[1])
-        ]
-    )
-    assert mean_rewards.shape == (
-        likelihoods.shape[1],
-        rewards.shape[1],
-    ), f"mean_rewards shape={mean_rewards.shape}, expected {(likelihoods.shape[1],rewards.shape[1])}"
-    assert np.all(np.isfinite(mean_rewards))
-    return mean_rewards
 
 
 def normalize(x: np.ndarray) -> np.ndarray:
