@@ -16,6 +16,7 @@ from mrl.envs.feature_envs import FeatureEnv  # type: ignore
 from mrl.envs.util import FEATURE_ENV_NAMES, get_root_env, make_env
 from mrl.util import (
     get_policy,
+    max_traj_batch_size,
     np_gather,
     np_remove,
     procgen_rollout_dataset,
@@ -309,19 +310,6 @@ def max_state_batch_size(n_states: int, n_parallel_envs: int, step_nbytes: int) 
     return batch_timesteps
 
 
-def max_traj_batch_size(n_trajs: int, n_parallel_envs: int, step_nbytes: int) -> int:
-    gc.collect()
-    free_memory = psutil.virtual_memory().available
-    logging.info(f"Free memory: {free_memory}")
-
-    # How many timesteps can we fit into the available memory?
-    batch_timesteps = min(
-        (n_trajs * 1000 + 1) // n_parallel_envs, int(free_memory / step_nbytes * 0.8)
-    )
-    logging.info(f"batch_timesteps={batch_timesteps}")
-    return batch_timesteps
-
-
 def orient_diffs(
     diffs: np.ndarray,
     temperature: float,
@@ -370,9 +358,7 @@ class Generator:
         self.root_env = cast(FeatureEnv, get_root_env(self.env))
         assert isinstance(self.root_env, FeatureEnv)
 
-        self.policies = [
-            get_policy(path, env=self.env, num=n_parallel_envs) for path in policy_paths
-        ]
+        self.policies = [get_policy(path, env=self.env) for path in policy_paths]
 
         feature = procgen_rollout_features(
             env=self.env,

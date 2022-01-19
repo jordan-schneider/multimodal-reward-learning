@@ -1,17 +1,20 @@
+import gc
 import logging
 import time
 from itertools import product
 from math import ceil
 from pathlib import Path
-from typing import Final, Literal, Optional
+from typing import Final, List, Literal, Optional
 
 import fire  # type: ignore
 import numpy as np
 import torch
 from mrl.dataset.preferences import get_policy
 from mrl.envs.util import FEATURE_ENV_NAMES, get_root_env, make_env
+from mrl.memprof import get_memory
 from mrl.util import (
     is_redundant,
+    max_traj_batch_size,
     procgen_rollout_dataset,
     procgen_rollout_features,
     setup_logging,
@@ -30,6 +33,7 @@ def get_features(
     policy: PhasicValueModel,
     outdir: Optional[Path],
     overwrite: bool,
+    batch_timesteps: int,
     tqdm: bool = False,
 ) -> np.ndarray:
     root_env = get_root_env(env)
@@ -56,24 +60,55 @@ def get_features(
         state_features.shape[0] >= n_states
     ), f"state features shape={state_features.shape} when {n_states} states requested"
 
+    if batch_timesteps == -1:
+        one_step = procgen_rollout_dataset(
+            env=env,
+            policy=get_policy(None, env=env),
+            timesteps=1,
+            n_trajs=1,
+            flags=["feature", "first"],
+        )
+        assert one_step.features is not None
+        nbytes = one_step.features.element_size() * one_step.features.nelement()
+        logging.debug(f"one_step nbytes={nbytes}")
+        batch_timesteps = max_traj_batch_size(n_trajs, env.num, nbytes)
+
     logging.info("Generating trajs")
-    trajs = procgen_rollout_dataset(
-        env=env,
-        policy=policy,
-        n_trajs=n_trajs,
-        flags=["feature", "first"],
-        tqdm=tqdm,
-    ).trajs()
-    traj_features = np.stack([np.sum(traj.features.numpy(), axis=0) for traj in trajs])  # type: ignore
-    assert (
-        len(traj_features.shape) == 2
-    ), f"traj feature has wrong dimension {traj_features.shape}"
+    traj_feature_batches: List[np.ndarray] = []
+    current_trajs = 0
+    while current_trajs < n_trajs:
+        logging.info(f"{current_trajs}/{n_trajs}")
+        gc.collect()
+        logging.debug(
+            f"Before rollout_dataset vm={get_memory()['VmSize']}, peak={get_memory()['VmPeak']}"
+        )
+        trajs = list(
+            procgen_rollout_dataset(
+                env=env,
+                policy=policy,
+                timesteps=batch_timesteps,
+                n_trajs=n_trajs - current_trajs,
+                flags=["feature", "first"],
+                tqdm=tqdm,
+            ).trajs()
+        )
+
+        traj_features = np.stack([np.sum(traj.features.numpy(), axis=0) for traj in trajs])  # type: ignore
+        current_trajs += traj_features.shape[0]
+        traj_feature_batches.append(traj_features)
+        assert (
+            len(traj_features.shape) == 2
+        ), f"traj feature has wrong dimension {traj_features.shape}"
+        assert (
+            traj_features.shape[1] == state_features.shape[1]
+        ), f"traj and state feature dims don't match {traj_features.shape}, {state_features.shape}"
+        del trajs
+
+    traj_features = np.concatenate(traj_feature_batches)
+
     assert (
         traj_features.shape[0] >= n_trajs
     ), f"traj features {traj_features.shape} not expected length {n_trajs}"
-    assert (
-        traj_features.shape[1] == state_features.shape[1]
-    ), f"traj and state feature dims don't match {traj_features.shape}, {state_features.shape}"
 
     features = np.concatenate(
         (state_features[:n_states], traj_features[:n_trajs]), axis=0
@@ -90,6 +125,7 @@ def make_aligned_reward_set(
     n_trajs: int,
     env: ProcgenGym3Env,
     policy: PhasicValueModel,
+    timesteps: int,
     tqdm: bool = False,
     outdir: Optional[Path] = None,
     overwrite: bool = False,
@@ -106,6 +142,7 @@ def make_aligned_reward_set(
         outdir=outdir,
         overwrite=overwrite,
         tqdm=tqdm,
+        batch_timesteps=timesteps,
     )
     assert np.all(np.isfinite(features))
     logging.info(f"Features shape={features.shape}")
@@ -197,6 +234,7 @@ def main(
     n_trajs: int = 10_000,
     n_envs: int = 100,
     seed: int = 0,
+    timesteps: int = -1,
     overwrite: bool = False,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ):
@@ -210,10 +248,11 @@ def main(
         reward = np.delete(reward, 1)
 
     torch.manual_seed(seed)
+    torch.use_deterministic_algorithms(True)
     rng = np.random.default_rng(seed)
 
-    env = make_env(kind=env_name, reward=reward, num=n_envs)
-    policy = get_policy(policy_path, env=env, num=n_envs)
+    env = make_env(kind=env_name, reward=reward, num=n_envs, rand_seed=seed)
+    policy = get_policy(policy_path, env=env)
 
     diffs = make_aligned_reward_set(
         reward=reward,
@@ -224,6 +263,7 @@ def main(
         tqdm=True,
         outdir=outdir,
         overwrite=overwrite,
+        timesteps=timesteps,
         rng=rng,
     )
     np.save(outdir / ARS_FILENAME, diffs)
