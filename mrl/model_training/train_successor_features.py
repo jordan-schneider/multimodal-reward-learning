@@ -154,7 +154,7 @@ def main(
     n_features = features.shape[1]
 
     device = find_best_gpu()
-    policy = get_policy(path=policy_path, env=rgb_env, num=n_envs, device=device)
+    policy = get_policy(path=policy_path, env=rgb_env, device=device)
 
     successor_model = SuccessorFeatureModel(
         n_features=4,

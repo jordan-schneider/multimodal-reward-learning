@@ -1,4 +1,5 @@
 import collections
+import gc
 import logging
 import pickle as pkl
 import re
@@ -6,6 +7,7 @@ from pathlib import Path
 from typing import (
     Any,
     Dict,
+    List,
     Literal,
     Optional,
     OrderedDict,
@@ -16,6 +18,7 @@ from typing import (
 )
 
 import numpy as np
+import psutil  # type: ignore
 import torch
 from GPUtil import GPUtil  # type: ignore
 from phasic_policy_gradient.ppg import PhasicValueModel
@@ -28,6 +31,7 @@ from mrl.dataset.offline_buffer import RlDataset
 from mrl.dataset.random_policy import RandomPolicy
 from mrl.envs.feature_envs import FeatureEnv
 from mrl.envs.util import get_root_env
+from mrl.memprof import get_memory
 
 
 def batch(obs: torch.Tensor, obs_dims: int) -> torch.Tensor:
@@ -133,28 +137,57 @@ def procgen_rollout(
 
 
 class ArrayOrList:
-    def __init__(self, val: Union[np.ndarray, list]) -> None:
+    def __init__(
+        self, val: Union[np.ndarray, List[np.ndarray]], max_list_len: int = 1000
+    ) -> None:
         self.val = val
         self.list = isinstance(val, list)
+        self.max_list_len = max_list_len
+        self.make_array_on_set = False
+        if self.list:
+            self.offset = 0
+            if len(self.val) > 0:
+                self.array = np.empty((0, *self.val[0].shape))
+            else:
+                self.make_array_on_set = True
 
-    def __setitem__(self, key: int, value: Any) -> None:
+    def __setitem__(self, key: int, value: np.ndarray) -> None:
         if self.list:
             assert isinstance(self.val, list)
-            if key == len(self.val):
+            effective_key = key - self.offset
+            if effective_key == len(self.val):
+                if self.make_array_on_set:
+                    self.make_array_on_set = False
+                    self.array = np.empty((0, *value.shape))
+                if len(self.val) > self.max_list_len:
+                    self.coalesce()
                 self.val.append(value)
-            elif key > len(self.val):
+            elif effective_key > len(self.val):
                 raise IndexError(f"Index {key} is out of range")
+            elif effective_key < 0:
+                self.array[key] = value
             else:
-                self.val[key] = value
+                self.val[effective_key] = value
         else:
             self.val[key] = value
 
+    def coalesce(self) -> None:
+        if self.list:
+            self.array = np.concatenate((self.array, np.array(self.val)))
+            self.val = []
+            self.offset = self.array.shape[0]
+
     def __getitem__(self, key: Union[int, slice]) -> Any:
-        return self.val[key]
+        if self.list:
+            self.coalesce()
+            self.array[key]
+        else:
+            return self.val[key]
 
     def numpy(self) -> np.ndarray:
         if self.list:
-            return np.array(self.val)
+            self.coalesce()
+            return self.array
         else:
             assert isinstance(self.val, np.ndarray)
             return self.val
@@ -163,7 +196,6 @@ class ArrayOrList:
 def get_policy(
     path: Optional[Path],
     env: ProcgenGym3Env,
-    num: Optional[int] = None,
     device: torch.device = torch.device("cpu"),
 ) -> PhasicValueModel:
     if path is not None:
@@ -174,10 +206,8 @@ def get_policy(
         policy.load_state_dict(state_dict)
         policy.to(device=device)
         return policy
-    elif num is not None:
-        return RandomPolicy(actype=env.ac_space, num=num)
     else:
-        raise ValueError("Either path or num must be specified")
+        return RandomPolicy(actype=env.ac_space, num=env.num)
 
 
 def procgen_rollout_features(
@@ -291,30 +321,30 @@ class DatasetRoller:
         reward: Optional[np.ndarray],
         first: Optional[np.ndarray],
     ) -> None:
-        self.last_t = t
-        if self.states is not None:
+        if self.states is not None and state is not None:
             self.states[t] = state
-        if self.rewards is not None:
+        if self.rewards is not None and reward is not None:
             self.rewards[t] = reward
-        if self.firsts is not None:
+        if self.firsts is not None and first is not None:
             self.firsts[t] = first
-        if self.features is not None:
+        if self.features is not None and feature is not None:
             self.features[t] = feature
 
     def step(self, t: int):
-        self.last_t = t
-        reward, state, first = self.env.observe()
-        self.record(t, self.root_env.features, state, reward, first)
-        action, _, _ = self.policy.act(
-            torch.tensor(state, device=self.policy.device),
-            torch.tensor(first, device=self.policy.device),
-            self.policy.initial_state(self.env.num),
-        )
-        action = action.cpu().numpy()
-        self.env.act(action)
-        if self.actions is not None:
-            self.actions[t] = action
-        return state, action, reward, first
+        with torch.no_grad():
+            reward, state, first = self.env.observe()
+            self.record(t, self.root_env.features, state, reward, first)
+            state_tensor = torch.tensor(state)
+            first_tensor = torch.tensor(first)
+            del reward, state
+            init_state = self.policy.initial_state(self.env.num)
+            action, _, _ = self.policy.act(state_tensor, first_tensor, init_state)
+            del state_tensor, first_tensor, init_state
+            action = action.cpu().numpy()
+            self.env.act(action)
+            if self.actions is not None:
+                self.actions[t] = action
+            return first
 
     def roll(self) -> RlDataset:
         if self.n_trajs is not None:
@@ -354,12 +384,18 @@ class DatasetRoller:
 
     def roll_n_trajs(self):
         assert self.n_trajs is not None
-        cur_trajs = -1  # -1 because the first step has first=True
+        cur_trajs = -self.env.num  # -1 per env because the first step has first=True
         t = 0
         while cur_trajs < self.n_trajs and (self.run_until_done or t < self.timesteps):
-            _, _, _, first = self.step(t)
+            if t % 100 == 0:
+                gc.collect()
+                logging.debug(
+                    f"step {t} vm={get_memory()['VmSize']}, peak={get_memory()['VmPeak']}"
+                )
+            first = self.step(t)
 
             cur_trajs += np.sum(first)
+            del first
             t += 1
 
         if t == self.timesteps:
@@ -381,8 +417,28 @@ def procgen_rollout_dataset(
     ],
     tqdm: bool = False,
 ) -> RlDataset:
-    roller = DatasetRoller(env, policy, timesteps, n_trajs, flags, tqdm)
+    roller = DatasetRoller(
+        env=env,
+        policy=policy,
+        timesteps=timesteps,
+        n_trajs=n_trajs,
+        flags=flags,
+        tqdm=tqdm,
+    )
     return roller.roll()
+
+
+def max_traj_batch_size(n_trajs: int, n_parallel_envs: int, step_nbytes: int) -> int:
+    gc.collect()
+    free_memory = psutil.virtual_memory().available
+    logging.info(f"Free memory: {free_memory}")
+
+    # How many timesteps can we fit into the available memory?
+    batch_timesteps = min(
+        (n_trajs * 1000 + 1) // n_parallel_envs, int(free_memory / step_nbytes * 0.8)
+    )
+    logging.info(f"batch_timesteps={batch_timesteps}")
+    return batch_timesteps
 
 
 def find_policy_path(
