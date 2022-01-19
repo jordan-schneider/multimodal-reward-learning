@@ -28,11 +28,9 @@ def compare_modalities(
     aligned_reward_set_path: Optional[Path] = None,
     n_samples: int = 100_000,
     max_comparisons: int = 1000,
-    frac_complete: Optional[float] = None,
     norm_diffs: bool = False,
     use_hinge: bool = False,
     use_shift: bool = False,
-    use_done_feature: bool = False,
     n_trials: int = 1,
     plot_individual: bool = False,
     save_all: bool = False,
@@ -46,23 +44,29 @@ def compare_modalities(
         setup_logging(outdir=outdir, level=verbosity)
 
         logging.info(
-            f"outdir={outdir}, traj_path={traj_path}, state_path={state_path}, reward_path={reward_path}, aligned_reward_set_path={aligned_reward_set_path} n_samples={n_samples}, max_comparisons={max_comparisons}, frac_complete={frac_complete}, norm_diffs={norm_diffs}, use_hinge={use_hinge}, use_shift={use_shift}, use_done_feature={use_done_feature}, n_trials={n_trials}, save_all={save_all}, seed={seed}, verbosity={verbosity}"
+            f"outdir={outdir}, traj_path={traj_path}, state_path={state_path}, reward_path={reward_path}, aligned_reward_set_path={aligned_reward_set_path} n_samples={n_samples}, max_comparisons={max_comparisons}, norm_diffs={norm_diffs}, use_hinge={use_hinge}, use_shift={use_shift}, n_trials={n_trials}, save_all={save_all}, seed={seed}, verbosity={verbosity}"
         )
-
-        if not use_done_feature:
-            frac_complete = None
 
         rng = np.random.default_rng(seed=seed)
 
         paths = collect_paths(traj_path, state_path)
 
         true_reward, aligned_reward_set = load_ground_truth(
-            reward_path, aligned_reward_set_path, use_done_feature
+            reward_path, aligned_reward_set_path
+        )
+
+        max_ram_nbytes = int(bitmath.parse_string_unsafe(max_ram).bytes)
+        trial_batches = load_comparison_diffs(
+            paths=paths,
+            max_comparisons=max_comparisons,
+            n_trials=n_trials,
+            ram_free=max_ram_nbytes,
+            rng=rng,
         )
 
         logging.info(f"Generating {n_samples} reward samples on the sphere")
         reward_samples = cover_sphere(
-            n_samples=n_samples, ndims=4 + int(use_done_feature), rng=rng
+            n_samples=n_samples, ndims=get_reward_ndims(outdir), rng=rng
         )
 
         if true_reward is not None:
@@ -71,17 +75,6 @@ def compare_modalities(
             reward_samples = np.concatenate((reward_samples, [true_reward]), axis=0)
 
         np.save(outdir / "reward_samples.npy", reward_samples)
-
-        max_ram_nbytes = int(bitmath.parse_string_unsafe(max_ram).bytes)
-        trial_batches = load_comparison_diffs(
-            paths=paths,
-            max_comparisons=max_comparisons,
-            n_trials=n_trials,
-            frac_complete=frac_complete,
-            use_done_feature=use_done_feature,
-            ram_free=max_ram_nbytes,
-            rng=rng,
-        )
 
         results = Results(outdir)
         for trial, diffs in enumerate(trial_batches):
@@ -118,16 +111,13 @@ def compare_modalities(
 
 
 def load_ground_truth(
-    reward_path, aligned_reward_set_path, use_done_feature
+    reward_path: Optional[Path],
+    aligned_reward_set_path: Optional[Path],
 ) -> Tuple[Optional[np.ndarray], Optional[AlignedRewardSet]]:
     true_reward, aligned_reward_set = None, None
     if reward_path is not None:
         logging.info(f"Loading ground truth reward from {reward_path}")
         true_reward = np.load(reward_path)
-        if not use_done_feature:
-            true_reward = np.delete(true_reward, 1)
-            true_reward /= np.linalg.norm(true_reward)
-            assert np.allclose(np.linalg.norm(true_reward), 1)
 
         if aligned_reward_set_path is not None:
             aligned_reward_set = AlignedRewardSet(
@@ -152,6 +142,15 @@ def collect_paths(traj_path, state_path):
     return paths
 
 
+def get_reward_ndims(path: Path) -> int:
+    if "miner" in str(path):
+        return 4
+    elif "maze" in str(path):
+        return 2
+    else:
+        raise ValueError(f"path {path} must include either miner or maze folder")
+
+
 def post_hoc_plot_comparisons(outdir: Path) -> None:
     outdir = Path(outdir)
     results = Results(outdir=outdir, load_contents=True)
@@ -162,8 +161,6 @@ def load_comparison_diffs(
     paths: Dict[str, Path],
     max_comparisons: int,
     n_trials: int,
-    frac_complete: Optional[float],
-    use_done_feature: bool,
     ram_free: int,
     rng: np.random.Generator,
 ) -> Generator[Dict[str, np.ndarray], None, None]:
@@ -175,11 +172,6 @@ def load_comparison_diffs(
     for key, diff in all_diffs.items():
         logging.info(f"Loaded {diff.shape[0]} total {key} diffs")
 
-    if not use_done_feature:
-        for key, diff in all_diffs.items():
-            if diff.shape[1] == 5:
-                all_diffs[key] = np.delete(diff, 1, axis=1)
-
     remaining_diffs = dict(all_diffs)
     for trial in range(n_trials):
         trial_diffs: Dict[str, np.ndarray] = {}
@@ -187,7 +179,6 @@ def load_comparison_diffs(
             sample, indices = sample_data(
                 data=diff,
                 n=max_comparisons,
-                frac_complete=frac_complete,
                 rng=rng,
             )
             trial_diffs[key] = sample
