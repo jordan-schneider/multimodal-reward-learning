@@ -503,49 +503,11 @@ def np_remove(indir: Path, name: str) -> None:
 
 
 def sample_data(
-    data: np.ndarray, n: int, frac_complete: Optional[float], rng: np.random.Generator
+    data: np.ndarray, n: int, rng: np.random.Generator
 ) -> Tuple[np.ndarray, np.ndarray]:
     assert data.shape[0] >= n
     assert data.shape[0] > 0
-    if frac_complete is not None:
-        complete_rows = data[:, 1] != 0
-        incomplete_rows = np.where(np.logical_not(complete_rows))[0]
-        complete_rows = np.where(complete_rows)[0]
-
-        n_complete_rows = int(frac_complete * n)
-        n_incomplete_rows = n - n_complete_rows
-
-        logging.debug(complete_rows)
-
-        logging.debug(
-            f"Asking for {n_complete_rows} from {len(complete_rows)} complete rows."
-        )
-        logging.debug(
-            f"Asking for {n_incomplete_rows} from {len(incomplete_rows)} incomplete rows."
-        )
-
-        indices = None
-
-        if rng:
-            assert (
-                len(complete_rows) >= n_complete_rows
-            ), f"Asking for {n_complete_rows} items from {len(complete_rows)}"
-            complete_indices = rng.choice(
-                complete_rows, size=n_complete_rows, replace=False
-            )
-            assert (
-                len(incomplete_rows) >= n_incomplete_rows
-            ), f"Asking for {n_incomplete_rows} items from {len(incomplete_rows)}"
-            incomplete_indices = rng.choice(
-                incomplete_rows, size=n_incomplete_rows, replace=False
-            )
-        else:
-            complete_indices = complete_rows[:n_complete_rows]
-            incomplete_indices = incomplete_rows[:n_incomplete_rows]
-
-        indices = np.union1d(complete_indices, incomplete_indices)
-    else:
-        indices = rng.choice(len(data), size=n, replace=False)
+    indices = rng.choice(len(data), size=n, replace=False)
     return data[indices], indices
 
 
