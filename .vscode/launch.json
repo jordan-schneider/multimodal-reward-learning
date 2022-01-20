@@ -1,0 +1,31 @@
+{
+	// Use IntelliSense to learn about possible attributes.
+	// Hover to view descriptions of existing attributes.
+	// For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "Preferences",
+			"type": "python",
+			"request": "launch",
+			"program": "${workspaceFolder}/mrl/dataset/preferences.py",
+			"console": "integratedTerminal",
+			"args": [
+				"traj",
+				"--env",
+				"miner",
+				"--rootdir",
+				"data/miner/near-original-reward/7/",
+				"--n-trajs",
+				"1000",
+				"--n-parallel-envs",
+				"100",
+				"--outname",
+				"debug",
+				"--temperature",
+				"0",
+				"--overwrite"
+			]
+		}
+	]
+}
