@@ -60,7 +60,7 @@ class RlDataset:
             return self.dones.shape[0] + 1
         if self.features is not None:
             return self.features.shape[0]
-        raise ValueError("No data in dataset.")
+        raise ValueError("No data in dataset")
 
     @classmethod
     def from_gym3(

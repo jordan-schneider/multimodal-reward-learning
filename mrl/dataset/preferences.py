@@ -37,6 +37,7 @@ def gen_preferences(
     flip_prob: float = 0.2,
     init_state_temp: float = 1.0,
     init_traj_temp: float = 10.0,
+    sensitivity: float = 0.01,
     normalize_step: bool = False,
     normalize_differences: bool = False,
     overwrite: bool = False,
@@ -66,7 +67,9 @@ def gen_preferences(
         n_states=n_calibration_prefs,
         normalize_differences=normalize_differences,
         init_temperature=init_state_temp,
+        sensitivity=sensitivity,
     )
+    logging.info(f"Using temp={state_temp} for states")
     logging.info("Searching for trajectory temperature")
     traj_temp = calibrate_trajs(
         reward=reward,
@@ -75,7 +78,9 @@ def gen_preferences(
         n_trajs=n_calibration_prefs,
         normalize_differences=normalize_differences,
         init_temperature=init_traj_temp,
+        sensitivity=sensitivity,
     )
+    logging.info(f"Using temp={traj_temp} for trajs")
 
     logging.info("Generating state preferences")
     gen_state_preferences(
@@ -296,7 +301,7 @@ def gen_state_preferences(
     if outpath.exists():
         current_diffs = np.load(outpath)
         n_diffs += len(current_diffs)
-        logging.info(f"Starting with {n_diffs} existing preferences.")
+        logging.info(f"Starting with {n_diffs} existing preferences")
     else:
         current_diffs = None
         if not overwrite:
@@ -321,7 +326,7 @@ def gen_state_preferences(
         flip_prob_batches.append(probs)
         n_diffs += oriented_diffs.shape[0]
 
-        logging.info(f"Collected {n_diffs} of {n_states} preferences.")
+        logging.info(f"Collected {n_diffs} of {n_states} preferences")
 
     out_diffs: np.ndarray = np.concatenate(diff_batches)
     if current_diffs is not None:
@@ -392,12 +397,12 @@ def gen_traj_preferences(
             current_trajs += data.shape[0]
             del data
             gc.collect()
-            logging.info(f"Starting with {current_trajs} preferences.")
+            logging.info(f"Starting with {current_trajs} preferences")
         else:
-            logging.info(f"No existing data found at {outdir}.")
+            logging.info(f"No existing data found at {outdir}")
 
     if current_trajs >= n_trajs:
-        logging.warning(f"No new trajectories needed for {outdir}.")
+        logging.warning(f"No new trajectories needed for {outdir}")
         exit()
 
     while current_trajs < n_trajs:
@@ -442,7 +447,7 @@ def gen_traj_preferences(
             probs_batch.append(probs)
 
         diffs_file = outdir / f"{outname}.{collection_batch}.npy"
-        logging.info(f"Writing current batch to {diffs_file}.")
+        logging.info(f"Writing current batch to {diffs_file}")
         out = np.stack(diff_batch)
         assert len(out.shape) == 2, f"out shape={out.shape} not expected (-1, 4)"
         np.save(diffs_file, out)
@@ -534,10 +539,13 @@ def orient_diffs(
     if single_diff:
         diffs = diffs.reshape(1, -1)
 
-    if normalize_differences:
-        diffs = diffs / np.linalg.norm(diffs, axis=1, keepdims=True)
+    prob_diffs = (
+        diffs / np.linalg.norm(diffs, axis=1, keepdims=True)
+        if normalize_differences
+        else diffs
+    )
 
-    strengths = diffs @ reward
+    strengths = prob_diffs @ reward
     logging.debug(f"strength={strengths}")
     good_diffs = np.abs(strengths) > 1e-8
     diffs = diffs[good_diffs]

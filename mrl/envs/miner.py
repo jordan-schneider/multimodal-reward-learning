@@ -82,7 +82,7 @@ class Miner(FeatureEnv[MinerState]):
         **kwargs,
     ) -> None:
         if reward_weights.shape[0] != 4:
-            raise ValueError("Must supply 4 reward weights.")
+            raise ValueError("Must supply 4 reward weights")
 
         self._reward_weights = reward_weights
         self._n_features = reward_weights.shape[0]
