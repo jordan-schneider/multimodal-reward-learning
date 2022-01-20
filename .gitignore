@@ -131,6 +131,9 @@ dmypy.json
 # Experiment data does not go in git
 data/
 
+# scratch files
+scratch.*
+
 # Memory profiling folder
 memprof/
 
