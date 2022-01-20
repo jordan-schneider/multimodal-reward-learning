@@ -4,7 +4,7 @@ import numpy as np
 from hypothesis import given, settings
 from hypothesis.extra.numpy import arrays
 from hypothesis.strategies import floats, integers, lists
-from mrl.envs.miner import Miner
+from mrl.envs.miner import Miner, MinerState
 
 UP: Final = 5
 DOWN: Final = 3
@@ -17,7 +17,7 @@ DANGEROUS_OBJECTS: Final = (1, 2, 3, 4)
 PATHABLE_OBJECTS: Final = (9, 100)
 DIAMONDS = (1, 3)
 
-N_FEATURES = 5
+N_FEATURES = 4
 
 
 @settings(deadline=3000)
@@ -181,7 +181,7 @@ def test_safe_at_start(seed):
 
 
 def flood_search(
-    state: Miner.State, goals: List[Tuple[int, int]]
+    state: MinerState, goals: List[Tuple[int, int]]
 ) -> Optional[List[Action]]:
     """Perform a flood search for a path to one of the goal states.
 
@@ -248,7 +248,7 @@ def flood_search(
     return None
 
 
-def find_dangerous_path_above(state: Miner.State) -> Optional[List[Action]]:
+def find_dangerous_path_above(state: MinerState) -> Optional[List[Action]]:
     agent_x, agent_y = state.agent_pos
     grid_height = state.grid.shape[1]
 
@@ -273,7 +273,7 @@ def find_dangerous_path_above(state: Miner.State) -> Optional[List[Action]]:
     return None
 
 
-def find_dangerous_object_candidates(state: Miner.State) -> List[Tuple[int, int]]:
+def find_dangerous_object_candidates(state: MinerState) -> List[Tuple[int, int]]:
     """Find all dangerous objects with two empty spaces underneath"""
     danger_objs: List[Tuple[int, int]] = []
     for x, row in enumerate(state.grid):
@@ -287,7 +287,7 @@ def find_dangerous_object_candidates(state: Miner.State) -> List[Tuple[int, int]
     return danger_objs
 
 
-def find_path_to_dangerous_state(state: Miner.State) -> Optional[List[Action]]:
+def find_path_to_dangerous_state(state: MinerState) -> Optional[List[Action]]:
     """Tries to find a path to a dangerous state, where an object is about to fall on you.
 
     The pathing does not model changes in the state from falling objects, and so sometimes the
@@ -403,7 +403,10 @@ def test_reward(seed: int, reward_weights: np.ndarray) -> None:
 )
 def test_normalized_features(seed: int, actions: List[int]) -> None:
     env = Miner(
-        reward_weights=np.zeros(5), num=1, rand_seed=seed, normalize_features=True
+        reward_weights=np.zeros(N_FEATURES),
+        num=1,
+        rand_seed=seed,
+        normalize_features=True,
     )
     for action in actions:
         env.act(np.array([action]))

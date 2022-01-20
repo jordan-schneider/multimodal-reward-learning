@@ -78,7 +78,6 @@ def get_features(
     current_trajs = 0
     while current_trajs < n_trajs:
         logging.info(f"{current_trajs}/{n_trajs}")
-        gc.collect()
         logging.debug(
             f"Before rollout_dataset vm={get_memory()['VmSize']}, peak={get_memory()['VmPeak']}"
         )
@@ -125,7 +124,7 @@ def make_aligned_reward_set(
     n_trajs: int,
     env: ProcgenGym3Env,
     policy: PhasicValueModel,
-    timesteps: int,
+    timesteps: int = -1,
     tqdm: bool = False,
     outdir: Optional[Path] = None,
     overwrite: bool = False,

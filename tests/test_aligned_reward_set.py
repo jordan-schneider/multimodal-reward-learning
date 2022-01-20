@@ -12,7 +12,7 @@ from mrl.inference.posterior import cover_sphere
 @given(
     reward=arrays(
         dtype=np.float32,
-        shape=(5,),
+        shape=(4,),
         elements=floats(-1.0, 1.0, width=32).filter(lambda x: np.all(np.abs(x) > 0.1)),
     ).filter(lambda r: np.any(r != 0)),
     seed=integers(0, 2 ** 31 - 1),
@@ -37,7 +37,7 @@ def test_aligned_reward_set_nonredundant(reward: np.ndarray, seed: int) -> None:
     )
 
     reward_samples = cover_sphere(
-        n_samples=100_000, ndims=5, rng=np.random.default_rng(seed)
+        n_samples=100_000, ndims=4, rng=np.random.default_rng(seed)
     )
     agreement = (diffs @ reward_samples.T > 0).T
     reward_aligned = np.all(agreement, axis=1)

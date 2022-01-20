@@ -382,12 +382,12 @@ class DatasetRoller:
         reward, state, first = self.env.observe()
         self.record(self.timesteps, self.root_env.features, state, reward, first)
 
-    def roll_n_trajs(self):
+    def roll_n_trajs(self, gc_period: int = 500):
         assert self.n_trajs is not None
         cur_trajs = -self.env.num  # -1 per env because the first step has first=True
         t = 0
         while cur_trajs < self.n_trajs and (self.run_until_done or t < self.timesteps):
-            if t % 100 == 0:
+            if t % gc_period == 0:
                 gc.collect()
                 logging.debug(
                     f"step {t} vm={get_memory()['VmSize']}, peak={get_memory()['VmPeak']}"
@@ -437,6 +437,7 @@ def max_traj_batch_size(n_trajs: int, n_parallel_envs: int, step_nbytes: int) ->
     batch_timesteps = min(
         (n_trajs * 1000 + 1) // n_parallel_envs, int(free_memory / step_nbytes * 0.8)
     )
+    batch_timesteps = max(batch_timesteps, 2)
     logging.info(f"batch_timesteps={batch_timesteps}")
     return batch_timesteps
 
