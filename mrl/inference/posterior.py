@@ -511,7 +511,7 @@ def mean_geodesic_dispersion(
                 big_likelihoods_2 = l_2[big_indices_2]
                 big_contributions_2 = contributions_2[big_indices_2]
 
-                logging.info(f"{np.sum(l_2 == 1)} likelihoods are 1.")
+                logging.info(f"{np.sum(l_2 == 1)} likelihoods are 1")
 
                 logging.warning(
                     f"Average dispersion went up from {weighted_dists[t]} to {weighted_dists[t+1]} on timestep={t}.\nThe largest terms are rewards=\n{big_rewards_2}\ntarget={target_rewards[t+1]}\ndists=\n{big_dists_2}\nlikelihoods=\n{big_likelihoods_2}\ndenom={denominator_2}\ncontributions=\n{big_contributions_2}"

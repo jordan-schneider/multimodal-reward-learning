@@ -217,7 +217,7 @@ def make_aligned_reward_set(
                 )
 
             if iterations - last_new > 1e7:
-                logging.info(f"1e7 iterations since last new diff, stopping.")
+                logging.info(f"1e7 iterations since last new diff, stopping")
                 break
 
     return diffs

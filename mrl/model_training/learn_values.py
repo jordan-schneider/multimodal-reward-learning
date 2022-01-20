@@ -14,8 +14,13 @@ from mrl.dataset.offline_buffer import RlDataset
 from mrl.envs.util import ENV_NAMES, make_env
 from mrl.model_training.online_batcher import BatchGenerator
 from mrl.model_training.writer import SequentialWriter
-from mrl.util import (find_best_gpu, find_policy_path, procgen_rollout, reinit,
-                      setup_logging)
+from mrl.util import (
+    find_best_gpu,
+    find_policy_path,
+    procgen_rollout,
+    reinit,
+    setup_logging,
+)
 from phasic_policy_gradient.ppg import PhasicValueModel
 from procgen import ProcgenGym3Env
 from torch.utils.tensorboard import SummaryWriter
@@ -512,7 +517,7 @@ def eval_q(
     logging.info("Evaluating loss")
     loss = eval_q_rmse(q.forward, data, discount_rate, writer=writer)
 
-    logging.info(f"Loss={loss} over {env_interactions} env timesteps.")
+    logging.info(f"Loss={loss} over {env_interactions} env timesteps")
 
 
 def refine_v(
