@@ -4,6 +4,7 @@ import gc
 import logging
 import random
 import re
+from math import sqrt
 from pathlib import Path
 from typing import List, Literal, Optional, Tuple, cast
 
@@ -26,13 +27,231 @@ from mrl.util import (
 from phasic_policy_gradient.ppg import PhasicValueModel
 
 
+def gen_preferences(
+    rootdir: Path,
+    env: FEATURE_ENV_NAMES,
+    outname: str,
+    n_prefs: int = 1000,
+    n_calibration_prefs: int = 100,
+    n_envs: int = 100,
+    flip_prob: float = 0.2,
+    init_state_temp: float = 1.0,
+    init_traj_temp: float = 10.0,
+    normalize_step: bool = False,
+    normalize_differences: bool = False,
+    overwrite: bool = False,
+    seed: int = 0,
+    verbosity: Literal["INFO", "DEBUG"] = "INFO",
+) -> None:
+    rootdir = Path(rootdir)
+    outdir = rootdir / "prefs"
+    setup_logging(level=verbosity, outdir=outdir)
+
+    reward = np.load(rootdir / "reward.npy")
+    rng = np.random.default_rng(seed)
+
+    generator = Generator(
+        kind=env,
+        n_parallel_envs=n_envs,
+        normalize_features=normalize_step,
+        policy_paths=[None],
+        rng=rng,
+    )
+
+    logging.info("Searching for state temperature")
+    state_temp = calibrate_states(
+        reward=reward,
+        generator=generator,
+        target_flip_prob=flip_prob,
+        n_states=n_calibration_prefs,
+        normalize_differences=normalize_differences,
+        init_temperature=init_state_temp,
+    )
+    logging.info("Searching for trajectory temperature")
+    traj_temp = calibrate_trajs(
+        reward=reward,
+        generator=generator,
+        target_flip_prob=flip_prob,
+        n_trajs=n_calibration_prefs,
+        normalize_differences=normalize_differences,
+        init_temperature=init_traj_temp,
+    )
+
+    logging.info("Generating state preferences")
+    gen_state_preferences(
+        rootdir=rootdir,
+        env=env,
+        n_states=n_prefs,
+        n_parallel_envs=n_envs,
+        outname=outname,
+        policy_path=None,
+        temperature=state_temp,
+        normalize_step_features=normalize_step,
+        normalize_differences=normalize_differences,
+        overwrite=overwrite,
+        verbosity=verbosity,
+    )
+
+    logging.info("Generating trajectory preferenes")
+    gen_traj_preferences(
+        rootdir=rootdir,
+        env=env,
+        n_trajs=n_prefs,
+        n_parallel_envs=n_envs,
+        outname=outname,
+        policy_path=None,
+        temperature=traj_temp,
+        normalize_step_features=normalize_step,
+        normalize_differences=normalize_differences,
+        overwrite=overwrite,
+        verbosity=verbosity,
+    )
+
+
+def calibrate_states(
+    reward: np.ndarray,
+    generator: Generator,
+    target_flip_prob: float,
+    n_states: int,
+    normalize_differences: bool,
+    init_temperature: float = 1.0,
+    sensitivity: float = 0.05,
+) -> float:
+    batch_timesteps = max_state_batch_size(
+        n_states=n_states,
+        n_parallel_envs=generator.env.num,
+        step_nbytes=generator.step_nbytes,
+    )
+
+    temperature = init_temperature
+    max_temp = temperature
+    min_temp = temperature
+    first = True
+    while first or abs(average_flip_prob - target_flip_prob) > sensitivity:
+        if not first:
+            # Log_2 binary search over temperature values
+            if target_flip_prob > average_flip_prob:
+                min_temp = temperature
+                if max_temp == temperature:
+                    temperature *= 2.0
+                    max_temp = temperature
+                else:
+                    temperature = sqrt(min_temp * max_temp)
+            else:
+                max_temp = temperature
+                if min_temp == temperature:
+                    temperature /= 2.0
+                    min_temp = temperature
+                else:
+                    temperature = sqrt(min_temp * max_temp)
+        first = False
+
+        logging.debug(f"temp={temperature}")
+
+        flip_prob_batches: List[np.ndarray] = []
+        n_diffs = 0
+        while n_diffs < n_states:
+            logging.debug(f"{n_diffs}/{n_states}")
+            feature_a, feature_b = generator.gen_state_pairs(timesteps=batch_timesteps)
+            feature_diffs = feature_a - feature_b
+            feature_diffs = feature_diffs[np.any(feature_diffs != 0, axis=1)]
+            logging.debug(f"{feature_diffs.shape}")
+            oriented_diffs, probs = orient_diffs(
+                feature_diffs,
+                temperature,
+                reward,
+                normalize_differences,
+                generator.rng,
+            )
+            flip_prob_batches.append(probs)
+            n_diffs += oriented_diffs.shape[0]
+        flip_probs = np.concatenate(flip_prob_batches)
+        average_flip_prob: float = 0.5 - np.mean(np.abs(flip_probs - 0.5))
+        logging.debug(f"average_flip_prob={average_flip_prob}")
+
+    return temperature
+
+
+def calibrate_trajs(
+    reward: np.ndarray,
+    generator: Generator,
+    target_flip_prob: float,
+    n_trajs: int,
+    normalize_differences: bool,
+    init_temperature: float = 1.0,
+    sensitivity: float = 0.05,
+) -> float:
+    batch_timesteps = max_traj_batch_size(
+        n_trajs=n_trajs,
+        n_parallel_envs=generator.env.num,
+        step_nbytes=generator.step_nbytes,
+    )
+
+    temperature = init_temperature
+    max_temp = temperature
+    min_temp = temperature
+    first = True
+    while first or abs(average_flip_prob - target_flip_prob) > sensitivity:
+        if not first:
+            # Log_2 binary search over temperature values
+            if target_flip_prob > average_flip_prob:
+                min_temp = temperature
+                if max_temp == temperature:
+                    temperature *= 2.0
+                    max_temp = temperature
+                else:
+                    temperature = sqrt(min_temp * max_temp)
+            else:
+                max_temp = temperature
+                if min_temp == temperature:
+                    temperature /= 2.0
+                    min_temp = temperature
+                else:
+                    temperature = sqrt(min_temp * max_temp)
+        first = False
+        logging.debug(f"temp={temperature}")
+
+        n_diffs = 0
+        while n_diffs < n_trajs:
+            logging.debug(f"{n_diffs}/{n_trajs}")
+            probs_batch: List[np.ndarray] = []
+            for traj_a, traj_b in zip(
+                *generator.gen_traj_pairs(
+                    timesteps=batch_timesteps, n_trajs=n_trajs - n_diffs
+                )
+            ):
+                assert traj_a.features is not None and traj_b.features is not None
+                feature_diff = (
+                    torch.sum(traj_a.features, dim=0)
+                    - torch.sum(traj_b.features, dim=0)
+                ).numpy()
+                if np.linalg.norm(feature_diff) == 0:
+                    continue
+
+                oriented_diff, probs = orient_diffs(
+                    diffs=feature_diff,
+                    temperature=temperature,
+                    reward=reward,
+                    normalize_differences=normalize_differences,
+                    rng=generator.rng,
+                )
+                if oriented_diff.shape[0] == 0:
+                    continue
+                n_diffs += 1
+                probs_batch.append(probs)
+
+        flip_probs = np.stack(probs_batch)
+        average_flip_prob: float = 0.5 - np.mean(np.abs(flip_probs - 0.5))
+        logging.debug(f"average_flip_prob={average_flip_prob}")
+    return temperature
+
+
 def gen_state_preferences(
     rootdir: Path,
     env: FEATURE_ENV_NAMES,
     n_states: int,
     n_parallel_envs: int,
     outname: str,
-    use_exit: bool = False,
     policy_path: Optional[Path] = None,
     temperature: float = 0.0,
     normalize_step_features: bool = False,
@@ -48,8 +267,6 @@ def gen_state_preferences(
 
     outname = str(outname)
     reward = np.load(rootdir / "reward.npy")
-    if env == "miner" and not use_exit:
-        reward = np.delete(reward, 1)
 
     rng = np.random.default_rng()
 
@@ -59,6 +276,7 @@ def gen_state_preferences(
         normalize_features=normalize_step_features,
         policy_paths=list(set([policy_path, None])),
         rng=rng,
+        tqdm=True,
     )
 
     batch_timesteps = max_state_batch_size(
@@ -91,8 +309,6 @@ def gen_state_preferences(
     while n_diffs < n_states:
         feature_a, feature_b = generator.gen_state_pairs(timesteps=batch_timesteps)
         feature_diffs = feature_a - feature_b
-        if env == "miner" and not use_exit:
-            feature_diffs = np.delete(feature_diffs, 1, axis=1)
         feature_diffs = feature_diffs[np.any(feature_diffs != 0, axis=1)]
         oriented_diffs, probs = orient_diffs(
             feature_diffs,
@@ -130,7 +346,6 @@ def gen_traj_preferences(
     n_trajs: int,
     n_parallel_envs: int,
     outname: str,
-    use_exit: bool = False,
     policy_path: Optional[Path] = None,
     temperature: float = 0.0,
     normalize_step_features: bool = False,
@@ -146,8 +361,6 @@ def gen_traj_preferences(
 
     outname = str(outname)
     reward = np.load(rootdir / "reward.npy")
-    if env == "miner" and not use_exit:
-        reward = np.delete(reward, 1)
 
     rng = np.random.default_rng()
 
@@ -157,6 +370,7 @@ def gen_traj_preferences(
         normalize_features=normalize_step_features,
         policy_paths=[Path(policy_path), None] if policy_path is not None else [None],
         rng=rng,
+        tqdm=True,
     )
 
     batch_timesteps = max_traj_batch_size(
@@ -207,8 +421,6 @@ def gen_traj_preferences(
                 or feature_diff.shape == (4,)
                 or feature_diff.shape == (5,)
             )
-            if env == "miner" and not use_exit:
-                feature_diff = np.delete(feature_diff, 1)
             if np.linalg.norm(feature_diff) == 0:
                 continue
 
@@ -305,6 +517,7 @@ def max_state_batch_size(n_states: int, n_parallel_envs: int, step_nbytes: int) 
     batch_timesteps = min(
         n_states // n_parallel_envs, int(free_memory / step_nbytes * 0.8)
     )
+    batch_timesteps = max(batch_timesteps, 2)
     logging.info(f"batch_timesteps={batch_timesteps}")
 
     return batch_timesteps
@@ -322,6 +535,7 @@ def orient_diffs(
         diffs = diffs / np.linalg.norm(diffs, axis=1, keepdims=True)
 
     strengths = diffs @ reward
+    logging.debug(f"strength={strengths}")
     good_diffs = np.abs(strengths) > 1e-8
     diffs = diffs[good_diffs]
     strengths = strengths[good_diffs]
@@ -348,6 +562,7 @@ class Generator:
         normalize_features: bool,
         policy_paths: List[Optional[Path]],
         rng: np.random.Generator,
+        tqdm: bool = False,
     ) -> None:
         self.env = make_env(
             kind=kind,
@@ -369,6 +584,7 @@ class Generator:
         logging.info(f"One timestep size={self.step_nbytes}")
 
         self.rng = rng
+        self.tqdm = tqdm
 
     def select_policy_pair(
         self, policy_indices: Optional[Tuple[int, int]] = None
@@ -392,14 +608,14 @@ class Generator:
             env=self.env,
             policy=policy_a,
             timesteps=timesteps,
-            tqdm=True,
+            tqdm=self.tqdm,
         ).reshape(-1, self.root_env._reward_weights.shape[0])
 
         features_b = procgen_rollout_features(
             env=self.env,
             policy=policy_b,
             timesteps=timesteps,
-            tqdm=True,
+            tqdm=self.tqdm,
         ).reshape(-1, self.root_env._reward_weights.shape[0])
 
         return features_a, features_b
@@ -417,7 +633,7 @@ class Generator:
             timesteps=timesteps,
             n_trajs=n_trajs,
             flags=["feature", "first"],
-            tqdm=True,
+            tqdm=self.tqdm,
         )
         data_b = procgen_rollout_dataset(
             env=self.env,
@@ -425,7 +641,7 @@ class Generator:
             timesteps=timesteps,
             n_trajs=n_trajs,
             flags=["feature", "first"],
-            tqdm=True,
+            tqdm=self.tqdm,
         )
 
         return data_a.trajs(), data_b.trajs()
@@ -436,6 +652,7 @@ if __name__ == "__main__":
         {
             "state": gen_state_preferences,
             "traj": gen_traj_preferences,
+            "both": gen_preferences,
             "relabel": relabel_preferences,
         },
     )

@@ -81,12 +81,11 @@ class Miner(FeatureEnv[MinerState]):
         normalize_features: bool = False,
         **kwargs,
     ) -> None:
-        if reward_weights.shape[0] not in (4, 5):
-            raise ValueError("Must supply 4 or 5 reward weights.")
+        if reward_weights.shape[0] != 4:
+            raise ValueError("Must supply 4 reward weights.")
 
         self._reward_weights = reward_weights
         self._n_features = reward_weights.shape[0]
-        self.use_exit_feature = reward_weights.shape[0] == 5
         self.use_normalized_features = normalize_features
         super().__init__(
             num=num,
@@ -168,20 +167,7 @@ class Miner(FeatureEnv[MinerState]):
             max_diamonds = DIAMOND_PERCENT * self.states[0].grid.size
             diamonds /= max_diamonds
 
-        if self.use_exit_feature:
-            exits = np.array(
-                [
-                    Miner.reached_exit(state, n_diamonds)
-                    for state, n_diamonds in zip(self.states, self.diamonds)
-                ]
-            )
-            assert exits.shape[0] == self.num
-
-            features = np.array(
-                [pickup, exits, dangers, dists, diamonds], dtype=np.float32
-            ).T
-        else:
-            features = np.array([pickup, dangers, dists, diamonds], dtype=np.float32).T
+        features = np.array([pickup, dangers, dists, diamonds], dtype=np.float32).T
         assert features.shape == (self.num, self._n_features)
 
         return features
@@ -255,7 +241,3 @@ class Miner(FeatureEnv[MinerState]):
                 f"There are {n_diamonds} this step vs {last_n_diamonds} last step, and first={first}."
             )
         return n_diamonds != last_n_diamonds
-
-    @staticmethod
-    def reached_exit(state: MinerState, n_diamonds: int) -> bool:
-        return n_diamonds == 0 and state.agent_pos == state.exit_pos

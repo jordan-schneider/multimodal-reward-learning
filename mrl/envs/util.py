@@ -3,10 +3,10 @@ from typing import Literal, Optional, Union, overload
 
 import numpy as np
 from gym3 import ExtractDictObWrapper  # type: ignore
-from gym3.env import Env
-from gym3.wrapper import Wrapper
+from gym3.env import Env  # type: ignore
+from gym3.wrapper import Wrapper  # type: ignore
 from mrl.envs import Maze, Miner
-from mrl.envs.feature_envs import FeatureEnv  # type: ignore
+from mrl.envs.feature_envs import FeatureEnv
 from mrl.envs.probe_envs import OneActionNoObsOneTimestepOneReward as Probe1
 from mrl.envs.probe_envs import OneActionTwoObsOneTimestepDeterministicReward as Probe2
 from procgen.env import ProcgenGym3Env
@@ -42,7 +42,7 @@ def make_env(
     elif kind == "miner":
         assert reward is not None
         if not isinstance(reward, np.ndarray):
-            reward = np.full(shape=5, fill_value=reward)
+            reward = np.full(shape=4, fill_value=reward)
         env = Miner(reward, num, **kwargs)
     elif kind == "probe-1":
         env = Probe1(num=num, **kwargs)
