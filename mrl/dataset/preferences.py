@@ -531,6 +531,9 @@ def orient_diffs(
     rng: np.random.Generator,
 ) -> Tuple[np.ndarray, np.ndarray]:
     single_diff = len(diffs.shape) == 1
+    if single_diff:
+        diffs = diffs.reshape(1, -1)
+
     if normalize_differences:
         diffs = diffs / np.linalg.norm(diffs, axis=1, keepdims=True)
 
