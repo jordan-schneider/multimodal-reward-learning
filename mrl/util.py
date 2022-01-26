@@ -34,6 +34,24 @@ from mrl.envs.util import get_root_env
 from mrl.memprof import get_memory
 
 
+def normalize_diffs(
+    feature_a: np.ndarray,
+    feature_b: np.ndarray,
+    mode: Literal["diff-length", "sum-length", None] = None,
+) -> np.ndarray:
+    assert (
+        len(feature_a.shape) == 2
+    ), f"feature_a does not have correct dimensions, shape={feature_a.shape}"
+    diffs = feature_a - feature_b
+    if mode == "diff-length":
+        diffs /= np.linalg.norm(diffs, axis=1, keepdims=True)
+    elif mode == "sum-length":
+        diffs /= np.linalg.norm(feature_a, axis=1, keepdims=True) + np.linalg.norm(
+            feature_b, axis=1, keepdims=True
+        )
+    return diffs
+
+
 def batch(obs: torch.Tensor, obs_dims: int) -> torch.Tensor:
     if len(obs.shape) == obs_dims:
         return obs.reshape((1, *obs.shape))
@@ -479,9 +497,10 @@ def np_gather(
     nbytes = 0
     while len(paths) > 0 and (max_nbytes == -1 or nbytes < max_nbytes):
         path = paths.pop()
-        array = np.load(path)
-        finite_rows = np.all(np.isfinite(array), axis=1)
-        nonzero_rows = np.any(array != 0, axis=1)
+        array: np.ndarray = np.load(path)
+        rows_only = array.reshape((array.shape[0], -1))
+        finite_rows = np.all(np.isfinite(rows_only), axis=1)
+        nonzero_rows = np.any(rows_only != 0, axis=1)
         if not np.all(finite_rows) or not np.all(nonzero_rows):
             array = array[finite_rows & nonzero_rows]
             np.save(path, array)
@@ -496,20 +515,14 @@ def np_remove(indir: Path, name: str) -> None:
     paths = [
         path
         for path in indir.iterdir()
-        if path.is_file() and re.search(f"/{name}(\.[0-9]+)?\.npy", str(path))
+        if path.is_file()
+        and re.search(
+            f"/{name}(\.flip_probs|\.features)?(\.[0-9]+)?(\.npy|\.png)", str(path)
+        )
     ]
     logging.info(f"Removing {paths}")
     for path in paths:
         path.unlink()
-
-
-def sample_data(
-    data: np.ndarray, n: int, rng: np.random.Generator
-) -> Tuple[np.ndarray, np.ndarray]:
-    assert data.shape[0] >= n
-    assert data.shape[0] > 0
-    indices = rng.choice(len(data), size=n, replace=False)
-    return data[indices], indices
 
 
 def setup_logging(
@@ -521,10 +534,18 @@ def setup_logging(
 
     logging.basicConfig(level=level, format=FORMAT)
     if outdir is not None:
-        fh = logging.FileHandler(filename=str(outdir / name), mode="w")
-        fh.setLevel(level)
-        fh.setFormatter(logging.Formatter(FORMAT))
-        logging.getLogger().addHandler(fh)
+        logger = logging.getLogger()
+        files = [
+            handler.baseFilename
+            for handler in logger.handlers
+            if isinstance(handler, logging.FileHandler)
+        ]
+        path = str(outdir / name)
+        if path not in files:
+            fh = logging.FileHandler(filename=path, mode="w")
+            fh.setLevel(level)
+            fh.setFormatter(logging.Formatter(FORMAT))
+            logging.getLogger().addHandler(fh)
 
     logging.getLogger("matplotlib").setLevel(logging.WARNING)
 

@@ -18,6 +18,7 @@ from mrl.envs.util import FEATURE_ENV_NAMES, get_root_env, make_env
 from mrl.util import (
     get_policy,
     max_traj_batch_size,
+    normalize_diffs,
     np_gather,
     np_remove,
     procgen_rollout_dataset,
@@ -39,11 +40,11 @@ def gen_preferences(
     init_traj_temp: float = 10.0,
     sensitivity: float = 0.01,
     normalize_step: bool = False,
-    normalize_differences: bool = False,
+    normalize_differences: Literal[None, "diff-length", "sum-length"] = None,
     overwrite: bool = False,
     seed: int = 0,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
-) -> None:
+) -> Tuple[Path, Path]:
     rootdir = Path(rootdir)
     outdir = rootdir / "prefs"
     setup_logging(level=verbosity, outdir=outdir)
@@ -70,6 +71,7 @@ def gen_preferences(
         sensitivity=sensitivity,
     )
     logging.info(f"Using temp={state_temp} for states")
+
     logging.info("Searching for trajectory temperature")
     traj_temp = calibrate_trajs(
         reward=reward,
@@ -83,13 +85,12 @@ def gen_preferences(
     logging.info(f"Using temp={traj_temp} for trajs")
 
     logging.info("Generating state preferences")
-    gen_state_preferences(
+    state_path = gen_state_preferences(
         rootdir=rootdir,
         env=env,
         n_states=n_prefs,
         n_parallel_envs=n_envs,
         outname=outname,
-        policy_path=None,
         temperature=state_temp,
         normalize_step_features=normalize_step,
         normalize_differences=normalize_differences,
@@ -98,19 +99,19 @@ def gen_preferences(
     )
 
     logging.info("Generating trajectory preferenes")
-    gen_traj_preferences(
+    traj_path = gen_traj_preferences(
         rootdir=rootdir,
         env=env,
         n_trajs=n_prefs,
         n_parallel_envs=n_envs,
         outname=outname,
-        policy_path=None,
         temperature=traj_temp,
         normalize_step_features=normalize_step,
         normalize_differences=normalize_differences,
         overwrite=overwrite,
         verbosity=verbosity,
     )
+    return state_path, traj_path
 
 
 def calibrate_states(
@@ -118,7 +119,7 @@ def calibrate_states(
     generator: Generator,
     target_flip_prob: float,
     n_states: int,
-    normalize_differences: bool,
+    normalize_differences: Literal["diff-length", "sum-length", None],
     init_temperature: float = 1.0,
     sensitivity: float = 0.05,
 ) -> float:
@@ -158,18 +159,20 @@ def calibrate_states(
         while n_diffs < n_states:
             logging.debug(f"{n_diffs}/{n_states}")
             feature_a, feature_b = generator.gen_state_pairs(timesteps=batch_timesteps)
-            feature_diffs = feature_a - feature_b
-            feature_diffs = feature_diffs[np.any(feature_diffs != 0, axis=1)]
-            logging.debug(f"{feature_diffs.shape}")
-            oriented_diffs, probs = orient_diffs(
-                feature_diffs,
-                temperature,
-                reward,
-                normalize_differences,
-                generator.rng,
+
+            feature_diffs = normalize_diffs(
+                feature_a, feature_b, mode=normalize_differences
+            )
+
+            _, probs = orient_features(
+                features=np.stack((feature_a, feature_b), axis=1),
+                diffs=feature_diffs,
+                temperature=temperature,
+                reward=reward,
+                rng=generator.rng,
             )
             flip_prob_batches.append(probs)
-            n_diffs += oriented_diffs.shape[0]
+            n_diffs += probs.shape[0]
         flip_probs = np.concatenate(flip_prob_batches)
         average_flip_prob: float = 0.5 - np.mean(np.abs(flip_probs - 0.5))
         logging.debug(f"average_flip_prob={average_flip_prob}")
@@ -182,7 +185,7 @@ def calibrate_trajs(
     generator: Generator,
     target_flip_prob: float,
     n_trajs: int,
-    normalize_differences: bool,
+    normalize_differences: Literal["diff-length", "sum-length", None],
     init_temperature: float = 1.0,
     sensitivity: float = 0.05,
 ) -> float:
@@ -226,21 +229,29 @@ def calibrate_trajs(
                 )
             ):
                 assert traj_a.features is not None and traj_b.features is not None
-                feature_diff = (
-                    torch.sum(traj_a.features, dim=0)
-                    - torch.sum(traj_b.features, dim=0)
-                ).numpy()
-                if np.linalg.norm(feature_diff) == 0:
+                feature_a: np.ndarray = (
+                    torch.sum(traj_a.features, dim=0).numpy().reshape((1, -1))
+                )
+                feature_b: np.ndarray = (
+                    torch.sum(traj_b.features, dim=0).numpy().reshape((1, -1))
+                )
+                assert feature_a.shape == feature_b.shape
+
+                feature_diff = normalize_diffs(
+                    feature_a, feature_b, mode=normalize_differences
+                )
+
+                if not np.any(feature_diff != 0):
                     continue
 
-                oriented_diff, probs = orient_diffs(
+                _, probs = orient_features(
+                    features=np.stack((feature_a, feature_b), axis=1),
                     diffs=feature_diff,
                     temperature=temperature,
                     reward=reward,
-                    normalize_differences=normalize_differences,
                     rng=generator.rng,
                 )
-                if oriented_diff.shape[0] == 0:
+                if probs.shape[0] == 0:
                     continue
                 n_diffs += 1
                 probs_batch.append(probs)
@@ -260,10 +271,10 @@ def gen_state_preferences(
     policy_path: Optional[Path] = None,
     temperature: float = 0.0,
     normalize_step_features: bool = False,
-    normalize_differences: bool = False,
+    normalize_differences: Literal["diff-length", "sum-length", None] = None,
     overwrite: bool = False,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
-) -> None:
+) -> Path:
     rootdir = Path(rootdir)
     outdir = rootdir / f"prefs/state/{temperature}"
     outdir.mkdir(parents=True, exist_ok=True)
@@ -290,50 +301,62 @@ def gen_state_preferences(
         step_nbytes=generator.step_nbytes,
     )
 
-    diff_batches: List[np.ndarray] = []
-    flip_prob_batches: List[np.ndarray] = []
-    n_diffs = 0
+    n_prefs = 0
 
-    outpath = outdir / (outname + ".npy")
+    outpath = outdir / (outname + ".features.npy")
     if overwrite:
         np_remove(outdir, outname)
 
     if outpath.exists():
-        current_diffs = np.load(outpath)
-        n_diffs += len(current_diffs)
-        logging.info(f"Starting with {n_diffs} existing preferences")
+        current_prefs = np.load(outpath)
+        n_prefs += len(current_prefs)
+        logging.info(f"Starting with {n_prefs} existing preferences")
     else:
-        current_diffs = None
+        current_prefs = None
         if not overwrite:
             logging.info(f"Did not find existing preferences at {outpath}")
 
-    if n_diffs >= n_states:
+    if n_prefs >= n_states:
         logging.warning(f"No new states needed for {outdir}")
-        return
+        return outdir / outname
 
-    while n_diffs < n_states:
+    feature_batches: List[np.ndarray] = []
+    flip_prob_batches: List[np.ndarray] = []
+
+    while n_prefs < n_states:
         feature_a, feature_b = generator.gen_state_pairs(timesteps=batch_timesteps)
-        feature_diffs = feature_a - feature_b
-        feature_diffs = feature_diffs[np.any(feature_diffs != 0, axis=1)]
-        oriented_diffs, probs = orient_diffs(
-            feature_diffs,
-            temperature,
-            reward,
-            normalize_differences,
-            generator.rng,
+
+        feature_diffs = normalize_diffs(
+            feature_a, feature_b, mode=normalize_differences
         )
-        diff_batches.append(oriented_diffs)
+        nonempty_rows = np.any(feature_diffs != 0, axis=1)
+        feature_diffs = feature_diffs[nonempty_rows]
+        feature_a = feature_a[nonempty_rows]
+        feature_b = feature_b[nonempty_rows]
+
+        if feature_diffs.shape[0] == 0:
+            continue
+
+        oriented_features, probs = orient_features(
+            features=np.stack((feature_a, feature_b), axis=1),
+            diffs=feature_diffs,
+            temperature=temperature,
+            reward=reward,
+            rng=generator.rng,
+        )
+        if oriented_features.shape[0] == 0:
+            continue
+
+        feature_batches.append(oriented_features)
         flip_prob_batches.append(probs)
-        n_diffs += oriented_diffs.shape[0]
+        n_prefs += oriented_features.shape[0]
 
-        logging.info(f"Collected {n_diffs} of {n_states} preferences")
+        logging.info(f"Collected {n_prefs} of {n_states} preferences")
 
-    out_diffs: np.ndarray = np.concatenate(diff_batches)
-    if current_diffs is not None:
-        out_diffs = np.concatenate((current_diffs, out_diffs))
-
-    assert len(out_diffs.shape) == 2
-    np.save(outdir / outname, out_diffs)
+    features = np.concatenate(feature_batches)
+    assert len(features.shape) == 3
+    assert features.shape[1] == 2
+    np.save(outdir / (outname + ".features.npy"), features)
 
     flip_probs = np.concatenate(flip_prob_batches)
     np.save(outdir / (outname + ".flip-probs.npy"), flip_probs)
@@ -343,6 +366,8 @@ def gen_state_preferences(
     plt.xlabel("Flip Probability")
     plt.savefig(outdir / (outname + ".flip-probs.png"))
     plt.close()
+
+    return outdir / outname
 
 
 def gen_traj_preferences(
@@ -354,10 +379,10 @@ def gen_traj_preferences(
     policy_path: Optional[Path] = None,
     temperature: float = 0.0,
     normalize_step_features: bool = False,
-    normalize_differences: bool = False,
+    normalize_differences: Literal["diff-length", "sum-length", None] = None,
     overwrite: bool = False,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
-):
+) -> Path:
     rootdir = Path(rootdir)
     outdir = rootdir / f"prefs/traj/{temperature}"
     outdir.mkdir(parents=True, exist_ok=True)
@@ -387,11 +412,11 @@ def gen_traj_preferences(
     current_trajs = 0
     if overwrite:
         np_remove(outdir, outname)
-        collection_batch = 0
+        collection_batch = -1
     else:
         collection_batch = max_shard_index(outdir, outname)
 
-        if collection_batch > 0:
+        if collection_batch >= 0:
             data = np_gather(outdir, outname)
 
             current_trajs += data.shape[0]
@@ -400,17 +425,18 @@ def gen_traj_preferences(
             logging.info(f"Starting with {current_trajs} preferences")
         else:
             logging.info(f"No existing data found at {outdir}")
+    collection_batch += 1
 
     if current_trajs >= n_trajs:
         logging.warning(f"No new trajectories needed for {outdir}")
-        exit()
+        return outdir / outname
 
     while current_trajs < n_trajs:
         logging.info(
             f"Asking for {n_trajs - current_trajs} trajs or {batch_timesteps} timesteps"
         )
 
-        diff_batch: List[np.ndarray] = []
+        feature_batch: List[np.ndarray] = []
         probs_batch: List[np.ndarray] = []
         for traj_a, traj_b in zip(
             *generator.gen_traj_pairs(
@@ -418,42 +444,41 @@ def gen_traj_preferences(
             )
         ):
             assert traj_a.features is not None and traj_b.features is not None
-            feature_diff = (
-                torch.sum(traj_a.features, dim=0) - torch.sum(traj_b.features, dim=0)
-            ).numpy()
+            feature_a: np.ndarray = torch.sum(traj_a.features, dim=0).numpy()
+            feature_b: np.ndarray = torch.sum(traj_b.features, dim=0).numpy()
             assert (
-                env != "miner"
-                or feature_diff.shape == (4,)
-                or feature_diff.shape == (5,)
-            )
-            if np.linalg.norm(feature_diff) == 0:
+                len(feature_a.shape) == 1
+            ), f"feature_a has wrong ndims, shape={feature_a.shape}"
+            assert feature_a.shape == feature_b.shape
+
+            feature_diff = normalize_diffs(
+                feature_a.reshape((1, -1)),
+                feature_b.reshape((1, -1)),
+                mode=normalize_differences,
+            ).flatten()
+            assert len(feature_diff.shape) == 1
+
+            if not np.any(feature_diff != 0):
                 continue
 
-            oriented_diff, probs = orient_diffs(
-                feature_diff,
-                temperature,
-                reward,
-                normalize_differences,
-                generator.rng,
+            oriented_features, probs = orient_features(
+                features=np.stack((feature_a, feature_b), axis=1),
+                diffs=feature_diff,
+                temperature=temperature,
+                reward=reward,
+                rng=generator.rng,
             )
-            if oriented_diff.shape[0] == 0:
+            if oriented_features.shape[0] == 0:
                 continue
-            assert (
-                env != "miner"
-                or oriented_diff.shape == (4,)
-                or oriented_diff.shape == (5,)
-            )
-            diff_batch.append(oriented_diff)
+            feature_batch.append(oriented_features)
             probs_batch.append(probs)
 
-        diffs_file = outdir / f"{outname}.{collection_batch}.npy"
-        logging.info(f"Writing current batch to {diffs_file}")
-        out = np.stack(diff_batch)
-        assert len(out.shape) == 2, f"out shape={out.shape} not expected (-1, 4)"
-        np.save(diffs_file, out)
+        features = np.stack(feature_batch)
+        assert features.shape[1] == 2
+        np.save(outdir / f"{outname}.features.{collection_batch}.npy", features)
 
         flip_probs = np.stack(probs_batch)
-        probs_file = outdir / f"{outname}.{collection_batch}.flip-probs.npy"
+        probs_file = outdir / f"{outname}.flip-probs.{collection_batch}.npy"
         np.save(probs_file, flip_probs)
 
         plt.hist(flip_probs)
@@ -463,51 +488,19 @@ def gen_traj_preferences(
         plt.close()
 
         collection_batch += 1
-        current_trajs += out.shape[0]
-        del diff_batch
+        current_trajs += features.shape[0]
+        del feature_batch
         gc.collect()
 
-
-def relabel_preferences(
-    rootdir: Path,
-    in_name: str,
-    temperature: float,
-    in_modalities: Optional[List[str]] = None,
-    out_modalities: Optional[List[str]] = None,
-    replications: Optional[int] = None,
-    seed: int = 0,
-) -> None:
-    rootdir = Path(rootdir)
-    if in_modalities is None:
-        in_modalities = ["state", "traj"]
-    if out_modalities is None:
-        out_modalities = ["state", "traj"]
-
-    rng = np.random.default_rng(seed)
-
-    if replications is None:
-        reward = np.load(rootdir / "reward.npy")
-        for in_modality, out_modality in zip(in_modalities, out_modalities):
-            in_dir = rootdir / "prefs" / in_modality
-            in_dir /= str(temperature)
-
-            diffs = np_gather(in_dir, in_name)
-            diffs, _ = orient_diffs(
-                diffs, temperature, reward, normalize_differences=False, rng=rng
-            )
-
-            out_dir = rootdir / "prefs" / out_modality / str(temperature)
-            out_dir.mkdir(parents=True, exist_ok=True)
-            np.save(out_dir / (in_name + ".npy"), diffs)
-    else:
-        pass
+    return outdir / outname
 
 
 def max_shard_index(outdir: Path, outname: str) -> int:
-    max_index = 0
+    max_index = -1
     for file in outdir.glob(f"{outname}.[0-9]*.npy"):
-        match = re.search("([0-9]*).npy", str(file))
-        if match is None:
+        match = re.search("([0-9]+).npy", str(file))
+        logging.debug(f"file={file}, match={match}")
+        if match is None or match.lastindex == 0:
             continue
         current_index = int(match[1])
         max_index = max(max_index, current_index)
@@ -528,41 +521,43 @@ def max_state_batch_size(n_states: int, n_parallel_envs: int, step_nbytes: int) 
     return batch_timesteps
 
 
-def orient_diffs(
+def orient_features(
+    features: np.ndarray,
     diffs: np.ndarray,
     temperature: float,
     reward: np.ndarray,
-    normalize_differences: bool,
     rng: np.random.Generator,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    single_diff = len(diffs.shape) == 1
-    if single_diff:
-        diffs = diffs.reshape(1, -1)
+    single_row = len(diffs.shape) == 1
+    if single_row:
+        diffs = diffs.reshape((1, -1))
+        features = features.reshape((1, 2, -1))
+    assert diffs.shape[0] == features.shape[0]
 
-    prob_diffs = (
-        diffs / np.linalg.norm(diffs, axis=1, keepdims=True)
-        if normalize_differences
-        else diffs
-    )
-
-    strengths = prob_diffs @ reward
+    strengths = diffs @ reward
     logging.debug(f"strength={strengths}")
-    good_diffs = np.abs(strengths) > 1e-8
-    diffs = diffs[good_diffs]
-    strengths = strengths[good_diffs]
+    nonzero_rows = np.abs(strengths) > 1e-8
+    features = features[nonzero_rows]
+    diffs = diffs[nonzero_rows]
+    strengths = strengths[nonzero_rows]
 
     if temperature == 0.0:
         opinions = np.sign(strengths)
-        diffs = (diffs.T * opinions).T
+        for i in range(len(features)):
+            if opinions[i] == -1:
+                features[i, 0], features[i, 1] = features[i, 1], features[i, 0]
+
         prob_first_better = np.maximum(opinions, 0)
     else:
         prob_first_better = 1.0 / (1.0 + np.exp(-strengths / temperature))
         second_better = rng.random(size=diffs.shape[0]) > prob_first_better
-        diffs[second_better] *= -1
+        for i in range(len(features)):
+            if second_better[i]:
+                features[i, 0], features[i, 1] = features[i, 1], features[i, 0]
 
-    if single_diff:
-        diffs = diffs.reshape(-1)
-    return diffs, prob_first_better
+    if single_row:
+        features = features.reshape((2, -1))
+    return features, prob_first_better
 
 
 class Generator:
@@ -664,6 +659,5 @@ if __name__ == "__main__":
             "state": gen_state_preferences,
             "traj": gen_traj_preferences,
             "both": gen_preferences,
-            "relabel": relabel_preferences,
         },
     )
