@@ -16,19 +16,20 @@ from mrl.inference.sphere import find_centroid
 from mrl.reward_model.boltzmann import boltzmann_likelihood
 from mrl.reward_model.hinge import hinge_likelihood
 from mrl.reward_model.logspace import cum_likelihoods
-from mrl.util import np_gather, sample_data, setup_logging
+from mrl.util import normalize_diffs, np_gather, setup_logging
 from tqdm import trange  # type: ignore
 
 
 def compare_modalities(
     outdir: Path,
-    traj_path: Optional[Path] = None,
-    state_path: Optional[Path] = None,
-    reward_path: Optional[Path] = None,
-    aligned_reward_set_path: Optional[Path] = None,
+    data_rootdir: Path,
+    state_temp: float,
+    traj_temp: float,
+    state_name: str,
+    traj_name: str,
     n_samples: int = 100_000,
     max_comparisons: int = 1000,
-    norm_diffs: bool = False,
+    norm_diffs: Literal["diff-length", "sum-length", None] = None,
     use_hinge: bool = False,
     use_shift: bool = False,
     n_trials: int = 1,
@@ -44,19 +45,28 @@ def compare_modalities(
         setup_logging(outdir=outdir, level=verbosity)
 
         logging.info(
-            f"outdir={outdir}, traj_path={traj_path}, state_path={state_path}, reward_path={reward_path}, aligned_reward_set_path={aligned_reward_set_path} n_samples={n_samples}, max_comparisons={max_comparisons}, norm_diffs={norm_diffs}, use_hinge={use_hinge}, use_shift={use_shift}, n_trials={n_trials}, save_all={save_all}, seed={seed}, verbosity={verbosity}"
+            f"outdir={outdir}, data_rootdir={data_rootdir}, n_samples={n_samples}, max_comparisons={max_comparisons}, norm_diffs={norm_diffs}, use_hinge={use_hinge}, use_shift={use_shift}, n_trials={n_trials}, save_all={save_all}, seed={seed}, verbosity={verbosity}"
         )
 
         rng = np.random.default_rng(seed=seed)
 
-        paths = collect_paths(traj_path, state_path)
+        reward_path = data_rootdir / "reward.npy"
+        aligned_reward_set_path = data_rootdir / "aligned_reward_set.npy"
+
+        paths = collect_paths(
+            data_rootdir,
+            state_temp=state_temp,
+            traj_temp=traj_temp,
+            state_name=state_name,
+            traj_name=traj_name,
+        )
 
         true_reward, aligned_reward_set = load_ground_truth(
             reward_path, aligned_reward_set_path
         )
 
         max_ram_nbytes = int(bitmath.parse_string_unsafe(max_ram).bytes)
-        trial_batches = load_comparison_diffs(
+        trial_batches = load_comparison_data(
             paths=paths,
             max_comparisons=max_comparisons,
             n_trials=n_trials,
@@ -77,13 +87,14 @@ def compare_modalities(
         np.save(outdir / "reward_samples.npy", reward_samples)
 
         results = Results(outdir)
-        for trial, diffs in enumerate(trial_batches):
+        for trial, features in enumerate(trial_batches):
             logging.info(f"Starting trial-{trial}")
             results.start(f"trial-{trial}")
 
-            if norm_diffs:
-                logging.info("Normalizing difference vectors")
-                diffs = {key: normalize(diff) for key, diff in diffs.items()}
+            diffs = {
+                key: normalize_diffs(feature[:, 0], feature[:, 1], mode=norm_diffs)
+                for key, feature in features.items()
+            }
 
             try:
                 results = comparison_analysis(
@@ -111,15 +122,15 @@ def compare_modalities(
 
 
 def load_ground_truth(
-    reward_path: Optional[Path],
-    aligned_reward_set_path: Optional[Path],
+    reward_path: Path,
+    aligned_reward_set_path: Path,
 ) -> Tuple[Optional[np.ndarray], Optional[AlignedRewardSet]]:
     true_reward, aligned_reward_set = None, None
-    if reward_path is not None:
+    if reward_path.exists():
         logging.info(f"Loading ground truth reward from {reward_path}")
         true_reward = np.load(reward_path)
 
-        if aligned_reward_set_path is not None:
+        if aligned_reward_set_path.exists():
             aligned_reward_set = AlignedRewardSet(
                 Path(aligned_reward_set_path), true_reward
             )
@@ -131,14 +142,30 @@ def load_ground_truth(
     return true_reward, aligned_reward_set
 
 
-def collect_paths(traj_path, state_path):
+def collect_paths(
+    rootdir: Path, state_temp: float, traj_temp: float, state_name: str, traj_name: str
+) -> Dict[str, Path]:
     paths: Dict[str, Path] = {}
-    if traj_path is not None:
-        logging.info(f"Loading trajectories from {traj_path}")
-        paths["traj"] = Path(traj_path)
-    if state_path is not None:
+    state_root = rootdir / f"prefs/state/{state_temp}/{state_name}.features"
+    state_path = Path(str(state_root) + ".npy")
+
+    traj_root = rootdir / f"prefs/traj/{traj_temp}/{traj_name}.features"
+    traj_path = Path(str(traj_root) + ".0.npy")
+
+    if state_path.exists():
         logging.info(f"Loading states from {state_path}")
-        paths["state"] = Path(state_path)
+        paths["state"] = state_root
+    else:
+        logging.warning(f"No file found at {state_path}")
+
+    if traj_path.exists():
+        logging.info(f"Loading trajectories from {traj_path}")
+        paths["traj"] = traj_root
+    else:
+        logging.warning(f"No file found at {traj_path}")
+
+    assert len(paths) > 0
+
     return paths
 
 
@@ -157,40 +184,51 @@ def post_hoc_plot_comparisons(outdir: Path) -> None:
     plot_comparisons(results, outdir)
 
 
-def load_comparison_diffs(
+def load_comparison_data(
     paths: Dict[str, Path],
     max_comparisons: int,
     n_trials: int,
     ram_free: int,
     rng: np.random.Generator,
 ) -> Generator[Dict[str, np.ndarray], None, None]:
-    all_diffs = {
-        key: np_gather(in_path.parent, in_path.name, ram_free // len(paths))
-        for key, in_path in paths.items()
-    }
-
-    for key, diff in all_diffs.items():
-        logging.info(f"Loaded {diff.shape[0]} total {key} diffs")
-
-    remaining_diffs = dict(all_diffs)
-    for trial in range(n_trials):
-        trial_diffs: Dict[str, np.ndarray] = {}
-        for key, diff in remaining_diffs.items():
-            sample, indices = sample_data(
-                data=diff,
-                n=max_comparisons,
-                rng=rng,
-            )
-            trial_diffs[key] = sample
-            remaining_diffs[key] = np.delete(diff, indices, axis=0)
-
-        trial_diffs["joint"] = np.concatenate(
-            [diff[: max_comparisons // len(paths)] for diff in trial_diffs.values()]
+    all_data: Dict[str, np.ndarray] = {}
+    logging.debug(f"paths={paths}")
+    for key, path in paths.items():
+        features = np_gather(
+            indir=path.parent,
+            name=path.name,
+            max_nbytes=ram_free // len(paths),
         )
-        for key, diff in trial_diffs.items():
-            trial_diffs[key] = diff[rng.permutation(diff.shape[0])]
+        if max_comparisons * n_trials > features.shape[0]:
+            raise RuntimeError(
+                f"{key} only has {features.shape[0]} comparisons, but need {max_comparisons * n_trials}"
+            )
+        all_data[key] = features
 
-        yield trial_diffs
+    logging.debug(f"data={all_data}")
+
+    remaining_data = dict(all_data)
+    for _ in range(n_trials):
+        trial_data: Dict[str, np.ndarray] = {}
+        for key, features in remaining_data.items():
+            assert features.shape[0] >= max_comparisons
+            indices = rng.choice(features.shape[0], size=max_comparisons, replace=False)
+            trial_data[key] = features[indices]
+            remaining_features = np.delete(features, indices, axis=0)
+            logging.debug(f"n features={remaining_features.shape[0]} for key={key}")
+            remaining_data[key] = remaining_features
+
+        trial_data["joint"] = np.concatenate(
+            [
+                features[: max_comparisons // len(paths)]
+                for features in trial_data.values()
+            ]
+        )
+        for key, features in trial_data.items():
+            perm = rng.permutation(features.shape[0])
+            trial_data[key] = features[perm]
+
+        yield trial_data
 
 
 def comparison_analysis(
