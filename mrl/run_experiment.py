@@ -27,7 +27,9 @@ def main(
     init_traj_temp: float = 1.0,
     n_envs: int = 100,
     normalize_step: bool = False,
-    normalize_differences: Literal["diff-length", "sum-length", None] = None,
+    normalize_differences: Literal[
+        "diff-length", "sum-length", "max-length", "log-diff-length", None
+    ] = None,
     use_hinge: bool = False,
     use_shift: bool = False,
     max_ram: str = "100G",
@@ -134,7 +136,10 @@ def main(
 
 
 def make_pref_outname(
-    n_prefs: int, normalize_differences: Literal["diff-length", "sum-length", None]
+    n_prefs: int,
+    normalize_differences: Literal[
+        "diff-length", "sum-length", "max-length", "log-diff-length", None
+    ],
 ) -> str:
     outname = str(n_prefs)
     if normalize_differences == "diff-length":

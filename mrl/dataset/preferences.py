@@ -40,7 +40,9 @@ def gen_preferences(
     init_traj_temp: float = 10.0,
     sensitivity: float = 0.01,
     normalize_step: bool = False,
-    normalize_differences: Literal[None, "diff-length", "sum-length"] = None,
+    normalize_differences: Literal[
+        "diff-length", "sum-length", "max-length", "log-diff-length", None
+    ] = None,
     overwrite: bool = False,
     seed: int = 0,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
@@ -119,7 +121,9 @@ def calibrate_states(
     generator: Generator,
     target_flip_prob: float,
     n_states: int,
-    normalize_differences: Literal["diff-length", "sum-length", None],
+    normalize_differences: Literal[
+        "diff-length", "sum-length", "max-length", "log-diff-length", None
+    ],
     init_temperature: float = 1.0,
     sensitivity: float = 0.05,
 ) -> float:
@@ -185,7 +189,9 @@ def calibrate_trajs(
     generator: Generator,
     target_flip_prob: float,
     n_trajs: int,
-    normalize_differences: Literal["diff-length", "sum-length", None],
+    normalize_differences: Literal[
+        "diff-length", "sum-length", "max-length", "log-diff-length", None
+    ],
     init_temperature: float = 1.0,
     sensitivity: float = 0.05,
 ) -> float:
@@ -271,7 +277,9 @@ def gen_state_preferences(
     policy_path: Optional[Path] = None,
     temperature: float = 0.0,
     normalize_step_features: bool = False,
-    normalize_differences: Literal["diff-length", "sum-length", None] = None,
+    normalize_differences: Literal[
+        "diff-length", "sum-length", "max-length", "log-diff-length", None
+    ] = None,
     overwrite: bool = False,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> Path:
@@ -379,7 +387,9 @@ def gen_traj_preferences(
     policy_path: Optional[Path] = None,
     temperature: float = 0.0,
     normalize_step_features: bool = False,
-    normalize_differences: Literal["diff-length", "sum-length", None] = None,
+    normalize_differences: Literal[
+        "diff-length", "sum-length", "max-length", "log-diff-length", None
+    ] = None,
     overwrite: bool = False,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> Path:

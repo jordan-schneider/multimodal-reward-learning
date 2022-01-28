@@ -37,7 +37,9 @@ from mrl.memprof import get_memory
 def normalize_diffs(
     feature_a: np.ndarray,
     feature_b: np.ndarray,
-    mode: Literal["diff-length", "sum-length", None] = None,
+    mode: Literal[
+        "diff-length", "sum-length", "max-length", "log-diff-length", None
+    ] = None,
 ) -> np.ndarray:
     assert (
         len(feature_a.shape) == 2
@@ -49,6 +51,16 @@ def normalize_diffs(
         diffs /= np.linalg.norm(feature_a, axis=1, keepdims=True) + np.linalg.norm(
             feature_b, axis=1, keepdims=True
         )
+    elif mode == "max-length":
+        diffs /= np.max(
+            (
+                np.linalg.norm(feature_a, axis=1, keepdims=True),
+                np.linalg.norm(feature_b, axis=1, keepdims=True),
+            ),
+            axis=0,
+        )
+    elif mode == "log-diff-length":
+        diffs /= np.log2(np.linalg.norm(diffs, axis=1, keepdims=True) + 1)
     return diffs
 
 
