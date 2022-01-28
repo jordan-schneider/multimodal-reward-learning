@@ -468,7 +468,7 @@ def gen_traj_preferences(
                 reward=reward,
                 rng=generator.rng,
             )
-            if oriented_features.shape[0] == 0:
+            if oriented_features.shape[0] == 0 or oriented_features.shape[1] == 0:
                 continue
             feature_batch.append(oriented_features)
             probs_batch.append(probs)

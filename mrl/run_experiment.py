@@ -19,6 +19,7 @@ def main(
     rootdir: Path,
     env: FEATURE_ENV_NAMES,
     prefs_per_trial: int = 1000,
+    n_trials: int = 1,
     temperature: Optional[float] = None,
     flip_prob: Optional[float] = None,
     calibration_prefs: int = 100,
@@ -29,7 +30,6 @@ def main(
     normalize_differences: Literal["diff-length", "sum-length", None] = None,
     use_hinge: bool = False,
     use_shift: bool = False,
-    n_trials: int = 1,
     max_ram: str = "100G",
     seed: int = 0,
     overwrite: bool = False,
@@ -38,7 +38,9 @@ def main(
     if temperature is None and flip_prob is None:
         raise ValueError("Must specify one of temperature or flip_prob")
     if temperature is not None and flip_prob is not None:
-        raise ValueError("Cannot specify both temperature and flip_prob")
+        raise ValueError(
+            f"Cannot specify both temperature {temperature} and flip_prob {flip_prob}"
+        )
 
     rootdir = Path(rootdir)
     if temperature is not None:
@@ -46,6 +48,7 @@ def main(
     elif flip_prob is not None:
         flip_prob = float(flip_prob)
     inference_outdir = make_inference_outdir(rootdir, temperature, flip_prob)
+    inference_outdir.mkdir(parents=True, exist_ok=True)
     setup_logging(level=verbosity, outdir=inference_outdir)
 
     n_prefs = prefs_per_trial * n_trials
