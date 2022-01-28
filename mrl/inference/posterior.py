@@ -29,7 +29,9 @@ def compare_modalities(
     traj_name: str,
     n_samples: int = 100_000,
     max_comparisons: int = 1000,
-    norm_diffs: Literal["diff-length", "sum-length", None] = None,
+    norm_diffs: Literal[
+        "diff-length", "sum-length", "max-length", "log-diff-length", None
+    ] = None,
     use_hinge: bool = False,
     use_shift: bool = False,
     n_trials: int = 1,
