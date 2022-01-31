@@ -49,7 +49,9 @@ def main(
         temperature = float(temperature)
     elif flip_prob is not None:
         flip_prob = float(flip_prob)
-    inference_outdir = make_inference_outdir(rootdir, temperature, flip_prob)
+    inference_outdir = make_inference_outdir(
+        rootdir, temperature, flip_prob, normalize_differences
+    )
     inference_outdir.mkdir(parents=True, exist_ok=True)
     setup_logging(level=verbosity, outdir=inference_outdir)
 
@@ -150,13 +152,31 @@ def make_pref_outname(
 
 
 def make_inference_outdir(
-    rootdir: Path, temperature: Optional[float], flip_prob: Optional[float]
+    rootdir: Path,
+    temperature: Optional[float],
+    flip_prob: Optional[float],
+    normalization: Literal[
+        "diff-length", "sum-length", "max-length", "log-diff-length", None
+    ],
 ) -> Path:
     outdir = rootdir / "compare"
     if temperature is not None:
         outdir /= str(temperature)
     elif flip_prob is not None:
         outdir /= f"flip-{flip_prob}"
+
+    if normalization == "diff-length":
+        outdir /= "diff-length"
+    elif normalization == "sum-length":
+        outdir /= "sum-length"
+    elif normalization == "max-length":
+        outdir /= "max-length"
+    elif normalization == "log-diff-length":
+        outdir /= "log-diff-length"
+    elif normalization is None:
+        outdir /= "no-norm"
+    else:
+        raise ValueError(f"Invalid normalization: {normalization}")
     return outdir
 
 
