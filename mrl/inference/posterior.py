@@ -88,7 +88,7 @@ def compare_modalities(
 
         np.save(outdir / "reward_samples.npy", reward_samples)
 
-        results = Results(outdir)
+        results = Results(outdir / "trials")
         for trial, features in enumerate(trial_batches):
             logging.info(f"Starting trial-{trial}")
             results.start(f"trial-{trial}")
@@ -182,7 +182,7 @@ def get_reward_ndims(path: Path) -> int:
 
 def post_hoc_plot_comparisons(outdir: Path) -> None:
     outdir = Path(outdir)
-    results = Results(outdir=outdir, load_contents=True)
+    results = Results(outdir=outdir / "trials", load_contents=True)
     plot_comparisons(results, outdir)
 
 
