@@ -369,8 +369,8 @@ def gen_state_preferences(
     flip_probs = np.concatenate(flip_prob_batches)
     np.save(outdir / (outname + ".flip-probs.npy"), flip_probs)
 
-    plt.hist(flip_probs)
-    plt.title(f"Histogram of noise flip probabilities (temp={temperature})")
+    plt.hist(flip_probs, bins=100)
+    plt.title(f"Histogram of noise flip probabilities (temp={temperature:0.5f})")
     plt.xlabel("Flip Probability")
     plt.savefig(outdir / (outname + ".flip-probs.png"))
     plt.close()
@@ -492,7 +492,7 @@ def gen_traj_preferences(
         np.save(probs_file, flip_probs)
 
         plt.hist(flip_probs)
-        plt.title(f"Histogram of noise flip probabilities (temp={temperature})")
+        plt.title(f"Histogram of noise flip probabilities (temp={temperature:0.5f})")
         plt.xlabel("Flip Probability")
         plt.savefig(outdir / (outname + ".flip-probs.png"))
         plt.close()
