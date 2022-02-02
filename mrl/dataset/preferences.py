@@ -427,14 +427,14 @@ def gen_traj_preferences(
         collection_batch = max_shard_index(outdir, outname)
 
         if collection_batch >= 0:
-            data = np_gather(outdir, outname)
+            data = np_gather(outdir, outname + ".features")
 
             current_trajs += data.shape[0]
             del data
             gc.collect()
             logging.info(f"Starting with {current_trajs} preferences")
         else:
-            logging.info(f"No existing data found at {outdir}")
+            logging.info(f"No existing data found at {outdir} with name {outname}")
     collection_batch += 1
 
     if current_trajs >= n_trajs:
@@ -507,7 +507,7 @@ def gen_traj_preferences(
 
 def max_shard_index(outdir: Path, outname: str) -> int:
     max_index = -1
-    for file in outdir.glob(f"{outname}.[0-9]*.npy"):
+    for file in outdir.glob(f"{outname}.features.[0-9]*.npy"):
         match = re.search("([0-9]+).npy", str(file))
         logging.debug(f"file={file}, match={match}")
         if match is None or match.lastindex == 0:
