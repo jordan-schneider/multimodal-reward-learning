@@ -287,7 +287,7 @@ def gen_state_preferences(
     outdir = rootdir / f"prefs/state/{temperature}"
     outdir.mkdir(parents=True, exist_ok=True)
 
-    setup_logging(level=verbosity, outdir=outdir)
+    setup_logging(level=verbosity, outdir=outdir, name=f"{outname}.log")
 
     outname = str(outname)
     reward = np.load(rootdir / "reward.npy")
@@ -397,7 +397,7 @@ def gen_traj_preferences(
     outdir = rootdir / f"prefs/traj/{temperature}"
     outdir.mkdir(parents=True, exist_ok=True)
 
-    setup_logging(level=verbosity, outdir=outdir)
+    setup_logging(level=verbosity, outdir=outdir, name=f"{outname}.log")
 
     outname = str(outname)
     reward = np.load(rootdir / "reward.npy")

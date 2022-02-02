@@ -1,5 +1,5 @@
 import logging
-from math import ceil
+from math import ceil, sqrt
 from pathlib import Path
 from typing import Dict, Generator, Literal, Optional, Tuple, Union
 
@@ -34,6 +34,7 @@ def compare_modalities(
     ] = None,
     use_hinge: bool = False,
     use_shift: bool = False,
+    inference_temp: Union[float, Literal["gt"]] = 1.0,
     n_trials: int = 1,
     plot_individual: bool = False,
     save_all: bool = False,
@@ -47,7 +48,24 @@ def compare_modalities(
         setup_logging(outdir=outdir, level=verbosity)
 
         logging.info(
-            f"outdir={outdir}, data_rootdir={data_rootdir}, n_samples={n_samples}, max_comparisons={max_comparisons}, norm_diffs={norm_diffs}, use_hinge={use_hinge}, use_shift={use_shift}, n_trials={n_trials}, save_all={save_all}, seed={seed}, verbosity={verbosity}"
+            f"""outdir={outdir},
+data_rootdir={data_rootdir},
+{state_temp=},
+{traj_temp=},
+{state_name=},
+{traj_name=},
+n_samples={n_samples},
+max_comparisons={max_comparisons},
+norm_diffs={norm_diffs},
+use_hinge={use_hinge},
+use_shift={use_shift},
+{inference_temp=},
+n_trials={n_trials},
+{plot_individual=},
+save_all={save_all},
+{max_ram=},
+seed={seed},
+verbosity={verbosity}"""
         )
 
         rng = np.random.default_rng(seed=seed)
@@ -62,6 +80,19 @@ def compare_modalities(
             state_name=state_name,
             traj_name=traj_name,
         )
+
+        if inference_temp == "gt":
+            temps = {
+                "state": state_temp,
+                "traj": traj_temp,
+                "joint": sqrt(state_temp * traj_temp),
+            }
+        else:
+            temps = {
+                "state": inference_temp,
+                "traj": inference_temp,
+                "joint": inference_temp,
+            }
 
         true_reward, aligned_reward_set = load_ground_truth(
             reward_path, aligned_reward_set_path
@@ -106,6 +137,7 @@ def compare_modalities(
                     use_shift=use_shift,
                     results=results,
                     true_reward=true_reward,
+                    temps=temps,
                     aligned_reward_set=aligned_reward_set,
                     compute_centroids=plot_individual,
                     compute_mean_dispersions=plot_individual,
@@ -241,15 +273,21 @@ def comparison_analysis(
     results: Results,
     aligned_reward_set: Optional[AlignedRewardSet],
     true_reward: Optional[np.ndarray] = None,
+    temps: Optional[Dict[str, float]] = None,
     compute_centroids: bool = False,
     compute_mean_dispersions: bool = False,
     save_all: bool = False,
 ) -> Results:
     reward_likelihood = hinge_likelihood if use_hinge else boltzmann_likelihood
 
+    if temps is None:
+        temps = {key: 1.0 for key in diffs}
+
     logging.info("Computing p(reward|diff)")
     log_likelihoods = {
-        key: reward_likelihood(reward=reward_samples, diffs=diff)
+        key: reward_likelihood(
+            reward=reward_samples, diffs=diff, temperature=temps[key]
+        )
         for key, diff in diffs.items()
     }
 
