@@ -46,7 +46,7 @@ def train(
     for replication in range(replications):
         repl_path = path / str(replication)
         env = make_env(
-            kind=env_name,
+            name=env_name,
             reward=load_reward(path=repl_path, comm=comm),
             num=n_parallel_envs,
             rand_seed=seed + replication,

@@ -22,7 +22,7 @@ def test_aligned_reward_set_nonredundant(reward: np.ndarray, seed: int) -> None:
     torch.manual_seed(seed)
 
     reward = reward / np.linalg.norm(reward)
-    env = make_env(kind="miner", num=1, reward=reward)
+    env = make_env(name="miner", num=1, reward=reward)
 
     policy = RandomPolicy(env.ac_space, 1)
     assert policy.device == torch.device("cpu")

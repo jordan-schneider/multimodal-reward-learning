@@ -18,38 +18,38 @@ FEATURE_ENV_NAMES = Literal["maze", "miner"]
 
 
 @overload
-def make_env(kind: FEATURE_ENV_NAMES, num: int, **kwargs) -> FeatureEnv:
+def make_env(name: FEATURE_ENV_NAMES, num: int, **kwargs) -> FeatureEnv:
     pass
 
 
 @overload
-def make_env(kind: ENV_NAMES, num: int, **kwargs) -> ProcgenGym3Env:
+def make_env(name: ENV_NAMES, num: int, **kwargs) -> ProcgenGym3Env:
     pass
 
 
 def make_env(
-    kind: ENV_NAMES,
+    name: ENV_NAMES,
     num: int,
     reward: Optional[Union[float, np.ndarray]] = None,
     extract_rgb: bool = True,
     **kwargs
 ) -> ProcgenGym3Env:
-    if kind == "maze":
+    if name == "maze":
         assert reward is not None
         if not isinstance(reward, np.ndarray):
             reward = np.full(shape=2, fill_value=reward)
         env = Maze(reward, num, **kwargs)
-    elif kind == "miner":
+    elif name == "miner":
         assert reward is not None
         if not isinstance(reward, np.ndarray):
             reward = np.full(shape=4, fill_value=reward)
         env = Miner(reward, num, **kwargs)
-    elif kind == "probe-1":
+    elif name == "probe-1":
         env = Probe1(num=num, **kwargs)
-    elif kind == "probe-2":
+    elif name == "probe-2":
         env = Probe2(num=num, **kwargs)
     else:
-        env = ProcgenGym3Env(num=num, env_name=kind)
+        env = ProcgenGym3Env(num=num, env_name=name)
 
     if extract_rgb:
         env = ExtractDictObWrapper(env, "rgb")

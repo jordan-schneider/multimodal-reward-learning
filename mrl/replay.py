@@ -25,7 +25,7 @@ def replay(
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    env = make_env(kind=env_name, reward=0, num=n_videos, render_mode="rgb_array")
+    env = make_env(name=env_name, reward=0, num=n_videos, render_mode="rgb_array")
     env = ExtractDictObWrapper(env, "rgb")
 
     writer_kwargs = {

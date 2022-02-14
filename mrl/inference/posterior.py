@@ -125,7 +125,7 @@ verbosity={verbosity}"""
             results.start(f"trial-{trial}")
 
             diffs = {
-                key: normalize_diffs(feature[:, 0], feature[:, 1], mode=norm_diffs)
+                key: normalize_diffs(feature, mode=norm_diffs)
                 for key, feature in features.items()
             }
 

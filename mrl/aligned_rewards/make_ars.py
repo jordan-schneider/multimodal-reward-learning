@@ -250,7 +250,7 @@ def main(
     torch.use_deterministic_algorithms(True)
     rng = np.random.default_rng(seed)
 
-    env = make_env(kind=env_name, reward=reward, num=n_envs, rand_seed=seed)
+    env = make_env(name=env_name, reward=reward, num=n_envs, rand_seed=seed)
     policy = get_policy(policy_path, env=env)
 
     diffs = make_aligned_reward_set(
