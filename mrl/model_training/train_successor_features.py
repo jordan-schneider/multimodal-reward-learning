@@ -138,7 +138,7 @@ def main(
     # TODO: Modify Miner to provide rgb (for the policy), the full state, and the feature vector
     # TODO: Modify Miner to use the use_done_feature flag, and set the default to False.
     env = make_env(
-        kind=env_name,
+        name=env_name,
         num=n_envs,
         reward=0,
         normalize_features=normalize_features,

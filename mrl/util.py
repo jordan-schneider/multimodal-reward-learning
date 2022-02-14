@@ -35,30 +35,22 @@ from mrl.memprof import get_memory
 
 
 def normalize_diffs(
-    feature_a: np.ndarray,
-    feature_b: np.ndarray,
+    features: np.ndarray,
     mode: Literal[
         "diff-length", "sum-length", "max-length", "log-diff-length", None
     ] = None,
 ) -> np.ndarray:
-    assert (
-        len(feature_a.shape) == 2
-    ), f"feature_a does not have correct dimensions, shape={feature_a.shape}"
-    diffs = feature_a - feature_b
+    assert len(features.shape) == 3
+    assert features.shape[1] == 2
+    diffs = features[:, 0] - features[:, 1]
     if mode == "diff-length":
         diffs /= np.linalg.norm(diffs, axis=1, keepdims=True)
     elif mode == "sum-length":
-        diffs /= np.linalg.norm(feature_a, axis=1, keepdims=True) + np.linalg.norm(
-            feature_b, axis=1, keepdims=True
-        )
+        feature_lengths = np.linalg.norm(features, axis=2, keepdims=True)
+        diffs /= feature_lengths[:, 0] + feature_lengths[:, 1]
     elif mode == "max-length":
-        diffs /= np.max(
-            (
-                np.linalg.norm(feature_a, axis=1, keepdims=True),
-                np.linalg.norm(feature_b, axis=1, keepdims=True),
-            ),
-            axis=0,
-        )
+        feature_lengths = np.linalg.norm(features, axis=2, keepdims=True)
+        diffs /= np.max(feature_lengths, axis=1)
     elif mode == "log-diff-length":
         diffs /= np.log2(np.linalg.norm(diffs, axis=1, keepdims=True) + 1)
     return diffs
@@ -458,6 +450,20 @@ def procgen_rollout_dataset(
     return roller.roll()
 
 
+def max_state_batch_size(n_states: int, n_parallel_envs: int, step_nbytes: int) -> int:
+    gc.collect()
+    free_memory = psutil.virtual_memory().available
+    logging.info(f"Free memory={free_memory}")
+
+    batch_timesteps = min(
+        n_states // n_parallel_envs, int(free_memory / step_nbytes * 0.8)
+    )
+    batch_timesteps = max(batch_timesteps, 2)
+    logging.info(f"batch_timesteps={batch_timesteps}")
+
+    return batch_timesteps
+
+
 def max_traj_batch_size(n_trajs: int, n_parallel_envs: int, step_nbytes: int) -> int:
     gc.collect()
     free_memory = psutil.virtual_memory().available
@@ -535,6 +541,18 @@ def np_remove(indir: Path, name: str) -> None:
     logging.info(f"Removing {paths}")
     for path in paths:
         path.unlink()
+
+
+def max_shard_index(outdir: Path, outname: str) -> int:
+    max_index = -1
+    for file in outdir.glob(f"{outname}.[0-9]*.npy"):
+        match = re.search("([0-9]+).npy", str(file))
+        logging.debug(f"file={file}, match={match}")
+        if match is None or match.lastindex == 0:
+            continue
+        current_index = int(match[1])
+        max_index = max(max_index, current_index)
+    return max_index
 
 
 def setup_logging(

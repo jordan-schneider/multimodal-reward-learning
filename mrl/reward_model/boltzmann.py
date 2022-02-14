@@ -21,6 +21,7 @@ def boltzmann_likelihood(
     Returns:
         np.ndarray: (Batch of) log proportional likelihoods of each reward under each halfplane.
     """
+    logging.debug(f"Inference temp={temperature}")
     if len(reward.shape) == 1:
         reward = reward.reshape(1, -1)
     assert len(diffs) > 0
@@ -37,6 +38,9 @@ def boltzmann_likelihood(
     # that instead, the likelihood is |w| * log(1/2 * (1 + exp(w @ diffs))) / (w @ diffs) in general
     # and (log(1/2) + log1p(exp(w @ diffs))) / (w @ diffs) in our case, as |w|=1.
     strengths = (reward @ diffs.T) / temperature
+    logging.debug(
+        f"reward={reward}, diffs nan={np.any(np.isnan(diffs))}, temp={temperature}"
+    )
     assert not np.any(np.isnan(strengths))
     if approximate:
         log_likelihoods = strengths

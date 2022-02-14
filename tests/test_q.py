@@ -27,7 +27,7 @@ def model_weight_stats(model: torch.nn.Module) -> Tuple[float, float]:
 
 
 def test_init():
-    env = make_env(kind="miner", num=1, reward=0)
+    env = make_env(name="miner", num=1, reward=0)
     model = make_model(env, arch="detach")
     model.load_state_dict(torch.load(MODEL_PATH, map_location=torch.device("cpu")))
 
@@ -46,7 +46,7 @@ def test_init():
 
 
 def test_forward():
-    env = make_env(kind="miner", num=1, reward=0)
+    env = make_env(name="miner", num=1, reward=0)
     model = make_model(env, arch="detach")
     model.load_state_dict(torch.load(MODEL_PATH, map_location=torch.device("cpu")))
 

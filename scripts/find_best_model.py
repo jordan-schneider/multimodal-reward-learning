@@ -24,7 +24,7 @@ def main(
     torch.manual_seed(seed)
     np.random.seed(seed)
 
-    env = make_env(kind=env_name, num=1, reward=1)
+    env = make_env(name=env_name, num=1, reward=1)
 
     policy = make_model(env, arch="shared")
 
