@@ -5,12 +5,10 @@ from typing import Literal, Optional, Union
 import fire  # type: ignore
 
 from mrl.aligned_rewards.make_ars import main as make_ars
-from mrl.dataset.preferences import (
-    gen_preferences,
-    gen_state_preferences,
-    gen_traj_preferences,
-)
+from mrl.dataset.preferences import (gen_preferences, gen_state_preferences,
+                                     gen_traj_preferences)
 from mrl.envs.util import FEATURE_ENV_NAMES
+from mrl.folders import HyperFolders
 from mrl.inference.posterior import compare_modalities
 from mrl.util import setup_logging
 
@@ -53,7 +51,6 @@ def main(
     inference_outdir = make_inference_outdir(
         rootdir, pref_temp, flip_prob, inference_temp, normalize_differences
     )
-    inference_outdir.mkdir(parents=True, exist_ok=True)
     setup_logging(level=verbosity, outdir=inference_outdir)
 
     n_prefs = prefs_per_trial * n_trials
@@ -162,27 +159,30 @@ def make_inference_outdir(
         "diff-length", "sum-length", "max-length", "log-diff-length", None
     ],
 ) -> Path:
-    outdir = rootdir / "compare"
+    folders = HyperFolders(
+        rootdir / "compare", schema=["data-noise", "inference-temp", "normalization"]
+    )
     if data_temp is not None:
-        outdir /= f"pref-{data_temp}"
+        data_noise = f"pref-{data_temp}"
     elif flip_prob is not None:
-        outdir /= f"flip-{flip_prob}"
+        data_noise = f"flip-{flip_prob}"
 
-    outdir /= f"inference-{inference_temp}"
-
-    if normalization == "diff-length":
-        outdir /= "diff-length"
-    elif normalization == "sum-length":
-        outdir /= "sum-length"
-    elif normalization == "max-length":
-        outdir /= "max-length"
-    elif normalization == "log-diff-length":
-        outdir /= "log-diff-length"
-    elif normalization is None:
-        outdir /= "no-norm"
-    else:
+    if normalization is None:
+        norm_str = "no-norm"
+    elif not (
+        normalization in ["diff-length", "sum-length", "max-length", "log-diff-length"]
+    ):
         raise ValueError(f"Invalid normalization: {normalization}")
-    return outdir
+    else:
+        norm_str = normalization
+
+    return folders.add_experiment(
+        {
+            "data-noise": data_noise,
+            "inference-temp": f"inference-{inference_temp}",
+            "normalization": norm_str,
+        }
+    )
 
 
 if __name__ == "__main__":
