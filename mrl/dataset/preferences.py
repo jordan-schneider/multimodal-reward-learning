@@ -12,14 +12,15 @@ import matplotlib.pyplot as plt  # type: ignore
 import numpy as np
 from mrl.envs.feature_envs import FeatureEnv  # type: ignore
 from mrl.envs.util import FEATURE_ENV_NAMES, get_root_env, make_env
+from mrl.folders import HyperFolders
 from mrl.util import (
     get_policy,
+    max_shard_index,
     max_state_batch_size,
     max_traj_batch_size,
     normalize_diffs,
     np_gather,
     np_remove,
-    max_shard_index,
     procgen_rollout_dataset,
     procgen_rollout_features,
     setup_logging,
@@ -131,8 +132,8 @@ def gen_state_preferences(
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> Path:
     rootdir = Path(rootdir)
-    outdir = rootdir / f"prefs/state/{temperature}"
-    outdir.mkdir(parents=True, exist_ok=True)
+    folders = HyperFolders(rootdir / "prefs", schema=["modality", "temp"])
+    outdir = folders.add_experiment({"modality": "state", "temp": temperature})
 
     setup_logging(level=verbosity, outdir=outdir, name=f"{outname}.log")
 
@@ -313,8 +314,8 @@ def gen_traj_preferences(
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> Path:
     rootdir = Path(rootdir)
-    outdir = rootdir / f"prefs/traj/{temperature}"
-    outdir.mkdir(parents=True, exist_ok=True)
+    folders = HyperFolders(rootdir / "prefs", schema=["modality", "temp"])
+    outdir = folders.add_experiment({"modality": "traj", "temp": temperature})
 
     setup_logging(level=verbosity, outdir=outdir, name=f"{outname}.log")
 
