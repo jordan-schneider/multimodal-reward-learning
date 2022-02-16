@@ -49,7 +49,7 @@ def gen_preferences(
 ) -> Tuple[Path, Path]:
     rootdir = Path(rootdir)
     outdir = rootdir / "prefs"
-    setup_logging(level=verbosity, outdir=outdir)
+    setup_logging(level=verbosity, outdir=outdir, multiple_files=False)
 
     reward = np.load(rootdir / "reward.npy")
     rng = np.random.default_rng(seed)

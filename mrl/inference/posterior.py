@@ -16,7 +16,7 @@ from mrl.inference.sphere import find_centroid
 from mrl.reward_model.boltzmann import boltzmann_likelihood
 from mrl.reward_model.hinge import hinge_likelihood
 from mrl.reward_model.logspace import cum_likelihoods
-from mrl.util import normalize_diffs, np_gather, setup_logging
+from mrl.util import normalize_diffs, np_gather, setup_logging, soft_dedup
 from tqdm import trange  # type: ignore
 
 
@@ -29,6 +29,8 @@ def compare_modalities(
     traj_name: str,
     n_samples: int = 100_000,
     max_comparisons: int = 1000,
+    deduplicate: bool = False,
+    dedup_epsilon: float = 1e-3,  # Don't go lower than this, precision isn't good enough
     norm_diffs: Literal[
         "diff-length", "sum-length", "max-length", "log-diff-length", None
     ] = None,
@@ -56,6 +58,7 @@ data_rootdir={data_rootdir},
 {traj_name=},
 n_samples={n_samples},
 max_comparisons={max_comparisons},
+{deduplicate=},
 norm_diffs={norm_diffs},
 use_hinge={use_hinge},
 use_shift={use_shift},
@@ -128,6 +131,12 @@ verbosity={verbosity}"""
                 key: normalize_diffs(feature, mode=norm_diffs)
                 for key, feature in features.items()
             }
+
+            if deduplicate:
+                diffs = {
+                    key: soft_dedup(np.unique(value, axis=0), dedup_epsilon)
+                    for key, value in diffs.items()
+                }
 
             try:
                 results = comparison_analysis(
