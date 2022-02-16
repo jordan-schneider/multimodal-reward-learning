@@ -5,8 +5,11 @@ from typing import Literal, Optional, Union
 import fire  # type: ignore
 
 from mrl.aligned_rewards.make_ars import main as make_ars
-from mrl.dataset.preferences import (gen_preferences, gen_state_preferences,
-                                     gen_traj_preferences)
+from mrl.dataset.preferences import (
+    gen_preferences,
+    gen_state_preferences,
+    gen_traj_preferences,
+)
 from mrl.envs.util import FEATURE_ENV_NAMES
 from mrl.folders import HyperFolders
 from mrl.inference.posterior import compare_modalities
@@ -24,6 +27,7 @@ def main(
     init_state_temp: float = 1.0,
     init_traj_temp: float = 1.0,
     inference_temp: Union[float, Literal["gt"]] = 1.0,
+    deduplicate: bool = False,
     n_envs: int = 100,
     normalize_step: bool = False,
     normalize_differences: Literal[
@@ -49,7 +53,13 @@ def main(
     elif flip_prob is not None:
         flip_prob = float(flip_prob)
     inference_outdir = make_inference_outdir(
-        rootdir, pref_temp, flip_prob, inference_temp, normalize_differences
+        rootdir=rootdir,
+        data_temp=pref_temp,
+        flip_prob=flip_prob,
+        inference_fn="hinge" if use_hinge else "boltzmann",
+        inference_temp=inference_temp,
+        dedup=deduplicate,
+        normalization=normalize_differences,
     )
     setup_logging(level=verbosity, outdir=inference_outdir)
 
@@ -125,6 +135,7 @@ def main(
         state_name=state_path.name,
         traj_name=traj_path.name,
         max_comparisons=prefs_per_trial,
+        deduplicate=deduplicate,
         norm_diffs=normalize_differences,
         use_hinge=use_hinge,
         use_shift=use_shift,
@@ -154,13 +165,22 @@ def make_inference_outdir(
     rootdir: Path,
     data_temp: Optional[float],
     flip_prob: Optional[float],
+    inference_fn: Literal["boltzmann", "hinge"],
     inference_temp: Union[float, Literal["gt"]],
+    dedup: bool,
     normalization: Literal[
         "diff-length", "sum-length", "max-length", "log-diff-length", None
     ],
 ) -> Path:
     folders = HyperFolders(
-        rootdir / "compare", schema=["data-noise", "inference-temp", "normalization"]
+        rootdir / "compare",
+        schema=[
+            "data-noise",
+            "inference-fn",
+            "inference-temp",
+            "normalization",
+            "dedup",
+        ],
     )
     if data_temp is not None:
         data_noise = f"pref-{data_temp}"
@@ -176,11 +196,15 @@ def make_inference_outdir(
     else:
         norm_str = normalization
 
+    dedup_str = "dedup" if dedup else "no-dedup"
+
     return folders.add_experiment(
         {
             "data-noise": data_noise,
+            "inference-fn": inference_fn,
             "inference-temp": f"inference-{inference_temp}",
             "normalization": norm_str,
+            "dedup": dedup_str,
         }
     )
 

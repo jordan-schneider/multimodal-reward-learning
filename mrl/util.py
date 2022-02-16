@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import (
     Any,
+    Callable,
     Dict,
     List,
     Literal,
@@ -32,6 +33,34 @@ from mrl.dataset.random_policy import RandomPolicy
 from mrl.envs.feature_envs import FeatureEnv
 from mrl.envs.util import get_root_env
 from mrl.memprof import get_memory
+
+
+def get_angle(v1: np.ndarray, v2: np.ndarray) -> float:
+    return np.arccos(
+        np.clip(
+            np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)),
+            a_min=-1.0,
+            a_max=1.0,
+        )
+    )
+
+
+def soft_dedup(
+    arr: np.ndarray,
+    epsilon: float,
+    dist: Callable[[np.ndarray, np.ndarray], float] = get_angle,
+) -> np.ndarray:
+    out: List[np.ndarray] = []
+    has_zero = False
+    for row in arr:
+        if np.all(row == 0):
+            if not has_zero:
+                out.append(row)
+                has_zero = True
+            continue
+        if all((d := dist(row, other) >= epsilon) and np.isfinite(d) for other in out):
+            out.append(row)
+    return np.array(out)
 
 
 def normalize_diffs(
@@ -559,6 +588,7 @@ def setup_logging(
     level: Literal["INFO", "DEBUG"],
     outdir: Optional[Path] = None,
     name: str = "log.txt",
+    multiple_files: bool = True,
 ) -> None:
     FORMAT = "%(levelname)s:%(filename)s:%(lineno)d:%(asctime)s:%(message)s"
 
@@ -571,7 +601,7 @@ def setup_logging(
             if isinstance(handler, logging.FileHandler)
         ]
         path = str(outdir / name)
-        if path not in files:
+        if multiple_files and path not in files:
             fh = logging.FileHandler(filename=path, mode="w")
             fh.setLevel(level)
             fh.setFormatter(logging.Formatter(FORMAT))
