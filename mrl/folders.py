@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, Sequence
 
 
 class HyperFolders:
@@ -49,44 +50,24 @@ class HyperFolders:
         out.rename(self.rootdir)
         self.schema = new_schema
 
-    @staticmethod
-    def __get_child_folders(path: Path) -> List[Path]:
-        out = []
-        for child in path.iterdir():
-            if child.is_dir():
-                out.append(child)
-        return out
-
     def check(self) -> None:
         children = list(self.rootdir.iterdir())
         if len(children) == 0:
             return
 
-        current = children[0]
-        for i, _ in enumerate(self.schema[1:]):
-            children = list(current.iterdir())
-            if len(children) == 0:
+        schema_exhausted = False
+        for root, dirs, files in os.walk(self.rootdir):
+            path = Path(root)
+            rel_path = path.relative_to(self.rootdir)
+            if len(rel_path.parts) < len(self.schema) and len(files) > 0:
+                logging.debug(f"{rel_path.parts=}, {self.schema=}")
                 raise RuntimeError(
-                    f"Schema longer than actual folder depth. No children at {current}."
+                    f"Found files {files} in non-leaf directory {rel_path}"
                 )
+            elif len(rel_path.parts) == len(self.schema):
+                schema_exhausted = True
+                if len(files) == 0:
+                    raise RuntimeError(f"Found no files in leaf directory {root}")
 
-            # All children must be files
-            for child in children:
-                if not child.is_dir():
-                    raise RuntimeError(
-                        f"Rootdir {self.rootdir} exists but file {child} exists before end of schema"
-                    )
-            current = children[0]
-        # At least one child must be a file
-        children = list(current.iterdir())
-
-        any_files = False
-        for child in children:
-            if child.is_file():
-                any_files = True
-                break
-        if not any_files:
-            raise RuntimeError(
-                f"Schema exhausted at {current} but further folders exist"
-            )
-        return
+        if not schema_exhausted:
+            raise RuntimeError(f"Schema longer than actual depth")
