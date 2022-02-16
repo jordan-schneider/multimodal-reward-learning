@@ -16,7 +16,7 @@ def test_too_few_schema():
         folders = HyperFolders(
             rootdir=Path("tests/test_folder_root"), schema=["hyper_1"]
         )
-    assert "exhausted" in str(err.value)
+    assert "no files" in str(err.value)
 
 
 def test_too_many_schema():
@@ -25,7 +25,7 @@ def test_too_many_schema():
             rootdir=Path("tests/test_folder_root"),
             schema=["hyper_1", "hyper_2", "hyper_3"],
         )
-    assert "before end of schema" in str(err.value)
+    assert "Found files" in str(err.value)
 
 
 def test_update_schema_at_end():
