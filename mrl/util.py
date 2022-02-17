@@ -45,24 +45,6 @@ def get_angle(v1: np.ndarray, v2: np.ndarray) -> float:
     )
 
 
-def soft_dedup(
-    arr: np.ndarray,
-    epsilon: float,
-    dist: Callable[[np.ndarray, np.ndarray], float] = get_angle,
-) -> np.ndarray:
-    out: List[np.ndarray] = []
-    has_zero = False
-    for row in arr:
-        if np.all(row == 0):
-            if not has_zero:
-                out.append(row)
-                has_zero = True
-            continue
-        if all((d := dist(row, other) >= epsilon) and np.isfinite(d) for other in out):
-            out.append(row)
-    return np.array(out)
-
-
 def normalize_diffs(
     features: np.ndarray,
     mode: Literal[
@@ -570,18 +552,6 @@ def np_remove(indir: Path, name: str) -> None:
     logging.info(f"Removing {paths}")
     for path in paths:
         path.unlink()
-
-
-def max_shard_index(outdir: Path, outname: str) -> int:
-    max_index = -1
-    for file in outdir.glob(f"{outname}.[0-9]*.npy"):
-        match = re.search("([0-9]+).npy", str(file))
-        logging.debug(f"file={file}, match={match}")
-        if match is None or match.lastindex == 0:
-            continue
-        current_index = int(match[1])
-        max_index = max(max_index, current_index)
-    return max_index
 
 
 def setup_logging(

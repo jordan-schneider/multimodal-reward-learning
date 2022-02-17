@@ -16,7 +16,7 @@ from mrl.inference.sphere import find_centroid
 from mrl.reward_model.boltzmann import boltzmann_likelihood
 from mrl.reward_model.hinge import hinge_likelihood
 from mrl.reward_model.logspace import cum_likelihoods
-from mrl.util import normalize_diffs, np_gather, setup_logging, soft_dedup
+from mrl.util import normalize_diffs, np_gather, setup_logging
 from tqdm import trange  # type: ignore
 
 
@@ -30,7 +30,6 @@ def compare_modalities(
     n_samples: int = 100_000,
     max_comparisons: int = 1000,
     deduplicate: bool = False,
-    dedup_epsilon: float = 1e-3,  # Don't go lower than this, precision isn't good enough
     norm_diffs: Literal[
         "diff-length", "sum-length", "max-length", "log-diff-length", None
     ] = None,
@@ -82,6 +81,7 @@ verbosity={verbosity}"""
             traj_temp=traj_temp,
             state_name=state_name,
             traj_name=traj_name,
+            dedup=deduplicate,
         )
 
         if inference_temp == "gt":
@@ -132,12 +132,6 @@ verbosity={verbosity}"""
                 for key, feature in features.items()
             }
 
-            if deduplicate:
-                diffs = {
-                    key: soft_dedup(np.unique(value, axis=0), dedup_epsilon)
-                    for key, value in diffs.items()
-                }
-
             try:
                 results = comparison_analysis(
                     reward_samples=reward_samples,
@@ -186,14 +180,20 @@ def load_ground_truth(
 
 
 def collect_paths(
-    rootdir: Path, state_temp: float, traj_temp: float, state_name: str, traj_name: str
+    rootdir: Path,
+    state_temp: float,
+    traj_temp: float,
+    state_name: str,
+    traj_name: str,
+    dedup: bool,
 ) -> Dict[str, Path]:
+    dedup_str = "dedup" if dedup else "no-dedup"
     paths: Dict[str, Path] = {}
-    state_root = rootdir / f"prefs/state/{state_temp}/{state_name}.features"
+    state_root = rootdir / f"prefs/state/{state_temp}/{dedup_str}/{state_name}.features"
     state_path = Path(str(state_root) + ".npy")
 
-    traj_root = rootdir / f"prefs/traj/{traj_temp}/{traj_name}.features"
-    traj_path = Path(str(traj_root) + ".0.npy")
+    traj_root = rootdir / f"prefs/traj/{traj_temp}/{dedup_str}/{traj_name}.features"
+    traj_path = Path(str(traj_root) + ".npy")
 
     if state_path.exists():
         logging.info(f"Loading states from {state_path}")
