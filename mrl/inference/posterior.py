@@ -352,7 +352,7 @@ def comparison_analysis(
 
     if true_reward is not None:
         logging.info("Finding gt dispersion")
-        save_gt_dispersion(reward_samples, true_reward, diffs, likelihoods, results)
+        save_gt_dispersion(reward_samples, true_reward, likelihoods, results)
 
     return results
 
@@ -360,21 +360,17 @@ def comparison_analysis(
 def save_gt_dispersion(
     reward_samples: np.ndarray,
     true_reward: np.ndarray,
-    diffs: Dict[str, np.ndarray],
     likelihoods: Dict[str, np.ndarray],
     results: Results,
 ):
     true_reward_index = np.where(np.all(reward_samples == true_reward, axis=1))[0][0]
     assert true_reward_index == len(list(likelihoods.values())[0]) - 1
 
-    n_comparisons = list(diffs.values())[0].shape[0]
-
-    true_reward_copies = np.tile(true_reward, (n_comparisons, 1))
     dispersions_gt = {
         key: mean_geodesic_dispersion(
             reward_samples=reward_samples,
             likelihoods=l,
-            target_rewards=true_reward_copies,
+            target_rewards=np.tile(true_reward, (l.shape[1], 1)),
         )
         for key, l in likelihoods.items()
     }
