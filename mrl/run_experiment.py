@@ -75,6 +75,7 @@ def main(
             n_parallel_envs=n_envs,
             outname=data_outname,
             temperature=pref_temp,
+            deduplicate=deduplicate,
             normalize_step_features=normalize_step,
             normalize_differences=normalize_differences,
             overwrite=overwrite,
@@ -88,6 +89,7 @@ def main(
             n_parallel_envs=n_envs,
             outname=data_outname,
             temperature=pref_temp,
+            deduplicate=deduplicate,
             normalize_step_features=normalize_step,
             normalize_differences=normalize_differences,
             overwrite=overwrite,
@@ -107,6 +109,7 @@ def main(
             flip_prob=flip_prob,
             init_state_temp=init_state_temp,
             init_traj_temp=init_traj_temp,
+            deduplicate=deduplicate,
             normalize_step=normalize_step,
             normalize_differences=normalize_differences,
             overwrite=overwrite,
@@ -124,8 +127,8 @@ def main(
             verbosity=verbosity,
         )
 
-    state_temp = float(state_path.parent.name)
-    traj_temp = float(traj_path.parent.name)
+    state_temp = float(state_path.parts[-3])
+    traj_temp = float(traj_path.parts[-3])
 
     compare_modalities(
         outdir=inference_outdir,

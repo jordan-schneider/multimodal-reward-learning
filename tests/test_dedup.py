@@ -1,8 +1,9 @@
 import numpy as np
 from hypothesis import given
 from hypothesis.extra.numpy import arrays
-from hypothesis.strategies import floats, integers, just, tuples
-from mrl.util import get_angle, soft_dedup
+from hypothesis.strategies import floats, integers, tuples
+from mrl.dataset.preferences import find_soft_unique_indices
+from mrl.util import get_angle
 
 epsilon_strat = floats(min_value=1e-3, max_value=1)
 
@@ -15,14 +16,11 @@ epsilon_strat = floats(min_value=1e-3, max_value=1)
     ),
     epsilon=epsilon_strat,
 )
-def test_soft_dedup(array: np.ndarray, epsilon: float):
-    out = soft_dedup(array, epsilon)
+def test_find_soft_unique_indices(array: np.ndarray, epsilon: float):
+    indices = find_soft_unique_indices(array, epsilon=epsilon)
+    out = array[indices]
     # There must not be more output than input
     assert out.shape[0] <= array.shape[0]
-
-    # Every output row must be in the input
-    for row in out:
-        assert np.any(np.all(row == array, axis=1))
 
     # Every output row must be unique
     assert (
@@ -38,9 +36,9 @@ def test_soft_dedup(array: np.ndarray, epsilon: float):
     ).filter(lambda x: not np.all(x == 0) and np.isfinite(get_angle(x, -x))),
     epsilon=epsilon_strat,
 )
-def test_soft_dedup_keeps_opposites(row: np.ndarray, epsilon: float):
+def test_keeps_opposites(row: np.ndarray, epsilon: float):
     arr = np.array([row, -row])
-    out = soft_dedup(arr, epsilon)
+    out = find_soft_unique_indices(arr, epsilon=epsilon)
     assert out.shape[0] == 2
 
 
@@ -67,5 +65,5 @@ def find_ortho(vec: np.ndarray) -> np.ndarray:
 )
 def test_soft_dedup_keeps_ortho(row: np.ndarray, epsilon: float):
     arr = np.array([row, find_ortho(row)])
-    out = soft_dedup(arr, epsilon)
+    out = find_soft_unique_indices(arr, epsilon=epsilon)
     assert out.shape[0] == 2

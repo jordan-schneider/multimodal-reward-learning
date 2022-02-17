@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import gc
 import logging
 import random
 from math import sqrt
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple, cast
+from typing import Callable, List, Literal, Optional, Tuple, cast
 
 import fire  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
@@ -14,12 +13,11 @@ from mrl.envs.feature_envs import FeatureEnv  # type: ignore
 from mrl.envs.util import FEATURE_ENV_NAMES, get_root_env, make_env
 from mrl.folders import HyperFolders
 from mrl.util import (
+    get_angle,
     get_policy,
-    max_shard_index,
     max_state_batch_size,
     max_traj_batch_size,
     normalize_diffs,
-    np_gather,
     np_remove,
     procgen_rollout_dataset,
     procgen_rollout_features,
@@ -39,6 +37,7 @@ def gen_preferences(
     init_state_temp: float = 1.0,
     init_traj_temp: float = 10.0,
     sensitivity: float = 0.01,
+    deduplicate: bool = False,
     normalize_step: bool = False,
     normalize_differences: Literal[
         "diff-length", "sum-length", "max-length", "log-diff-length", None
@@ -94,6 +93,7 @@ def gen_preferences(
         n_parallel_envs=n_envs,
         outname=outname,
         temperature=state_temp,
+        deduplicate=deduplicate,
         normalize_step_features=normalize_step,
         normalize_differences=normalize_differences,
         overwrite=overwrite,
@@ -108,6 +108,7 @@ def gen_preferences(
         n_parallel_envs=n_envs,
         outname=outname,
         temperature=traj_temp,
+        deduplicate=deduplicate,
         normalize_step_features=normalize_step,
         normalize_differences=normalize_differences,
         overwrite=overwrite,
@@ -124,6 +125,7 @@ def gen_state_preferences(
     outname: str,
     policy_path: Optional[Path] = None,
     temperature: float = 0.0,
+    deduplicate: bool = False,
     normalize_step_features: bool = False,
     normalize_differences: Literal[
         "diff-length", "sum-length", "max-length", "log-diff-length", None
@@ -132,8 +134,14 @@ def gen_state_preferences(
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> Path:
     rootdir = Path(rootdir)
-    folders = HyperFolders(rootdir / "prefs", schema=["modality", "temp"])
-    outdir = folders.add_experiment({"modality": "state", "temp": temperature})
+    folders = HyperFolders(rootdir / "prefs", schema=["modality", "temp", "dedup"])
+    outdir = folders.add_experiment(
+        {
+            "modality": "state",
+            "temp": temperature,
+            "dedup": "dedup" if deduplicate else "no-dedup",
+        }
+    )
 
     setup_logging(level=verbosity, outdir=outdir, name=f"{outname}.log")
 
@@ -157,46 +165,52 @@ def gen_state_preferences(
         step_nbytes=generator.step_nbytes,
     )
 
-    n_prefs = 0
-
-    outpath = outdir / (outname + ".features.npy")
     if overwrite:
+        logging.info(f"Overwriting data at {outdir} with name {outname}")
         np_remove(outdir, outname)
 
-    if outpath.exists():
-        current_prefs = np.load(outpath)
-        n_prefs += len(current_prefs)
-        logging.info(f"Starting with {n_prefs} existing preferences")
-    else:
-        current_prefs = None
-        if not overwrite:
-            logging.info(f"Did not find existing preferences at {outpath}")
+    current_prefs, current_flip_probs = load_data(outdir, outname)
 
-    if n_prefs >= n_states:
+    if current_prefs is not None and current_prefs.shape[0] >= n_states:
         logging.warning(f"No new states needed for {outdir}")
         return outdir / outname
 
-    feature_batches: List[np.ndarray] = []
-    flip_prob_batches: List[np.ndarray] = []
+    step = generator.gen_state_pairs(1)
 
-    while n_prefs < n_states:
-        oriented_features, probs = state_collect_step(
+    features: np.ndarray = (
+        np.empty((0, 2, step[0].shape[1]), dtype=step[0].dtype)
+        if current_prefs is None
+        else current_prefs
+    )
+    flip_probs: np.ndarray = (
+        np.empty((0,), dtype=np.float32)
+        if current_flip_probs is None
+        else current_flip_probs
+    )
+
+    while features.shape[0] < n_states:
+        new_features, new_probs = state_collect_step(
             generator, batch_timesteps, reward, temperature, normalize_differences
         )
-        if oriented_features is None or probs is None:
+        if new_features is None or new_probs is None:
             continue
-        feature_batches.append(oriented_features)
-        flip_prob_batches.append(probs)
-        n_prefs += oriented_features.shape[0]
 
-        logging.info(f"Collected {n_prefs} of {n_states} preferences")
+        indices = (
+            find_soft_unique_indices(
+                new=new_features[:, 0] - new_features[:, 1],
+                core=features[:, 0] - features[:, 1],
+            )
+            if deduplicate
+            else np.ones_like(new_probs, dtype=bool)
+        )
+        features = np.concatenate((features, new_features[indices]))
+        flip_probs = np.concatenate((flip_probs, new_probs[indices]))
 
-    features = np.concatenate(feature_batches)
+        logging.info(f"Collected {features.shape[0]} of {n_states} preferences")
+
     assert len(features.shape) == 3
     assert features.shape[1] == 2
     np.save(outdir / (outname + ".features.npy"), features)
-
-    flip_probs = np.concatenate(flip_prob_batches)
     np.save(outdir / (outname + ".flip-probs.npy"), flip_probs)
 
     plt.hist(flip_probs, bins=100)
@@ -206,6 +220,35 @@ def gen_state_preferences(
     plt.close()
 
     return outdir / outname
+
+
+def load_data(
+    outdir: Path, outname: str
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    features_outpath = outdir / (outname + ".features.npy")
+    flip_probs_outpath = outdir / (outname + ".flip-probs.npy")
+
+    current_prefs = None
+    current_flip_probs = None
+    if features_outpath.exists() and flip_probs_outpath.exists():
+        current_prefs = np.load(features_outpath)
+        current_flip_probs = np.load(flip_probs_outpath)
+        if current_prefs.shape[0] != current_flip_probs.shape[0]:
+            logging.warning(
+                "Differnent number of saved prefs and flip probs, deleting both."
+            )
+            np_remove(outdir, outname)
+        else:
+            logging.info(f"Starting with {current_prefs.shape[0]} existing preferences")
+    elif features_outpath.exists() or flip_probs_outpath.exists():
+        logging.warning("Found states or preferences but not both, removing.")
+        np_remove(outdir, outname)
+    else:
+        logging.info(
+            f"Did not find existing preferences at {outdir} with name {outname}"
+        )
+
+    return current_prefs, current_flip_probs
 
 
 def calibrate_states(
@@ -306,6 +349,7 @@ def gen_traj_preferences(
     outname: str,
     policy_path: Optional[Path] = None,
     temperature: float = 0.0,
+    deduplicate: bool = False,
     normalize_step_features: bool = False,
     normalize_differences: Literal[
         "diff-length", "sum-length", "max-length", "log-diff-length", None
@@ -314,8 +358,14 @@ def gen_traj_preferences(
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> Path:
     rootdir = Path(rootdir)
-    folders = HyperFolders(rootdir / "prefs", schema=["modality", "temp"])
-    outdir = folders.add_experiment({"modality": "traj", "temp": temperature})
+    folders = HyperFolders(rootdir / "prefs", schema=["modality", "temp", "dedup"])
+    outdir = folders.add_experiment(
+        {
+            "modality": "traj",
+            "temp": temperature,
+            "dedup": "dedup" if deduplicate else "no-dedup",
+        }
+    )
 
     setup_logging(level=verbosity, outdir=outdir, name=f"{outname}.log")
 
@@ -339,61 +389,65 @@ def gen_traj_preferences(
         step_nbytes=generator.step_nbytes,
     )
 
-    current_trajs = 0
     if overwrite:
         np_remove(outdir, outname)
-        collection_batch = -1
-    else:
-        collection_batch = max_shard_index(outdir, outname + ".features")
 
-        if collection_batch >= 0:
-            data = np_gather(outdir, outname + ".features")
+    current_prefs, current_flip_probs = load_data(outdir, outname)
 
-            current_trajs += data.shape[0]
-            del data
-            gc.collect()
-            logging.info(f"Starting with {current_trajs} preferences")
-        else:
-            logging.info(f"No existing data found at {outdir} with name {outname}")
-    collection_batch += 1
-
-    if current_trajs >= n_trajs:
+    if current_prefs is not None and current_prefs.shape[0] >= n_trajs:
         logging.warning(f"No new trajectories needed for {outdir}")
         return outdir / outname
 
-    while current_trajs < n_trajs:
+    step = generator.gen_state_pairs(1)
+
+    features: np.ndarray = (
+        np.empty((0, 2, step[0].shape[1]), dtype=step[0].dtype)
+        if current_prefs is None
+        else current_prefs
+    )
+    flip_probs: np.ndarray = (
+        np.empty((0,), dtype=np.float32)
+        if current_flip_probs is None
+        else current_flip_probs
+    )
+
+    while features.shape[0] < n_trajs:
         logging.info(
-            f"Asking for {n_trajs - current_trajs} trajs or {batch_timesteps} timesteps"
+            f"Asking for {n_trajs - features.shape[0]} trajs or {batch_timesteps} timesteps"
         )
 
-        features, probs = traj_collect_step(
+        new_features, new_probs = traj_collect_step(
             generator,
             batch_timesteps,
-            n_trajs - current_trajs,
+            n_trajs - features.shape[0],
             reward,
             temperature,
             normalize_differences,
         )
 
-        diffs = features[:, 0] - features[:, 1]
-        assert not np.any(np.all(diffs == 0, axis=1))
-        assert features.shape[1] == 2
-        np.save(outdir / f"{outname}.features.{collection_batch}.npy", features)
+        new_diffs = new_features[:, 0] - new_features[:, 1]
+        assert not np.any(np.all(new_diffs == 0, axis=1))
+        assert new_features.shape[1] == 2
 
-        probs_file = outdir / f"{outname}.flip-probs.{collection_batch}.npy"
-        np.save(probs_file, probs)
+        indices = (
+            find_soft_unique_indices(
+                new=new_diffs, core=features[:, 0] - features[:, 1]
+            )
+            if deduplicate
+            else np.ones_like(new_probs, dtype=bool)
+        )
 
-        plt.hist(probs, bins=100)
-        plt.title(f"Histogram of noise flip probabilities (temp={temperature:0.5f})")
-        plt.xlabel("Flip Probability")
-        plt.savefig(outdir / (outname + ".flip-probs.png"))
-        plt.close()
+        features = np.concatenate((features, new_features[indices]))
+        flip_probs = np.concatenate((flip_probs, new_probs[indices]))
 
-        collection_batch += 1
-        current_trajs += features.shape[0]
-        del features
-        del probs
-        gc.collect()
+    np.save(outdir / (outname + ".features.npy"), features)
+    np.save(outdir / (outname + ".flip-probs.npy"), flip_probs)
+
+    plt.hist(flip_probs, bins=100)
+    plt.title(f"Histogram of noise flip probabilities (temp={temperature:0.5f})")
+    plt.xlabel("Flip Probability")
+    plt.savefig(outdir / (outname + ".flip-probs.png"))
+    plt.close()
 
     return outdir / outname
 
@@ -506,6 +560,34 @@ def traj_collect_step(
         feature_batch.append(oriented_features)
         probs_batch.append(probs)
     return np.concatenate(feature_batch, axis=0), np.concatenate(probs_batch)
+
+
+def find_soft_unique_indices(
+    new: np.ndarray,
+    core: Optional[np.ndarray] = None,
+    dist: Callable[[np.ndarray, np.ndarray], float] = get_angle,
+    epsilon: float = 1e-3,
+) -> np.ndarray:
+    if core is None:
+        core = np.empty((0, *new.shape[1:]), dtype=new.dtype)
+    assert (
+        new.shape[1:] == core.shape[1:]
+    ), f"New {new.shape} and core {core.shape} shapes don't match"
+    indices: List[int] = []
+    unique_rows = core
+    has_zero = bool(np.any(np.all(unique_rows == 0, axis=1)))
+    for i, row in enumerate(new):
+        if np.all(row == 0):
+            if not has_zero:
+                indices.append(i)
+                has_zero = True
+        elif all(
+            (d := dist(row, other) >= epsilon) and np.isfinite(d)
+            for other in unique_rows
+        ):
+            indices.append(i)
+            unique_rows = np.concatenate((unique_rows, [row]))
+    return np.array(indices, dtype=int)
 
 
 def orient_features(
