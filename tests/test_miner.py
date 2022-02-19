@@ -1,4 +1,4 @@
-from typing import Final, List, Literal, Optional, Sequence, Tuple, Union, cast
+from typing import Final, List, Literal, Optional, Sequence, Tuple, cast
 
 import numpy as np
 from hypothesis import given, settings

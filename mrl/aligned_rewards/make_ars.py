@@ -227,7 +227,6 @@ def main(
     reward_path: Path,
     env_name: FEATURE_ENV_NAMES,
     outdir: Path,
-    use_miner_done_feature: bool = False,
     policy_path: Optional[Path] = None,
     n_states: int = 10_000,
     n_trajs: int = 10_000,
@@ -243,8 +242,6 @@ def main(
     setup_logging(level=verbosity, outdir=outdir, name="aligned_reward_set.log")
 
     reward = np.load(reward_path)
-    if env_name == "miner" and not use_miner_done_feature:
-        reward = np.delete(reward, 1)
 
     torch.manual_seed(seed)
     torch.use_deterministic_algorithms(True)

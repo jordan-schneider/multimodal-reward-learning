@@ -541,12 +541,13 @@ def np_gather(
 
 
 def np_remove(indir: Path, name: str) -> None:
+    logging.debug(f"Removing {indir=}, {name=}")
     paths = [
         path
         for path in indir.iterdir()
         if path.is_file()
         and re.search(
-            f"/{name}(\.flip_probs|\.features)?(\.[0-9]+)?(\.npy|\.png)", str(path)
+            f"/{name}(\.flip-probs|\.features)(\.[0-9]+)?(\.npy|\.png)", str(path)
         )
     ]
     logging.info(f"Removing {paths}")

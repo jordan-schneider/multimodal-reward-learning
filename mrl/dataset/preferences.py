@@ -30,7 +30,8 @@ def gen_preferences(
     rootdir: Path,
     env: FEATURE_ENV_NAMES,
     outname: str,
-    n_prefs: int = 1000,
+    prefs_per_trial: int = 1000,
+    n_trials: int = 1,
     n_calibration_prefs: int = 100,
     n_envs: int = 100,
     flip_prob: float = 0.2,
@@ -89,7 +90,8 @@ def gen_preferences(
     state_path = gen_state_preferences(
         rootdir=rootdir,
         env=env,
-        n_states=n_prefs,
+        prefs_per_trial=prefs_per_trial,
+        n_trials=n_trials,
         n_parallel_envs=n_envs,
         outname=outname,
         temperature=state_temp,
@@ -104,7 +106,8 @@ def gen_preferences(
     traj_path = gen_traj_preferences(
         rootdir=rootdir,
         env=env,
-        n_trajs=n_prefs,
+        prefs_per_trial=prefs_per_trial,
+        n_trials=n_trials,
         n_parallel_envs=n_envs,
         outname=outname,
         temperature=traj_temp,
@@ -120,7 +123,8 @@ def gen_preferences(
 def gen_state_preferences(
     rootdir: Path,
     env: FEATURE_ENV_NAMES,
-    n_states: int,
+    prefs_per_trial: int,
+    n_trials: int,
     n_parallel_envs: int,
     outname: str,
     policy_path: Optional[Path] = None,
@@ -160,7 +164,7 @@ def gen_state_preferences(
     )
 
     batch_timesteps = max_state_batch_size(
-        n_states=n_states,
+        n_states=prefs_per_trial,
         n_parallel_envs=n_parallel_envs,
         step_nbytes=generator.step_nbytes,
     )
@@ -171,51 +175,72 @@ def gen_state_preferences(
 
     current_prefs, current_flip_probs = load_data(outdir, outname)
 
-    if current_prefs is not None and current_prefs.shape[0] >= n_states:
-        logging.warning(f"No new states needed for {outdir}")
-        return outdir / outname
+    if current_prefs is not None:
+        if (
+            current_prefs.shape[0] >= n_trials
+            and current_prefs.shape[1] >= prefs_per_trial
+        ):
+            logging.warning(f"No new states needed for {outdir}")
+            return outdir / outname
+        else:
+            logging.warning(
+                f"Existing data found at {outdir} with name {outname} but not enough data found, overwriting."
+            )
 
     step = generator.gen_state_pairs(1)
 
-    features: np.ndarray = (
-        np.empty((0, 2, step[0].shape[1]), dtype=step[0].dtype)
-        if current_prefs is None
-        else current_prefs
+    # (trial, pref index, first/second, features)
+    features: np.ndarray = np.empty(
+        (n_trials, prefs_per_trial, 2, step[0].shape[1]), dtype=step[0].dtype
     )
-    flip_probs: np.ndarray = (
-        np.empty((0,), dtype=np.float32)
-        if current_flip_probs is None
-        else current_flip_probs
-    )
+    flip_probs: np.ndarray = np.empty((n_trials * prefs_per_trial,), dtype=np.float32)
 
-    while features.shape[0] < n_states:
-        new_features, new_probs = state_collect_step(
-            generator, batch_timesteps, reward, temperature, normalize_differences
-        )
-        if new_features is None or new_probs is None:
-            continue
+    for trial in range(n_trials):
+        logging.info(f"Collecting state comparisons for trial {trial} of {n_trials}")
 
-        indices = (
-            find_soft_unique_indices(
-                new=new_features[:, 0] - new_features[:, 1],
-                core=features[:, 0] - features[:, 1],
+        trial_prefs = 0
+        while trial_prefs < prefs_per_trial:
+            new_features, new_probs = state_collect_step(
+                generator, batch_timesteps, reward, temperature, normalize_differences
             )
-            if deduplicate
-            else np.ones_like(new_probs, dtype=bool)
-        )
-        features = np.concatenate((features, new_features[indices]))
-        flip_probs = np.concatenate((flip_probs, new_probs[indices]))
+            if new_features is None or new_probs is None:
+                continue
 
-        logging.info(f"Collected {features.shape[0]} of {n_states} preferences")
+            indices = (
+                find_soft_unique_indices(
+                    new=new_features[:, 0] - new_features[:, 1],
+                    core=features[trial, :trial_prefs, 0]
+                    - features[trial, :trial_prefs, 1],
+                )
+                if deduplicate
+                else np.ones_like(new_probs, dtype=bool)
+            )
 
-    assert len(features.shape) == 3
-    assert features.shape[1] == 2
+            logging.debug(f"{indices.shape[0]=}")
+
+            end_index = min(trial_prefs + indices.shape[0], prefs_per_trial)
+            overflow_index = end_index - trial_prefs
+
+            features[trial, trial_prefs:end_index] = new_features[indices][
+                :overflow_index
+            ]
+            flip_probs[
+                trial * prefs_per_trial
+                + trial_prefs : trial * prefs_per_trial
+                + end_index
+            ] = new_probs[indices][:overflow_index]
+
+            trial_prefs = end_index
+
+            logging.info(f"Collected {trial_prefs} of {prefs_per_trial} preferences")
+
     np.save(outdir / (outname + ".features.npy"), features)
     np.save(outdir / (outname + ".flip-probs.npy"), flip_probs)
 
     plt.hist(flip_probs, bins=100)
     plt.title(f"Histogram of noise flip probabilities (temp={temperature:0.5f})")
     plt.xlabel("Flip Probability")
+    plt.xlim((0, 1))
     plt.savefig(outdir / (outname + ".flip-probs.png"))
     plt.close()
 
@@ -233,15 +258,20 @@ def load_data(
     if features_outpath.exists() and flip_probs_outpath.exists():
         current_prefs = np.load(features_outpath)
         current_flip_probs = np.load(flip_probs_outpath)
-        if current_prefs.shape[0] != current_flip_probs.shape[0]:
+        if (
+            current_prefs.shape[0] * current_prefs.shape[1]
+            != current_flip_probs.shape[0]
+        ):
             logging.warning(
                 "Differnent number of saved prefs and flip probs, deleting both."
             )
             np_remove(outdir, outname)
         else:
-            logging.info(f"Starting with {current_prefs.shape[0]} existing preferences")
+            logging.info(
+                f"Found {current_prefs.shape[0]} trials and {current_prefs.shape[1]} prefs per trial."
+            )
     elif features_outpath.exists() or flip_probs_outpath.exists():
-        logging.warning("Found states or preferences but not both, removing.")
+        logging.warning("Found features or flip_probs but not both, removing.")
         np_remove(outdir, outname)
     else:
         logging.info(
@@ -344,7 +374,8 @@ def state_collect_step(
 def gen_traj_preferences(
     rootdir: Path,
     env: FEATURE_ENV_NAMES,
-    n_trajs: int,
+    prefs_per_trial: int,
+    n_trials: int,
     n_parallel_envs: int,
     outname: str,
     policy_path: Optional[Path] = None,
@@ -384,7 +415,7 @@ def gen_traj_preferences(
     )
 
     batch_timesteps = max_traj_batch_size(
-        n_trajs=n_trajs,
+        n_trajs=prefs_per_trial,
         n_parallel_envs=n_parallel_envs,
         step_nbytes=generator.step_nbytes,
     )
@@ -394,51 +425,72 @@ def gen_traj_preferences(
 
     current_prefs, current_flip_probs = load_data(outdir, outname)
 
-    if current_prefs is not None and current_prefs.shape[0] >= n_trajs:
-        logging.warning(f"No new trajectories needed for {outdir}")
-        return outdir / outname
+    if current_prefs is not None:
+        if (
+            current_prefs.shape[0] >= n_trials
+            and current_prefs.shape[1] >= prefs_per_trial
+        ):
+            logging.warning(f"No new states needed for {outdir}")
+            return outdir / outname
+        else:
+            logging.warning(
+                f"Existing data found at {outdir} with name {outname} but not enough data found, overwriting."
+            )
 
     step = generator.gen_state_pairs(1)
 
-    features: np.ndarray = (
-        np.empty((0, 2, step[0].shape[1]), dtype=step[0].dtype)
-        if current_prefs is None
-        else current_prefs
+    # (n_trials, comparison index, first/second, feature
+    features: np.ndarray = np.empty(
+        (n_trials, prefs_per_trial, 2, step[0].shape[1]), dtype=step[0].dtype
     )
-    flip_probs: np.ndarray = (
-        np.empty((0,), dtype=np.float32)
-        if current_flip_probs is None
-        else current_flip_probs
-    )
+    logging.debug(f"{n_trials=}, {features.shape=}")
+    flip_probs: np.ndarray = np.empty((prefs_per_trial * n_trials,), dtype=np.float32)
 
-    while features.shape[0] < n_trajs:
-        logging.info(
-            f"Asking for {n_trajs - features.shape[0]} trajs or {batch_timesteps} timesteps"
-        )
-
-        new_features, new_probs = traj_collect_step(
-            generator,
-            batch_timesteps,
-            n_trajs - features.shape[0],
-            reward,
-            temperature,
-            normalize_differences,
-        )
-
-        new_diffs = new_features[:, 0] - new_features[:, 1]
-        assert not np.any(np.all(new_diffs == 0, axis=1))
-        assert new_features.shape[1] == 2
-
-        indices = (
-            find_soft_unique_indices(
-                new=new_diffs, core=features[:, 0] - features[:, 1]
+    for trial in range(n_trials):
+        logging.info(f"Collecting traj comparisons for trial {trial} of {n_trials}")
+        trial_prefs = 0
+        while trial_prefs < prefs_per_trial:
+            logging.info(
+                f"Asking for {prefs_per_trial - trial_prefs} trajs or {batch_timesteps} timesteps"
             )
-            if deduplicate
-            else np.ones_like(new_probs, dtype=bool)
-        )
 
-        features = np.concatenate((features, new_features[indices]))
-        flip_probs = np.concatenate((flip_probs, new_probs[indices]))
+            new_features, new_probs = traj_collect_step(
+                generator=generator,
+                timesteps=batch_timesteps,
+                n_trajs=prefs_per_trial - trial_prefs,
+                reward=reward,
+                temperature=temperature,
+                normalize_differences=normalize_differences,
+            )
+
+            new_diffs = new_features[:, 0] - new_features[:, 1]
+            assert not np.any(np.all(new_diffs == 0, axis=1))
+            assert new_features.shape[1] == 2
+
+            logging.debug(f"{features.shape=}")
+            indices = (
+                find_soft_unique_indices(
+                    new=new_diffs,
+                    core=features[trial, :trial_prefs, 0]
+                    - features[trial, :trial_prefs, 1],
+                )
+                if deduplicate
+                else np.ones_like(new_probs, dtype=bool)
+            )
+
+            end_index = min(trial_prefs + indices.shape[0], prefs_per_trial)
+            overflow_index = end_index - trial_prefs
+
+            features[trial, trial_prefs:end_index] = new_features[indices][
+                :overflow_index
+            ]
+            flip_probs[
+                trial * prefs_per_trial
+                + trial_prefs : trial * prefs_per_trial
+                + end_index
+            ] = new_probs[indices][:overflow_index]
+
+            trial_prefs = end_index
 
     np.save(outdir / (outname + ".features.npy"), features)
     np.save(outdir / (outname + ".flip-probs.npy"), flip_probs)
@@ -446,6 +498,7 @@ def gen_traj_preferences(
     plt.hist(flip_probs, bins=100)
     plt.title(f"Histogram of noise flip probabilities (temp={temperature:0.5f})")
     plt.xlabel("Flip Probability")
+    plt.xlim((0, 1))
     plt.savefig(outdir / (outname + ".flip-probs.png"))
     plt.close()
 

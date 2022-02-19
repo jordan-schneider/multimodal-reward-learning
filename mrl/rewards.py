@@ -18,7 +18,7 @@ def make_miner_rewards(rootdir: Path, replications: int) -> None:
     diamonds = np.linspace(0.0, -0.1, n)
 
     for i, vals in enumerate(product(danger, dists, diamonds)):
-        reward = np.array([1.0, 10.0, *vals])
+        reward = np.array([1.0, *vals])
         reward = reward / np.linalg.norm(reward)
 
         repl_dir = rootdir / str(i)
