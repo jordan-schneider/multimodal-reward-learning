@@ -4,7 +4,7 @@ from typing import Tuple
 
 import numpy as np
 import torch
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis.extra.numpy import arrays
 from hypothesis.strategies import booleans, floats, integers, just, shared, tuples
 from mrl.dataset.offline_buffer import RlDataset, SarsDataset
@@ -85,6 +85,7 @@ def test_sars_dataset_index(
     timesteps=integers(min_value=1, max_value=1000),
     n_envs=integers(min_value=1, max_value=10),
 )
+@settings(deadline=None)
 def test_trajs(timesteps: int, n_envs: int) -> None:
     states = np.empty((timesteps, n_envs, 64, 64, 3))
     actions = np.empty((timesteps, n_envs), dtype=np.int8)

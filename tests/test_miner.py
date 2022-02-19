@@ -20,7 +20,7 @@ DIAMONDS = (1, 3)
 N_FEATURES = 4
 
 
-@settings(deadline=3000)
+@settings(deadline=None)
 @given(seed=integers(0, 2 ** 31 - 1))
 def test_first(seed: int) -> None:
     env = Miner(reward_weights=np.zeros(N_FEATURES), num=1, rand_seed=seed)
