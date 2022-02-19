@@ -63,15 +63,14 @@ def main(
     )
     setup_logging(level=verbosity, outdir=inference_outdir)
 
-    n_prefs = prefs_per_trial * n_trials
-
-    data_outname = make_pref_outname(n_prefs, normalize_differences)
+    data_outname = make_pref_outname(prefs_per_trial * n_trials, normalize_differences)
 
     if pref_temp is not None:
         state_path = gen_state_preferences(
             rootdir=rootdir,
             env=env,
-            n_states=n_prefs,
+            prefs_per_trial=prefs_per_trial,
+            n_trials=n_trials,
             n_parallel_envs=n_envs,
             outname=data_outname,
             temperature=pref_temp,
@@ -85,7 +84,8 @@ def main(
         traj_path = gen_traj_preferences(
             rootdir=rootdir,
             env=env,
-            n_trajs=n_prefs,
+            prefs_per_trial=prefs_per_trial,
+            n_trials=n_trials,
             n_parallel_envs=n_envs,
             outname=data_outname,
             temperature=pref_temp,
@@ -103,7 +103,8 @@ def main(
             rootdir=rootdir,
             env=env,
             outname=data_outname,
-            n_prefs=n_prefs,
+            prefs_per_trial=prefs_per_trial,
+            n_trials=n_trials,
             n_calibration_prefs=calibration_prefs,
             n_envs=n_envs,
             flip_prob=flip_prob,

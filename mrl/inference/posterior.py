@@ -237,33 +237,32 @@ def load_comparison_data(
     all_data: Dict[str, np.ndarray] = {}
     logging.debug(f"paths={paths}")
     for key, path in paths.items():
-        features = np_gather(
+        # TODO: Remove np_gather calls here, nothing is sharded anymore.
+        all_trials = np_gather(
             indir=path.parent,
             name=path.name,
             max_nbytes=ram_free // len(paths),
         )
-        if max_comparisons * n_trials > features.shape[0]:
+        if n_trials > all_trials.shape[0]:
             raise RuntimeError(
-                f"{key} only has {features.shape[0]} comparisons, but need {max_comparisons * n_trials}"
+                f"{key} only has data for {all_trials.shape[0]} trials, but need {n_trials}"
             )
-        all_data[key] = features
+        elif max_comparisons > all_trials.shape[1]:
+            raise RuntimeError(
+                f"{key} only has {all_trials.shape[1]} prefs per trial, need {max_comparisons}"
+            )
+        all_data[key] = all_trials
 
     logging.debug(f"data={all_data}")
 
-    remaining_data = dict(all_data)
-    for _ in range(n_trials):
-        trial_data: Dict[str, np.ndarray] = {}
-        for key, features in remaining_data.items():
-            assert features.shape[0] >= max_comparisons
-            indices = rng.choice(features.shape[0], size=max_comparisons, replace=False)
-            trial_data[key] = features[indices]
-            remaining_features = np.delete(features, indices, axis=0)
-            logging.debug(f"n features={remaining_features.shape[0]} for key={key}")
-            remaining_data[key] = remaining_features
+    for trial in range(n_trials):
+        trial_data: Dict[str, np.ndarray] = {
+            key: value[trial] for key, value in all_data.items()
+        }
 
         trial_data["joint"] = np.concatenate(
             [
-                features[: max_comparisons // len(paths)]
+                features[: max_comparisons // len(trial_data.keys())]
                 for features in trial_data.values()
             ]
         )
