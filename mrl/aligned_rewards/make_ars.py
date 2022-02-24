@@ -46,7 +46,7 @@ def get_features(
         logging.info("Loading features from file")
         features = np.load(feature_file)
         if len(features) >= n_states + n_trajs:
-            logging.info(f"n_states={n_states} n_trajs={n_trajs}")
+            logging.info(f"{n_states=}, {n_trajs=}")
             return np.concatenate((features[:n_states], features[-n_trajs:]))
 
     logging.info("Generating states")
@@ -58,7 +58,7 @@ def get_features(
     ).reshape(-1, root_env._reward_weights.shape[0])
     assert (
         state_features.shape[0] >= n_states
-    ), f"state features shape={state_features.shape} when {n_states} states requested"
+    ), f"{state_features.shape=} when {n_states} states requested"
 
     if batch_timesteps == -1:
         one_step = procgen_rollout_dataset(

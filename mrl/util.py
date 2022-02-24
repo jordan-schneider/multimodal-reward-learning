@@ -4,19 +4,8 @@ import logging
 import pickle as pkl
 import re
 from pathlib import Path
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    OrderedDict,
-    Sequence,
-    Tuple,
-    Union,
-    cast,
-)
+from typing import (Any, Callable, Dict, List, Literal, Optional, OrderedDict,
+                    Sequence, Tuple, Union, cast)
 
 import numpy as np
 import psutil  # type: ignore
@@ -464,13 +453,13 @@ def procgen_rollout_dataset(
 def max_state_batch_size(n_states: int, n_parallel_envs: int, step_nbytes: int) -> int:
     gc.collect()
     free_memory = psutil.virtual_memory().available
-    logging.info(f"Free memory={free_memory}")
+    logging.info(f"{free_memory=}")
 
     batch_timesteps = min(
         n_states // n_parallel_envs, int(free_memory / step_nbytes * 0.8)
     )
     batch_timesteps = max(batch_timesteps, 2)
-    logging.info(f"batch_timesteps={batch_timesteps}")
+    logging.info(f"{batch_timesteps=}")
 
     return batch_timesteps
 
@@ -478,14 +467,14 @@ def max_state_batch_size(n_states: int, n_parallel_envs: int, step_nbytes: int) 
 def max_traj_batch_size(n_trajs: int, n_parallel_envs: int, step_nbytes: int) -> int:
     gc.collect()
     free_memory = psutil.virtual_memory().available
-    logging.info(f"Free memory: {free_memory}")
+    logging.info(f"{free_memory=}")
 
     # How many timesteps can we fit into the available memory?
     batch_timesteps = min(
         (n_trajs * 1000 + 1) // n_parallel_envs, int(free_memory / step_nbytes * 0.8)
     )
     batch_timesteps = max(batch_timesteps, 2)
-    logging.info(f"batch_timesteps={batch_timesteps}")
+    logging.info(f"{batch_timesteps=}")
     return batch_timesteps
 
 
