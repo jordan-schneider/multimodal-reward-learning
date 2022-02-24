@@ -163,8 +163,9 @@ def gen_state_preferences(
         tqdm=True,
     )
 
+    states_per_batch = prefs_per_trial
     batch_timesteps = max_state_batch_size(
-        n_states=prefs_per_trial,
+        n_states=states_per_batch,
         n_parallel_envs=n_parallel_envs,
         step_nbytes=generator.step_nbytes,
     )
@@ -215,6 +216,14 @@ def gen_state_preferences(
                 if deduplicate
                 else np.ones_like(new_probs, dtype=bool)
             )
+
+            if indices.shape[0] == 0:
+                states_per_batch *= 10
+                batch_timesteps = max_state_batch_size(
+                    n_states=states_per_batch,
+                    n_parallel_envs=n_parallel_envs,
+                    step_nbytes=generator.step_nbytes,
+                )
 
             logging.debug(f"{indices.shape[0]=}")
 
@@ -414,6 +423,7 @@ def gen_traj_preferences(
         tqdm=True,
     )
 
+    trajs_per_batch = prefs_per_trial
     batch_timesteps = max_traj_batch_size(
         n_trajs=prefs_per_trial,
         n_parallel_envs=n_parallel_envs,
@@ -477,6 +487,14 @@ def gen_traj_preferences(
                 if deduplicate
                 else np.ones_like(new_probs, dtype=bool)
             )
+
+            if indices.shape[0] == 0:
+                trajs_per_batch *= 10
+                batch_timesteps = max_traj_batch_size(
+                    n_trajs=trajs_per_batch,
+                    n_parallel_envs=n_parallel_envs,
+                    step_nbytes=generator.step_nbytes,
+                )
 
             end_index = min(trial_prefs + indices.shape[0], prefs_per_trial)
             overflow_index = end_index - trial_prefs
