@@ -1,7 +1,7 @@
 import logging
 from math import ceil, sqrt
 from pathlib import Path
-from typing import Dict, Generator, Literal, Optional, Tuple, Union
+from typing import Callable, Dict, Generator, Literal, Optional, Tuple, Union, cast
 
 import bitmath  # type: ignore
 import fire  # type: ignore
@@ -11,10 +11,12 @@ import numpy as np
 import pandas as pd  # type: ignore
 import seaborn as sns  # type: ignore
 from mrl.aligned_rewards.aligned_reward_set import AlignedRewardSet
+from mrl.configs import FixedInference, GammaInference, InferenceNoise, TrueInference
 from mrl.inference.results import Results
 from mrl.inference.sphere import find_centroid
 from mrl.reward_model.boltzmann import boltzmann_likelihood
 from mrl.reward_model.hinge import hinge_likelihood
+from mrl.reward_model.likelihood import Likelihood
 from mrl.reward_model.logspace import cum_likelihoods
 from mrl.util import normalize_diffs, np_gather, setup_logging
 from tqdm import trange  # type: ignore
@@ -35,7 +37,7 @@ def compare_modalities(
     ] = None,
     use_hinge: bool = False,
     use_shift: bool = False,
-    inference_temp: Union[float, Literal["gt"]] = 1.0,
+    inference_temp: InferenceNoise = TrueInference(),
     n_trials: int = 1,
     plot_individual: bool = False,
     save_all: bool = False,
@@ -84,18 +86,23 @@ verbosity={verbosity}"""
             dedup=deduplicate,
         )
 
-        if inference_temp == "gt":
+        if inference_temp.name == "gt":
             temps = {
                 "state": state_temp,
                 "traj": traj_temp,
                 "joint": sqrt(state_temp * traj_temp),
             }
-        else:
+        elif inference_temp.name == "fixed":
+            inference_temp = cast(FixedInference, inference_temp)
             temps = {
-                "state": inference_temp,
-                "traj": inference_temp,
-                "joint": inference_temp,
+                "state": inference_temp.temp,
+                "traj": inference_temp.temp,
+                "joint": inference_temp.temp,
             }
+        elif inference_temp.name == "gamma":
+            raise NotImplementedError("Gamma inference not implemented")
+        else:
+            raise ValueError(f"Inference temp {inference_temp} not recognized")
 
         true_reward, aligned_reward_set = load_ground_truth(
             reward_path, aligned_reward_set_path
@@ -133,10 +140,14 @@ verbosity={verbosity}"""
             }
 
             try:
+                # TODO: Write function that processes one modality at a time to make multiple
+                # temperature values easy to handle.
                 results = comparison_analysis(
                     reward_samples=reward_samples,
                     diffs=diffs,
-                    use_hinge=use_hinge,
+                    reward_likelihood=hinge_likelihood
+                    if use_hinge
+                    else boltzmann_likelihood,
                     use_shift=use_shift,
                     results=results,
                     true_reward=true_reward,
@@ -276,7 +287,7 @@ def load_comparison_data(
 def comparison_analysis(
     reward_samples: np.ndarray,
     diffs: Dict[str, np.ndarray],
-    use_hinge: bool,
+    reward_likelihood: Likelihood,
     use_shift: bool,
     results: Results,
     aligned_reward_set: Optional[AlignedRewardSet],
@@ -286,8 +297,6 @@ def comparison_analysis(
     compute_mean_dispersions: bool = False,
     save_all: bool = False,
 ) -> Results:
-    reward_likelihood = hinge_likelihood if use_hinge else boltzmann_likelihood
-
     if temps is None:
         temps = {key: 1.0 for key in diffs}
 

@@ -549,10 +549,11 @@ def setup_logging(
     outdir: Optional[Path] = None,
     name: str = "log.txt",
     multiple_files: bool = True,
+    force: bool = False,
 ) -> None:
     FORMAT = "%(levelname)s:%(filename)s:%(lineno)d:%(asctime)s:%(message)s"
 
-    logging.basicConfig(level=level, format=FORMAT)
+    logging.basicConfig(level=level, format=FORMAT, force=force)
     if outdir is not None:
         logger = logging.getLogger()
         files = [
