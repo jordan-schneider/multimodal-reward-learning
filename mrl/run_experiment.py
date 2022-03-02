@@ -97,12 +97,13 @@ def main(config: ExperimentConfig):
         )
 
     reward_path = rootdir / "reward.npy"
-    ars_path = rootdir / "aligned_reward_set.npy"
+    ars_path = rootdir / config.ars_name
     if not ars_path.exists():
         make_ars(
             reward_path=reward_path,
             env_name=config.env.name,
             outdir=rootdir,
+            outname=config.ars_name,
             seed=config.seed,
             verbosity=config.verbosity,
         )
@@ -117,6 +118,7 @@ def main(config: ExperimentConfig):
         traj_temp=traj_temp,
         state_name=state_path.name,
         traj_name=traj_path.name,
+        ars_name=config.ars_name,
         max_comparisons=config.preference.prefs_per_trial,
         deduplicate=config.preference.deduplicate,
         norm_diffs=config.preference.normalize_differences,

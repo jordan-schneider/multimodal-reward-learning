@@ -1,7 +1,7 @@
 import logging
 from math import ceil, sqrt
 from pathlib import Path
-from typing import Callable, Dict, Generator, Literal, Optional, Tuple, Union, cast
+from typing import Dict, Generator, Literal, Optional, Tuple, Union, cast
 
 import bitmath  # type: ignore
 import fire  # type: ignore
@@ -29,6 +29,7 @@ def compare_modalities(
     traj_temp: float,
     state_name: str,
     traj_name: str,
+    ars_name: str,
     n_samples: int = 100_000,
     max_comparisons: int = 1000,
     deduplicate: bool = False,
@@ -74,9 +75,6 @@ verbosity={verbosity}"""
 
         rng = np.random.default_rng(seed=seed)
 
-        reward_path = data_rootdir / "reward.npy"
-        aligned_reward_set_path = data_rootdir / "aligned_reward_set.npy"
-
         paths = collect_paths(
             data_rootdir,
             state_temp=state_temp,
@@ -104,8 +102,9 @@ verbosity={verbosity}"""
         else:
             raise ValueError(f"Inference temp {inference_temp} not recognized")
 
+        reward_path = data_rootdir / "reward.npy"
         true_reward, aligned_reward_set = load_ground_truth(
-            reward_path, aligned_reward_set_path
+            reward_path=reward_path, aligned_reward_set_path=data_rootdir / ars_name
         )
 
         max_ram_nbytes = int(bitmath.parse_string_unsafe(max_ram).bytes)
