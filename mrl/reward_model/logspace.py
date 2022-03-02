@@ -68,8 +68,6 @@ def cum_likelihoods(log_likelihoods: np.ndarray, shift: bool):
     if np.any(np.exp(log_total_likelihoods) == 0):
         logging.warning("Some cumulative terms have 0 total unnormalized likelihood")
 
-    tmp = log_total_likelihoods
-
     log_total_likelihoods = log_normalize_logs(log_total_likelihoods)
     assert np.all(np.isfinite(log_total_likelihoods))
 

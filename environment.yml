@@ -24,6 +24,8 @@ dependencies:
     - argh
     - scipy
     - gputil
+    - hydra
+    - git+https://github.com/jordan-schneider/omegaconf.git
     # Dev
     - pytest
     - hypothesis

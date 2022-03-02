@@ -1,120 +1,99 @@
 import logging
 from pathlib import Path
-from typing import Literal, Optional, Union
+from typing import Literal, cast
 
-import fire  # type: ignore
+import hydra
+from omegaconf import MISSING
 
 from mrl.aligned_rewards.make_ars import main as make_ars
+from mrl.configs import (
+    ExperimentConfig,
+    FixedInference,
+    FixedPreference,
+    FlipProb,
+    GammaInference,
+    TrueInference,
+    register_configs,
+)
 from mrl.dataset.preferences import (
     gen_preferences,
     gen_state_preferences,
     gen_traj_preferences,
 )
-from mrl.envs.util import FEATURE_ENV_NAMES
 from mrl.folders import HyperFolders
 from mrl.inference.posterior import compare_modalities
 from mrl.util import setup_logging
 
 
-def main(
-    rootdir: Path,
-    env: FEATURE_ENV_NAMES,
-    prefs_per_trial: int = 1000,
-    n_trials: int = 1,
-    pref_temp: Optional[float] = None,
-    flip_prob: Optional[float] = None,
-    calibration_prefs: int = 100,
-    init_state_temp: float = 1.0,
-    init_traj_temp: float = 1.0,
-    inference_temp: Union[float, Literal["gt"]] = 1.0,
-    deduplicate: bool = False,
-    n_envs: int = 100,
-    normalize_step: bool = False,
-    normalize_differences: Literal[
-        "diff-length", "sum-length", "max-length", "log-diff-length", None
-    ] = None,
-    use_hinge: bool = False,
-    use_shift: bool = False,
-    max_ram: str = "100G",
-    seed: int = 0,
-    overwrite: bool = False,
-    verbosity: Literal["INFO", "DEBUG"] = "INFO",
-):
-    if pref_temp is None and flip_prob is None:
-        raise ValueError("Must specify one of pref_temperature or flip_prob")
-    if pref_temp is not None and flip_prob is not None:
-        raise ValueError(
-            f"Cannot specify both temperature {pref_temp} and flip_prob {flip_prob}"
-        )
+@hydra.main(config_path=None, config_name="experiment")
+def main(config: ExperimentConfig):
+    if config.preference.noise is MISSING:
+        raise ValueError("Must specify preference noise model")
+    if config.inference.noise is MISSING:
+        raise ValueError("Must specify inferene noise model")
+    if config.inference.noise.name not in ["fixed", "gt"]:
+        raise NotImplementedError("Prior noise models not implemented")
 
-    rootdir = Path(rootdir)
-    if pref_temp is not None:
-        pref_temp = float(pref_temp)
-    elif flip_prob is not None:
-        flip_prob = float(flip_prob)
-    inference_outdir = make_inference_outdir(
-        rootdir=rootdir,
-        data_temp=pref_temp,
-        flip_prob=flip_prob,
-        inference_fn="hinge" if use_hinge else "boltzmann",
-        inference_temp=inference_temp,
-        dedup=deduplicate,
-        normalization=normalize_differences,
+    rootdir = Path(config.rootdir)
+    inference_outdir = make_inference_outdir(config)
+    setup_logging(level=config.verbosity, outdir=inference_outdir, force=True)
+
+    data_outname = make_pref_outname(
+        config.preference.prefs_per_trial * config.n_trials,
+        config.preference.normalize_differences,
     )
-    setup_logging(level=verbosity, outdir=inference_outdir)
 
-    data_outname = make_pref_outname(prefs_per_trial * n_trials, normalize_differences)
-
-    if pref_temp is not None:
+    noise = config.preference.noise
+    if noise.name == "fixed":
+        noise = cast(FixedPreference, noise)
         state_path = gen_state_preferences(
             rootdir=rootdir,
-            env=env,
-            prefs_per_trial=prefs_per_trial,
-            n_trials=n_trials,
-            n_parallel_envs=n_envs,
+            env=config.env.name,
+            prefs_per_trial=config.preference.prefs_per_trial,
+            n_trials=config.n_trials,
+            n_parallel_envs=config.env.n_envs,
             outname=data_outname,
-            temperature=pref_temp,
-            deduplicate=deduplicate,
-            normalize_step_features=normalize_step,
-            normalize_differences=normalize_differences,
-            overwrite=overwrite,
-            verbosity=verbosity,
+            temperature=noise.temp,
+            deduplicate=config.preference.deduplicate,
+            normalize_step_features=config.env.normalize_step,
+            normalize_differences=config.preference.normalize_differences,
+            overwrite=config.overwrite,
+            verbosity=config.verbosity,
         )
         logging.debug(f"state_path returned: {state_path}")
         traj_path = gen_traj_preferences(
             rootdir=rootdir,
-            env=env,
-            prefs_per_trial=prefs_per_trial,
-            n_trials=n_trials,
-            n_parallel_envs=n_envs,
+            env=config.env.name,
+            prefs_per_trial=config.preference.prefs_per_trial,
+            n_trials=config.n_trials,
+            n_parallel_envs=config.env.n_envs,
             outname=data_outname,
-            temperature=pref_temp,
-            deduplicate=deduplicate,
-            normalize_step_features=normalize_step,
-            normalize_differences=normalize_differences,
-            overwrite=overwrite,
-            verbosity=verbosity,
+            temperature=noise.temp,
+            deduplicate=config.preference.deduplicate,
+            normalize_step_features=config.env.normalize_step,
+            normalize_differences=config.preference.normalize_differences,
+            overwrite=config.overwrite,
+            verbosity=config.verbosity,
         )
         logging.debug(f"traj_path returned: {traj_path}")
-    else:
-        assert flip_prob is not None
-        flip_prob = float(flip_prob)
+    elif noise.name == "flip-prob":
+        noise = cast(FlipProb, noise)
         state_path, traj_path = gen_preferences(
             rootdir=rootdir,
-            env=env,
+            env=config.env.name,
             outname=data_outname,
-            prefs_per_trial=prefs_per_trial,
-            n_trials=n_trials,
-            n_calibration_prefs=calibration_prefs,
-            n_envs=n_envs,
-            flip_prob=flip_prob,
-            init_state_temp=init_state_temp,
-            init_traj_temp=init_traj_temp,
-            deduplicate=deduplicate,
-            normalize_step=normalize_step,
-            normalize_differences=normalize_differences,
-            overwrite=overwrite,
-            verbosity=verbosity,
+            prefs_per_trial=config.preference.prefs_per_trial,
+            n_trials=config.n_trials,
+            n_calibration_prefs=noise.calibration_prefs,
+            n_envs=config.env.n_envs,
+            flip_prob=noise.prob,
+            init_state_temp=noise.init_state_temp,
+            init_traj_temp=noise.init_traj_temp,
+            deduplicate=config.preference.deduplicate,
+            normalize_step=config.env.normalize_step,
+            normalize_differences=config.preference.normalize_differences,
+            overwrite=config.overwrite,
+            verbosity=config.verbosity,
         )
 
     reward_path = rootdir / "reward.npy"
@@ -122,10 +101,10 @@ def main(
     if not ars_path.exists():
         make_ars(
             reward_path=reward_path,
-            env_name=env,
+            env_name=config.env.name,
             outdir=rootdir,
-            seed=seed,
-            verbosity=verbosity,
+            seed=config.seed,
+            verbosity=config.verbosity,
         )
 
     state_temp = float(state_path.parts[-3])
@@ -138,16 +117,16 @@ def main(
         traj_temp=traj_temp,
         state_name=state_path.name,
         traj_name=traj_path.name,
-        max_comparisons=prefs_per_trial,
-        deduplicate=deduplicate,
-        norm_diffs=normalize_differences,
-        use_hinge=use_hinge,
-        use_shift=use_shift,
-        inference_temp=inference_temp,
-        n_trials=n_trials,
-        max_ram=max_ram,
-        seed=seed,
-        verbosity=verbosity,
+        max_comparisons=config.preference.prefs_per_trial,
+        deduplicate=config.preference.deduplicate,
+        norm_diffs=config.preference.normalize_differences,
+        use_hinge=config.inference.likelihood_fn == "hinge",
+        use_shift=config.inference.use_shift,
+        inference_temp=config.inference.noise,
+        n_trials=config.n_trials,
+        max_ram=config.max_ram,
+        seed=config.seed,
+        verbosity=config.verbosity,
     )
 
 
@@ -165,19 +144,9 @@ def make_pref_outname(
     return outname
 
 
-def make_inference_outdir(
-    rootdir: Path,
-    data_temp: Optional[float],
-    flip_prob: Optional[float],
-    inference_fn: Literal["boltzmann", "hinge"],
-    inference_temp: Union[float, Literal["gt"]],
-    dedup: bool,
-    normalization: Literal[
-        "diff-length", "sum-length", "max-length", "log-diff-length", None
-    ],
-) -> Path:
+def make_inference_outdir(config: ExperimentConfig) -> Path:
     folders = HyperFolders(
-        rootdir / "compare",
+        Path(config.rootdir) / "compare",
         schema=[
             "data-noise",
             "inference-fn",
@@ -186,27 +155,47 @@ def make_inference_outdir(
             "dedup",
         ],
     )
-    if data_temp is not None:
-        data_noise = f"pref-{data_temp}"
-    elif flip_prob is not None:
-        data_noise = f"flip-{flip_prob}"
+    preference_noise = config.preference.noise
+    if preference_noise.name == "fixed":
+        preference_noise = cast(FixedPreference, preference_noise)
+        data_noise = f"pref-{preference_noise.temp}"
+    elif preference_noise.name == "flip-prob":
+        preference_noise = cast(FlipProb, preference_noise)
+        data_noise = f"flip-{preference_noise.prob}"
 
-    if normalization is None:
+    if (normalize := config.preference.normalize_differences) is None:
         norm_str = "no-norm"
-    elif not (
-        normalization in ["diff-length", "sum-length", "max-length", "log-diff-length"]
-    ):
-        raise ValueError(f"Invalid normalization: {normalization}")
+    elif normalize not in [
+        "diff-length",
+        "sum-length",
+        "max-length",
+        "log-diff-length",
+    ]:
+        raise ValueError(
+            f"Invalid normalization: {config.preference.normalize_differences}"
+        )
     else:
-        norm_str = normalization
+        norm_str = normalize
 
-    dedup_str = "dedup" if dedup else "no-dedup"
+    dedup_str = "dedup" if config.preference.deduplicate else "no-dedup"
+
+    inference_noise = config.inference.noise
+    if inference_noise.name == "gamma":
+        inference_noise = cast(GammaInference, inference_noise)
+        k = inference_noise.k
+        theta = inference_noise.theta
+        inference_temp_str = f"gamma({k}, {theta})"
+    elif inference_noise.name == "fixed":
+        inference_noise = cast(FixedInference, inference_noise)
+        inference_temp_str = f"fixed-{inference_noise.temp}"
+    elif inference_noise.name == "gt":
+        inference_temp_str = "gt"
 
     return folders.add_experiment(
         {
             "data-noise": data_noise,
-            "inference-fn": inference_fn,
-            "inference-temp": f"inference-{inference_temp}",
+            "inference-fn": config.inference.likelihood_fn,
+            "inference-temp": f"inference-{inference_temp_str}",
             "normalization": norm_str,
             "dedup": dedup_str,
         }
@@ -214,4 +203,5 @@ def make_inference_outdir(
 
 
 if __name__ == "__main__":
-    fire.Fire(main)
+    register_configs()
+    main()
