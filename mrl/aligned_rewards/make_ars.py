@@ -1,10 +1,10 @@
-import gc
 import logging
+import pickle as pkl
 import time
 from itertools import product
 from math import ceil
 from pathlib import Path
-from typing import Final, List, Literal, Optional
+from typing import List, Literal, Optional
 
 import fire  # type: ignore
 import numpy as np
@@ -22,9 +22,6 @@ from mrl.util import (
 from phasic_policy_gradient.ppg import PhasicValueModel
 from procgen.env import ProcgenGym3Env
 
-FEATURES_FILENAME: Final = "ars_features.npy"
-ARS_FILENAME: Final = "aligned_reward_set.npy"
-
 
 def get_features(
     n_states: int,
@@ -32,90 +29,118 @@ def get_features(
     env: ProcgenGym3Env,
     policy: PhasicValueModel,
     outdir: Optional[Path],
+    outname: Optional[str],
     overwrite: bool,
     batch_timesteps: int,
     tqdm: bool = False,
 ) -> np.ndarray:
     root_env = get_root_env(env)
+    n_features = root_env._reward_weights.shape[0]
+
+    states_remaining, trajs_remaining = n_states, n_trajs
+
+    features = {"state": np.empty((0, n_features)), "traj": np.empty((0, n_features))}
 
     if (
         not overwrite
         and outdir is not None
-        and (feature_file := outdir / FEATURES_FILENAME).is_file()
+        and outname is not None
+        and (feature_file := outdir / outname).is_file()
     ):
-        logging.info("Loading features from file")
-        features = np.load(feature_file)
-        if len(features) >= n_states + n_trajs:
-            logging.info(f"{n_states=}, {n_trajs=}")
-            return np.concatenate((features[:n_states], features[-n_trajs:]))
+        logging.info(f"Loading features from {feature_file}")
+        all_features = pkl.load(open(feature_file, "rb"))
+        if states_remaining > 0:
+            new_states = all_features["state"]
+            features["state"] = np.concatenate((features["state"], new_states), axis=0)
+            states_remaining -= new_states.shape[0]
+            logging.info(
+                f"Loaded {new_states.shape[0]} state features, {states_remaining} remaining."
+            )
+        if trajs_remaining > 0:
+            new_trajs = all_features["traj"]
+            features["traj"] = np.concatenate((features["traj"], new_trajs), axis=0)
+            trajs_remaining -= new_trajs.shape[0]
+            logging.info(
+                f"Loaded {new_trajs.shape[0]} trajectory features, {states_remaining} remaining."
+            )
 
-    logging.info("Generating states")
-    state_features = procgen_rollout_features(
-        env=env,
-        policy=policy,
-        timesteps=ceil(n_states / env.num),
-        tqdm=tqdm,
-    ).reshape(-1, root_env._reward_weights.shape[0])
-    assert (
-        state_features.shape[0] >= n_states
-    ), f"{state_features.shape=} when {n_states} states requested"
-
-    if batch_timesteps == -1:
-        one_step = procgen_rollout_dataset(
+    if states_remaining > 0:
+        logging.info("Generating states")
+        state_features = procgen_rollout_features(
             env=env,
-            policy=get_policy(None, env=env),
-            timesteps=1,
-            n_trajs=1,
-            flags=["feature", "first"],
-        )
-        assert one_step.features is not None
-        nbytes = one_step.features.element_size() * one_step.features.nelement()
-        logging.debug(f"one_step nbytes={nbytes}")
-        batch_timesteps = max_traj_batch_size(n_trajs, env.num, nbytes)
+            policy=policy,
+            timesteps=ceil(n_states / env.num),
+            tqdm=tqdm,
+        ).reshape(-1, n_features)
+        assert (
+            state_features.shape[0] >= n_states
+        ), f"{state_features.shape=} when {n_states} states requested"
+        features["state"] = np.concatenate((features["state"], state_features), axis=0)
+    else:
+        logging.info(f"{n_states} states requested, skipping")
 
-    logging.info("Generating trajs")
-    traj_feature_batches: List[np.ndarray] = []
-    current_trajs = 0
-    while current_trajs < n_trajs:
-        logging.info(f"{current_trajs}/{n_trajs}")
-        logging.debug(
-            f"Before rollout_dataset vm={get_memory()['VmSize']}, peak={get_memory()['VmPeak']}"
-        )
-        trajs = list(
-            procgen_rollout_dataset(
+    if trajs_remaining > 0:
+        if batch_timesteps == -1:
+            one_step = procgen_rollout_dataset(
                 env=env,
-                policy=policy,
-                timesteps=batch_timesteps,
-                n_trajs=n_trajs - current_trajs,
+                policy=get_policy(None, env=env),
+                timesteps=1,
+                n_trajs=1,
                 flags=["feature", "first"],
-                tqdm=tqdm,
-            ).trajs()
-        )
+            )
+            assert one_step.features is not None
+            nbytes = one_step.features.element_size() * one_step.features.nelement()
+            logging.debug(f"one_step nbytes={nbytes}")
+            batch_timesteps = max_traj_batch_size(n_trajs, env.num, nbytes)
 
-        traj_features = np.stack([np.sum(traj.features.numpy(), axis=0) for traj in trajs])  # type: ignore
-        current_trajs += traj_features.shape[0]
-        traj_feature_batches.append(traj_features)
+        logging.info("Generating trajs")
+        traj_feature_batches: List[np.ndarray] = []
+        current_trajs = 0
+        while current_trajs < trajs_remaining:
+            logging.info(f"{current_trajs}/{trajs_remaining}")
+            logging.debug(
+                f"Before rollout_dataset vm={get_memory()['VmSize']}, peak={get_memory()['VmPeak']}"
+            )
+            trajs = list(
+                procgen_rollout_dataset(
+                    env=env,
+                    policy=policy,
+                    timesteps=batch_timesteps,
+                    n_trajs=n_trajs - current_trajs,
+                    flags=["feature", "first"],
+                    tqdm=tqdm,
+                ).trajs()
+            )
+
+            traj_features = np.stack([np.sum(traj.features.numpy(), axis=0) for traj in trajs])  # type: ignore
+            current_trajs += traj_features.shape[0]
+            traj_feature_batches.append(traj_features)
+            assert (
+                len(traj_features.shape) == 2
+            ), f"traj feature has wrong dimension {traj_features.shape}"
+            assert (
+                traj_features.shape[1] == state_features.shape[1]
+            ), f"traj and state feature dims don't match {traj_features.shape}, {state_features.shape}"
+            del trajs
+
+        traj_features = np.concatenate(traj_feature_batches)
+
         assert (
-            len(traj_features.shape) == 2
-        ), f"traj feature has wrong dimension {traj_features.shape}"
-        assert (
-            traj_features.shape[1] == state_features.shape[1]
-        ), f"traj and state feature dims don't match {traj_features.shape}, {state_features.shape}"
-        del trajs
+            traj_features.shape[0] >= n_trajs
+        ), f"traj features {traj_features.shape} not expected length {n_trajs}"
 
-    traj_features = np.concatenate(traj_feature_batches)
+        features["traj"] = np.concatenate((features["traj"], traj_features), axis=0)
 
-    assert (
-        traj_features.shape[0] >= n_trajs
-    ), f"traj features {traj_features.shape} not expected length {n_trajs}"
+    if outdir is not None and outname is not None:
+        pkl.dump(features, (outdir / outname).open("wb"))
 
-    features = np.concatenate(
-        (state_features[:n_states], traj_features[:n_trajs]), axis=0
-    )
-    if outdir is not None:
-        np.save(outdir / FEATURES_FILENAME, features)
+    out = np.empty((0, n_features))
+    if n_states > 0:
+        out = np.concatenate((out, features["state"][:n_states]), axis=0)
+    if n_trajs > 0:
+        out = np.concatenate((out, features["traj"][:n_trajs]), axis=0)
 
-    return features
+    return out
 
 
 def make_aligned_reward_set(
@@ -127,6 +152,7 @@ def make_aligned_reward_set(
     timesteps: int = -1,
     tqdm: bool = False,
     outdir: Optional[Path] = None,
+    outname: Optional[str] = None,
     overwrite: bool = False,
     rng: Optional[np.random.Generator] = None,
 ) -> np.ndarray:
@@ -139,6 +165,7 @@ def make_aligned_reward_set(
         env=env,
         policy=policy,
         outdir=outdir,
+        outname=f"{outname}.features.pkl",
         overwrite=overwrite,
         tqdm=tqdm,
         batch_timesteps=timesteps,
@@ -155,7 +182,8 @@ def make_aligned_reward_set(
     if (
         not overwrite
         and outdir is not None
-        and (diffs_path := outdir / ARS_FILENAME).is_file()
+        and outname is not None
+        and (diffs_path := outdir / outname).is_file()
     ):
         logging.info(f"Loading diffs from {diffs_path}")
         diffs = np.load(diffs_path)
@@ -165,14 +193,14 @@ def make_aligned_reward_set(
     rng.shuffle(features)
     assert np.all(np.isfinite(features))
 
-    order1 = np.arange(features.shape[0])
-    rng.shuffle(order1)
-    order2 = np.arange(features.shape[0])
-    rng.shuffle(order2)
+    pairs = np.array(
+        list(product(np.arange(features.shape[0]), np.arange(features.shape[0])))
+    )
+    rng.shuffle(pairs)
 
     last_new = 0
     iterations = 0
-    for i, j in product(order1, order2):
+    for i, j in pairs:
         if i == j:
             continue
         iterations += 1
@@ -191,16 +219,16 @@ def make_aligned_reward_set(
                 assert diff @ reward > 1e-8
                 diffs = np.append(diffs, [diff], axis=0)
                 last_new = iterations
-                if outdir is not None:
-                    np.save(outdir / ARS_FILENAME, diffs)
+                if outdir is not None and outname is not None:
+                    np.save(outdir / outname, diffs)
                 logging.info(f"{len(diffs)} total diffs")
         except Exception as e:
             logging.error(f"{e}")
             logging.warning("Unable to solve LP, adding item to set anyway")
             diffs = np.append(diffs, [diff], axis=0)
             last_new = iterations
-            if outdir is not None:
-                np.save(outdir / ARS_FILENAME, diffs)
+            if outdir is not None and outname is not None:
+                np.save(outdir / outname, diffs)
             logging.info(f"{len(diffs)} total diffs")
         if total >= 1000:
             if iterations == 1000:
@@ -227,6 +255,7 @@ def main(
     reward_path: Path,
     env_name: FEATURE_ENV_NAMES,
     outdir: Path,
+    outname: str,
     policy_path: Optional[Path] = None,
     n_states: int = 10_000,
     n_trajs: int = 10_000,
@@ -239,7 +268,7 @@ def main(
     outdir = Path(outdir)
     outdir.mkdir(exist_ok=True, parents=True)
 
-    setup_logging(level=verbosity, outdir=outdir, name="aligned_reward_set.log")
+    setup_logging(level=verbosity, outdir=outdir, name=f"{outname}.log")
 
     reward = np.load(reward_path)
 
@@ -258,11 +287,12 @@ def main(
         policy=policy,
         tqdm=True,
         outdir=outdir,
+        outname=outname,
         overwrite=overwrite,
         timesteps=timesteps,
         rng=rng,
     )
-    np.save(outdir / ARS_FILENAME, diffs)
+    np.save(outdir / outname, diffs)
 
 
 if __name__ == "__main__":
