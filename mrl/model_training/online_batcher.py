@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from typing import Tuple
 
-import torch
+import numpy as np
 from gym3 import Env  # type: ignore
-from phasic_policy_gradient.ppg import PhasicValueModel
-
 from mrl.dataset.offline_buffer import RlDataset, SarsDataset
-from mrl.util import procgen_rollout
+from mrl.dataset.roller import procgen_rollout
+from phasic_policy_gradient.ppg import PhasicValueModel
 
 
 class BatchGenerator:
@@ -20,6 +19,6 @@ class BatchGenerator:
 
     def make_trunc_return_batch(
         self, horizon: int, timesteps: int, discount_rate: float
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         data = RlDataset.from_gym3(*procgen_rollout(self.env, self.policy, timesteps))
         return data.truncated_returns(horizon=horizon, discount_rate=discount_rate)

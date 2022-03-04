@@ -10,15 +10,10 @@ import fire  # type: ignore
 import numpy as np
 import torch
 from mrl.dataset.preferences import get_policy
+from mrl.dataset.roller import procgen_rollout_dataset, procgen_rollout_features
 from mrl.envs.util import FEATURE_ENV_NAMES, get_root_env, make_env
 from mrl.memprof import get_memory
-from mrl.util import (
-    is_redundant,
-    max_traj_batch_size,
-    procgen_rollout_dataset,
-    procgen_rollout_features,
-    setup_logging,
-)
+from mrl.util import is_redundant, max_traj_batch_size, setup_logging
 from phasic_policy_gradient.ppg import PhasicValueModel
 from procgen.env import ProcgenGym3Env
 
@@ -85,11 +80,12 @@ def get_features(
                 env=env,
                 policy=get_policy(None, env=env),
                 timesteps=1,
-                n_trajs=1,
                 flags=["feature", "first"],
             )
             assert one_step.features is not None
-            nbytes = one_step.features.element_size() * one_step.features.nelement()
+            assert one_step.features.shape[0] > 0
+            logging.debug(f"{one_step.features.shape=}")
+            nbytes = one_step.features.nbytes
             logging.debug(f"one_step nbytes={nbytes}")
             batch_timesteps = max_traj_batch_size(n_trajs, env.num, nbytes)
 
@@ -112,15 +108,12 @@ def get_features(
                 ).trajs()
             )
 
-            traj_features = np.stack([np.sum(traj.features.numpy(), axis=0) for traj in trajs])  # type: ignore
+            traj_features = np.stack([np.sum(traj.features, axis=0) for traj in trajs])  # type: ignore
             current_trajs += traj_features.shape[0]
             traj_feature_batches.append(traj_features)
             assert (
                 len(traj_features.shape) == 2
             ), f"traj feature has wrong dimension {traj_features.shape}"
-            assert (
-                traj_features.shape[1] == state_features.shape[1]
-            ), f"traj and state feature dims don't match {traj_features.shape}, {state_features.shape}"
             del trajs
 
         traj_features = np.concatenate(traj_feature_batches)

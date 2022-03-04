@@ -9,9 +9,10 @@ import torch
 from argh import arg  # type: ignore
 from gym3 import ExtractDictObWrapper  # type: ignore
 from mrl.dataset.random_policy import RandomPolicy
+from mrl.dataset.roller import procgen_rollout_dataset
 from mrl.dataset.trajectory_db import FeatureDataset
 from mrl.envs import Miner
-from mrl.util import find_best_gpu, procgen_rollout_dataset
+from mrl.util import find_best_gpu
 from phasic_policy_gradient.train import make_model
 
 
@@ -55,7 +56,7 @@ def main(
             dataset.append(
                 policy=policy_path,
                 time=arrow.now(),
-                state_features=traj.features.numpy(),
+                state_features=traj.features,
             )
         del policy
 
@@ -69,7 +70,7 @@ def main(
             dataset.append(
                 policy="random",
                 time=arrow.now(),
-                state_features=traj.features.numpy(),
+                state_features=traj.features,
             )
 
     pkl.dump(dataset, outpath.open("wb"))
