@@ -13,7 +13,7 @@ from mrl.envs.util import FEATURE_ENV_NAMES
 class EnvConfig:
     name: FEATURE_ENV_NAMES = "miner"
     n_envs: int = 100
-    normalize_step: bool = True
+    normalize_step: bool = False
 
 
 @dataclass
