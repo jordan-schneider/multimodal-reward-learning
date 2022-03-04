@@ -135,15 +135,17 @@ def procgen_rollout_features(
         else []
     )
 
-    def step(t: int):
+    def step(t: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         _, state, first = env.observe()
         features[t] = root_env.features
-        action, _, _ = policy.act(
+        action_tensor, _, _ = policy.act(
             torch.tensor(state, device=policy.device),
             torch.tensor(first, device=policy.device),
             policy.initial_state(env.num),
         )
-        env.act(action.cpu().numpy())
+        action_tensor = cast(torch.Tensor, action_tensor)
+        action = cast(np.ndarray, action_tensor.cpu().numpy())
+        env.act(action)
         return state, action, first
 
     if n_trajs is not None:
@@ -247,9 +249,11 @@ class DatasetRoller:
             first_tensor = torch.tensor(first)
             del reward, state
             init_state = self.policy.initial_state(self.env.num)
-            action, _, _ = self.policy.act(state_tensor, first_tensor, init_state)
+            action_tensor, _, _ = self.policy.act(
+                state_tensor, first_tensor, init_state
+            )
             del state_tensor, first_tensor, init_state
-            action = action.cpu().numpy()
+            action = cast(np.ndarray, cast(torch.Tensor, action_tensor).cpu().numpy())
             self.env.act(action)
             if self.actions is not None:
                 self.actions[t] = action

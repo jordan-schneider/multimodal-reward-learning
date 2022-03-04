@@ -451,7 +451,7 @@ def eval_q_rmse(
             q_fn(torch.tensor(traj.states), torch.tensor(traj.actions)).detach().cpu()
         )
         writer.add_histogram("val/q_pred", values)
-        returns = compute_returns(torch.tensor(traj.rewards).numpy(), discount_rate)
+        returns = compute_returns(traj.rewards, discount_rate)
         writer.add_histogram("val/returns", returns)
 
         errors = values - returns

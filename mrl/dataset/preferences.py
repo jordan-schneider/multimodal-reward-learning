@@ -450,46 +450,44 @@ def gen_traj_preferences(
     step = generator.gen_state_pairs(1)
     n_features = step[0].shape[1]
 
-    # (n_trials, comparison index, first/second, feature
-    features: np.ndarray = np.empty(
-        (n_trials, prefs_per_trial, 2, n_features), dtype=step[0].dtype
-    )
+    features = np.empty((n_trials, prefs_per_trial, 2, n_features), dtype=step[0].dtype)
     logging.debug(f"{n_trials=}, {features.shape=}")
-    flip_probs: np.ndarray = np.empty((prefs_per_trial * n_trials,), dtype=np.float32)
+    flip_probs = np.empty((prefs_per_trial * n_trials,), dtype=np.float32)
 
     for trial in range(n_trials):
         logging.info(f"Collecting traj comparisons for trial {trial} of {n_trials}")
         trial_prefs = 0
         while trial_prefs < prefs_per_trial:
+            prefs_remaining = prefs_per_trial - trial_prefs
             logging.info(
-                f"Asking for {prefs_per_trial - trial_prefs} trajs or {batch_timesteps} timesteps"
+                f"Asking for {prefs_remaining} trajs or {batch_timesteps} timesteps"
             )
 
             new_features, new_probs = traj_collect_step(
                 generator=generator,
                 timesteps=batch_timesteps,
-                n_trajs=prefs_per_trial - trial_prefs,
+                n_trajs=prefs_remaining,
                 reward=reward,
                 temperature=temperature,
                 normalize_differences=normalize_differences,
             )
 
             new_diffs = new_features[:, 0] - new_features[:, 1]
+            old_diffs = (
+                features[trial, :trial_prefs, 0] - features[trial, :trial_prefs, 1]
+            )
             assert not np.any(np.all(new_diffs == 0, axis=1))
             assert new_features.shape[1] == 2
 
             logging.debug(f"{features.shape=}")
             indices = (
-                find_soft_unique_indices(
-                    new=new_diffs,
-                    core=features[trial, :trial_prefs, 0]
-                    - features[trial, :trial_prefs, 1],
-                )
+                find_soft_unique_indices(new=new_diffs, core=old_diffs)
                 if deduplicate
                 else np.ones_like(new_probs, dtype=bool)
             )
 
             if indices.shape[0] == 0:
+                # If no non-duplicate preferences were found, look for 10 times more next time
                 trajs_per_batch *= 10
                 batch_timesteps = max_traj_batch_size(
                     n_trajs=trajs_per_batch,
@@ -601,8 +599,8 @@ def traj_collect_step(
         *generator.gen_traj_pairs(timesteps=timesteps, n_trajs=n_trajs)
     ):
         assert traj_a.features is not None and traj_b.features is not None
-        feature_a: np.ndarray = traj_a.features.numpy().sum(axis=0, keepdims=True)
-        feature_b: np.ndarray = traj_b.features.numpy().sum(axis=0, keepdims=True)
+        feature_a: np.ndarray = traj_a.features.sum(axis=0, keepdims=True)
+        feature_b: np.ndarray = traj_b.features.sum(axis=0, keepdims=True)
         features = np.stack((feature_a, feature_b), axis=1)
         assert features.shape[:2] == (1, 2)
 

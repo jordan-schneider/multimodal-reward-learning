@@ -186,6 +186,7 @@ def main(
             feature_batch[i] = torch.tensor(env.make_features(), device=device)
 
             actions, _, _ = policy.act(obs, firsts, policy.initial_state(n_envs))
+            actions = cast(torch.Tensor, actions)
             action_batch[i] = actions
 
             rgb_env.act(actions.cpu().numpy())
