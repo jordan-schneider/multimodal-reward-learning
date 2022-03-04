@@ -9,6 +9,7 @@ from typing import Callable, List, Literal, Optional, Tuple, cast
 import fire  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
 import numpy as np
+from mrl.dataset.roller import procgen_rollout_dataset, procgen_rollout_features
 from mrl.envs.feature_envs import FeatureEnv  # type: ignore
 from mrl.envs.util import FEATURE_ENV_NAMES, get_root_env, make_env
 from mrl.folders import HyperFolders
@@ -19,8 +20,6 @@ from mrl.util import (
     max_traj_batch_size,
     normalize_diffs,
     np_remove,
-    procgen_rollout_dataset,
-    procgen_rollout_features,
     setup_logging,
 )
 from phasic_policy_gradient.ppg import PhasicValueModel
@@ -448,10 +447,11 @@ def gen_traj_preferences(
             )
 
     step = generator.gen_state_pairs(1)
+    n_features = step[0].shape[1]
 
     # (n_trials, comparison index, first/second, feature
     features: np.ndarray = np.empty(
-        (n_trials, prefs_per_trial, 2, step[0].shape[1]), dtype=step[0].dtype
+        (n_trials, prefs_per_trial, 2, n_features), dtype=step[0].dtype
     )
     logging.debug(f"{n_trials=}, {features.shape=}")
     flip_probs: np.ndarray = np.empty((prefs_per_trial * n_trials,), dtype=np.float32)
@@ -608,7 +608,7 @@ def traj_collect_step(
         feature_diff = normalize_diffs(features, normalize_differences)
         assert len(feature_diff.shape) == 2
 
-        if not np.any(feature_diff > 1e-8):
+        if not np.any(np.abs(feature_diff) > 1e-8):
             continue
 
         oriented_features, probs = orient_features(
@@ -627,6 +627,9 @@ def traj_collect_step(
         assert not np.allclose(
             oriented_features[:, 0], oriented_features[:, 1]
         ), f"equal features not filtered"
+        assert np.all(oriented_features, features) or np.all(
+            oriented_features[[1, 0]], features
+        )
 
         feature_batch.append(oriented_features)
         probs_batch.append(probs)

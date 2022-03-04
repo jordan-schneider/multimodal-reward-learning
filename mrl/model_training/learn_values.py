@@ -11,16 +11,11 @@ import numpy as np  # type: ignore
 import torch
 from gym3 import ExtractDictObWrapper  # type: ignore
 from mrl.dataset.offline_buffer import RlDataset
+from mrl.dataset.roller import procgen_rollout
 from mrl.envs.util import ENV_NAMES, make_env
 from mrl.model_training.online_batcher import BatchGenerator
 from mrl.model_training.writer import SequentialWriter
-from mrl.util import (
-    find_best_gpu,
-    find_policy_path,
-    procgen_rollout,
-    reinit,
-    setup_logging,
-)
+from mrl.util import find_best_gpu, find_policy_path, reinit, setup_logging
 from phasic_policy_gradient.ppg import PhasicValueModel
 from procgen import ProcgenGym3Env
 from torch.utils.tensorboard import SummaryWriter
@@ -159,17 +154,18 @@ def train_q(
         loss = torch.zeros(1)
 
         if n > 0:
-            q_pred = q.forward(states, actions).cpu()
+            q_pred = q.forward(torch.tensor(states), torch.tensor(actions)).cpu()
             writer.add_histogram("train/q_pred", q_pred)
 
             with torch.no_grad():
-                v_next = q_target.state_value(next_states).cpu()
+                v_next = q_target.state_value(torch.tensor(next_states)).cpu()
                 q_targ = rewards + q.discount_rate * v_next
                 writer.add_histogram("train/q_targ", q_targ)
             assert q_pred.shape == (n,), f"q_pred={q_pred.shape} not expected ({n})"
             assert q_targ.shape == (n,), f"q_targ={q_targ.shape} not expected ({n})"
             loss += torch.sum((q_pred - q_targ) ** 2)
 
+        # TODO: Update to use firsts intsead of dones
         final_states = batch.states[:-1][batch.dones]
         if len(final_states) > 0:
 
@@ -180,6 +176,7 @@ def train_q(
 
             q_pred_final = q.state_value(final_states).cpu()
             writer.add_histogram("train/q_pred_final", q_pred_final)
+            # TODO: Update to use firsts intsead of dones
             q_targ_final = batch.rewards[:-1][batch.dones]
             writer.add_histogram("train/q_targ_final", q_targ_final)
             loss += torch.sum((q_pred_final - q_targ_final) ** 2)
@@ -240,7 +237,8 @@ def train_q_trunc_returns(
 
         optim.zero_grad()
         q_pred = q.forward(
-            states.to(device=q.device), actions.to(device=q.device)
+            torch.tensor(states).to(device=q.device),
+            torch.tensor(actions).to(device=q.device),
         ).cpu()
         assert q_pred.shape == (n,), f"q_pred={q_pred.shape} not expected ({n})"
         loss = torch.sum((q_pred - partial_returns) ** 2)
@@ -440,7 +438,7 @@ def eval_q_rmse(
     writer: SequentialWriter,
 ) -> float:
     loss = 0.0
-    for traj in data.trajs(include_incomplete=False):
+    for traj in data.trajs(include_last=False):
         assert (
             traj.states is not None
             and traj.actions is not None
@@ -449,9 +447,11 @@ def eval_q_rmse(
         assert len(traj.states) > 0, "0 states in this traj"
         assert len(traj.actions) > 0, "0 actions in this traj"
         assert len(traj.rewards) > 0, "0 rewards in this traj"
-        values = q_fn(traj.states, traj.actions).detach().cpu()
+        values = (
+            q_fn(torch.tensor(traj.states), torch.tensor(traj.actions)).detach().cpu()
+        )
         writer.add_histogram("val/q_pred", values)
-        returns = compute_returns(traj.rewards.numpy(), discount_rate)
+        returns = compute_returns(torch.tensor(traj.rewards).numpy(), discount_rate)
         writer.add_histogram("val/returns", returns)
 
         errors = values - returns
@@ -639,7 +639,7 @@ def train_v_trunc_returns(
         n = len(states)
 
         optim.zero_grad()
-        v_pred = v.value(states.to(device=v.device)).cpu()
+        v_pred = v.value(torch.tensor(states).to(device=v.device)).cpu()
         assert v_pred.shape == (n,), f"v_pred={v_pred.shape} not expected ({n})"
         loss = torch.sum((v_pred - partial_returns) ** 2)
 
@@ -714,15 +714,16 @@ def train_v(
         n = len(states)
 
         optim.zero_grad()
-        v_pred = v.value(states).cpu()
+        v_pred = v.value(torch.tensor(states)).cpu()
 
         with torch.no_grad():
-            v_next = v.value(next_states).cpu()
+            v_next = v.value(torch.tensor(next_states)).cpu()
         v_targ = rewards + discount_rate * v_next
         assert v_pred.shape == (n,), f"v_pred={v_pred.shape} not expected ({n})"
         assert v_targ.shape == (n,), f"v_targ={v_targ.shape} not expected ({n})"
         loss = torch.sum((v_pred - v_targ) ** 2)
 
+        # TODO: Update to use firsts intsead of dones
         v_pred_final = v.value(batch.states[batch.dones]).cpu()
         v_targ_final = batch.rewards[batch.dones].cpu()
         loss += torch.sum((v_pred_final - v_targ_final) ** 2)
@@ -757,10 +758,10 @@ def eval_v_rmse(
     device: torch.device,
 ) -> float:
     loss = 0.0
-    for traj in data.trajs(include_incomplete=False):
+    for traj in data.trajs(include_last=False):
         assert traj.states is not None and traj.rewards is not None
-        values = v_fn(traj.states[:-1].to(device=device)).detach().cpu()
-        returns = compute_returns(traj.rewards.numpy(), discount_rate)[:-1]
+        values = v_fn(torch.tensor(traj.states[:-1]).to(device=device)).detach().cpu()
+        returns = compute_returns(traj.rewards, discount_rate)[:-1]
 
         errors = values - returns
         loss += torch.sqrt(torch.mean(errors ** 2)).item()

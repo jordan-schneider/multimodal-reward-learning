@@ -35,24 +35,26 @@ dones_strategy = arrays(shape=traj_length, elements=booleans(), dtype=bool).filt
 
 
 @given(
-    states_np=states_strategy,
-    actions_np=actions_strategy,
-    rewards_np=rewards_strategy,
-    dones_np=dones_strategy,
+    states=states_strategy,
+    actions=actions_strategy,
+    rewards=rewards_strategy,
+    firsts=dones_strategy,
 )
 def test_sars_dataset_index(
-    states_np: np.ndarray,
-    actions_np: np.ndarray,
-    rewards_np: np.ndarray,
-    dones_np: np.ndarray,
+    states: np.ndarray,
+    actions: np.ndarray,
+    rewards: np.ndarray,
+    firsts: np.ndarray,
 ) -> None:
     logging.basicConfig(level="DEBUG")
-    states, actions, rewards, dones = np2t(states_np, actions_np, rewards_np, dones_np)
-    dataset = SarsDataset(states=states, actions=actions, rewards=rewards, dones=dones)
+    firsts[0] = True
+    dataset = SarsDataset(
+        states=states, actions=actions, rewards=rewards, firsts=firsts
+    )
     l = len(dataset)
     raw_index = 0
     for dataset_index in range(l):
-        while dones[raw_index]:
+        while firsts[raw_index + 1]:
             raw_index += 1
         actual_states, actual_actions, actual_rewards, actual_nextstates = dataset[
             dataset_index
@@ -86,20 +88,61 @@ def test_sars_dataset_index(
     n_envs=integers(min_value=1, max_value=10),
 )
 @settings(deadline=None)
-def test_trajs(timesteps: int, n_envs: int) -> None:
+def test_trajs_done_every_step(timesteps: int, n_envs: int) -> None:
     states = np.empty((timesteps, n_envs, 64, 64, 3))
     actions = np.empty((timesteps, n_envs), dtype=np.int8)
     rewards = np.empty((timesteps, n_envs))
     firsts = np.ones((timesteps, n_envs), dtype=bool)
 
     data = RlDataset.from_gym3(
-        states=states, actions=actions, rewards=rewards, firsts=firsts
+        states=states,
+        actions=actions,
+        rewards=rewards,
+        firsts=firsts,
+        keep_incomplete=True,
     )
     n_trajs = 0
-    for traj in data.trajs(include_incomplete=True):
+    for traj in data.trajs(include_last=True):
         n_trajs += 1
+        assert traj.states is not None
+        assert traj.actions is not None
+        assert traj.rewards is not None
         assert traj.states.shape == (1, 64, 64, 3)
         assert traj.actions.shape == (1,)
         assert traj.rewards.shape == (1,)
 
     assert n_trajs == timesteps * n_envs
+
+
+@given(
+    trajs_per_env=integers(min_value=2, max_value=1000),
+    n_envs=integers(min_value=1, max_value=10),
+    length=integers(min_value=1, max_value=10),
+)
+@settings(deadline=None)
+def test_trajs(trajs_per_env: int, n_envs: int, length: int) -> None:
+    timesteps = trajs_per_env * length
+    states = np.empty((timesteps, n_envs, 64, 64, 3))
+    actions = np.empty((timesteps, n_envs), dtype=np.int8)
+    rewards = np.empty((timesteps, n_envs))
+    firsts = np.zeros((timesteps, n_envs), dtype=bool)
+    firsts[::length] = True
+
+    data = RlDataset.from_gym3(
+        states=states,
+        actions=actions,
+        rewards=rewards,
+        firsts=firsts,
+        keep_incomplete=False,
+    )
+    n_trajs = 0
+    for traj in data.trajs(include_last=True):
+        n_trajs += 1
+        assert traj.states is not None
+        assert traj.actions is not None
+        assert traj.rewards is not None
+        assert traj.states.shape == (length, 64, 64, 3)
+        assert traj.actions.shape == (length,)
+        assert traj.rewards.shape == (length,)
+
+    assert n_trajs == (trajs_per_env - 1) * n_envs

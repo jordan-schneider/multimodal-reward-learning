@@ -3,8 +3,8 @@ from typing import Final
 import numpy as np
 from gym3 import ExtractDictObWrapper  # type: ignore
 from mrl.dataset.random_policy import RandomPolicy
+from mrl.dataset.roller import procgen_rollout
 from mrl.envs import Miner
-from mrl.util import procgen_rollout
 
 
 def test_rollout_fills_arrays():
