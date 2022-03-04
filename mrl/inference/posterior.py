@@ -11,7 +11,8 @@ import numpy as np
 import pandas as pd  # type: ignore
 import seaborn as sns  # type: ignore
 from mrl.aligned_rewards.aligned_reward_set import AlignedRewardSet
-from mrl.configs import FixedInference, GammaInference, InferenceNoise, TrueInference
+from mrl.configs import (FixedInference, GammaInference, InferenceNoise,
+                         TrueInference)
 from mrl.inference.results import Results
 from mrl.inference.sphere import find_centroid
 from mrl.reward_model.boltzmann import boltzmann_likelihood
@@ -43,7 +44,7 @@ def compare_modalities(
     plot_individual: bool = False,
     save_all: bool = False,
     max_ram: str = "100G",
-    seed: int = 0,
+    seed: Optional[int] = None,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> None:
     try:

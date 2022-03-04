@@ -8,7 +8,9 @@ from numpy.testing import assert_allclose
 from tqdm import tqdm  # type: ignore
 
 
-def make_sphere_cover(n_samples: int, rng: np.random.Generator, dims: int = 5) -> np.ndarray:
+def make_sphere_cover(
+    n_samples: int, rng: np.random.Generator, dims: int = 5
+) -> np.ndarray:
     samples = rng.standard_normal(size=(n_samples, dims))
     samples = (samples.T / np.linalg.norm(samples, axis=1)).T
     assert samples.shape == (n_samples, dims)
@@ -16,7 +18,9 @@ def make_sphere_cover(n_samples: int, rng: np.random.Generator, dims: int = 5) -
     return samples
 
 
-def find_volumes(diffs: np.ndarray, reward_samples: int, seed: int, outdir: Path) -> None:
+def find_volumes(
+    diffs: np.ndarray, reward_samples: int, seed: Optional[int], outdir: Path
+) -> None:
     rng = np.random.default_rng(seed)
     rewards = make_sphere_cover(reward_samples, rng)
 
@@ -53,7 +57,7 @@ def volume(
     outdir: Path,
     n_prefs: int = -1,
     reward_samples: int = 10_000,
-    seed: int = 0,
+    seed: Optional[int] = None,
     reward_path: Optional[Path] = None,
 ) -> None:
     data_name = Path(data_name)
