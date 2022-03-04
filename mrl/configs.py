@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, List, Literal
+from typing import Any, List, Literal, Optional
 
 from hydra.core.config_store import ConfigStore
 from omegaconf import MISSING
@@ -95,7 +95,7 @@ class ExperimentConfig:
     preference: PreferenceConfig = PreferenceConfig()
     inference: InferenceConfig = InferenceConfig()
     max_ram: str = "100G"
-    seed: int = 0
+    seed: Optional[int] = None
     overwrite: bool = False
     verbosity: Literal["INFO", "DEBUG"] = "INFO"
 

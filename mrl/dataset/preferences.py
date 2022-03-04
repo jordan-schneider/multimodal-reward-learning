@@ -43,7 +43,7 @@ def gen_preferences(
         "diff-length", "sum-length", "max-length", "log-diff-length", None
     ] = None,
     overwrite: bool = False,
-    seed: int = 0,
+    seed: Optional[int] = None,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> Tuple[Path, Path]:
     rootdir = Path(rootdir)
@@ -393,6 +393,7 @@ def gen_traj_preferences(
     normalize_differences: Literal[
         "diff-length", "sum-length", "max-length", "log-diff-length", None
     ] = None,
+    seed: Optional[int] = None,
     overwrite: bool = False,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
 ) -> Path:
@@ -411,7 +412,7 @@ def gen_traj_preferences(
     outname = str(outname)
     reward = np.load(rootdir / "reward.npy")
 
-    rng = np.random.default_rng()
+    rng = np.random.default_rng(seed=seed)
 
     generator = Generator(
         env_name=env,
