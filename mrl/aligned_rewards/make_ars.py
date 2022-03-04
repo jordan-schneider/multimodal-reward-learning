@@ -45,18 +45,18 @@ def get_features(
         logging.info(f"Loading features from {feature_file}")
         all_features = pkl.load(open(feature_file, "rb"))
         if states_remaining > 0:
-            new_states = all_features["state"]
-            features["state"] = np.concatenate((features["state"], new_states), axis=0)
-            states_remaining -= new_states.shape[0]
+            states = all_features["state"]
+            features["state"] = np.concatenate((features["state"], states), axis=0)
+            states_remaining -= states.shape[0]
             logging.info(
-                f"Loaded {new_states.shape[0]} state features, {states_remaining} remaining."
+                f"Loaded {states.shape[0]} state features, {states_remaining} remaining."
             )
         if trajs_remaining > 0:
-            new_trajs = all_features["traj"]
-            features["traj"] = np.concatenate((features["traj"], new_trajs), axis=0)
-            trajs_remaining -= new_trajs.shape[0]
+            trajs = all_features["traj"]
+            features["traj"] = np.concatenate((features["traj"], trajs), axis=0)
+            trajs_remaining -= trajs.shape[0]
             logging.info(
-                f"Loaded {new_trajs.shape[0]} trajectory features, {states_remaining} remaining."
+                f"Loaded {trajs.shape[0]} trajectory features, {states_remaining} remaining."
             )
 
     if states_remaining > 0:
@@ -78,7 +78,7 @@ def get_features(
         if batch_timesteps == -1:
             one_step = procgen_rollout_dataset(
                 env=env,
-                policy=get_policy(None, env=env),
+                policy=policy,
                 timesteps=1,
                 flags=["feature", "first"],
             )
