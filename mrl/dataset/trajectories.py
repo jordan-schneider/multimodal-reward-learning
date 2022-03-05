@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import (
     Callable,
     Dict,
@@ -78,6 +79,10 @@ class TrajectoryDataset:
             bounds_list: List[Tuple[int, int]] = []
             for env in range(n_envs):
                 firsts_index = np.nonzero(firsts[:, env])[0]
+                if len(firsts_index) == 0:
+                    logging.warning("No env restart in entire rollout.")
+                    bounds_list.append((0, 0))
+                    continue
                 bounds_list.append((firsts_index[0], firsts_index[-1]))
 
             bounds = np.array(bounds_list)
