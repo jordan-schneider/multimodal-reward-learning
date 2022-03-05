@@ -127,7 +127,7 @@ def max_traj_batch_size(n_trajs: int, n_parallel_envs: int, step_nbytes: int) ->
     steps_that_will_fit = int(free_memory / step_nbytes * 0.8)
 
     batch_timesteps = min(steps_to_done, steps_that_will_fit)
-    batch_timesteps = max(batch_timesteps, 2)
+    batch_timesteps = max(batch_timesteps, 1001)
     logging.info(f"{batch_timesteps=}")
     return batch_timesteps
 
