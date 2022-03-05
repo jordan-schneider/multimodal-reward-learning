@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union, c
 
 import numpy as np
 import torch
-from mrl.dataset.offline_buffer import RlDataset
+from mrl.dataset.trajectories import TrajectoryDataset
 from mrl.envs.feature_envs import FeatureEnv
 from mrl.envs.util import get_root_env
 from mrl.memprof import get_memory
@@ -180,6 +180,7 @@ class DatasetRoller:
             "first",
             "feature",
         ],
+        remove_incomplete: bool = False,
         tqdm: bool = False,
     ):
         self.env = env
@@ -213,6 +214,8 @@ class DatasetRoller:
         self.features = self.make_array(
             (n_actions + 1, env.num, self.root_env.n_features), "feature"
         )
+
+        self.remove_incomplete = remove_incomplete
 
     def make_array(
         self, shape: Tuple[int, ...], name: str, dtype=np.float32
@@ -259,13 +262,11 @@ class DatasetRoller:
                 self.actions[t] = action
             return first
 
-    def roll(self) -> RlDataset:
+    def roll(self) -> TrajectoryDataset:
         if self.n_trajs is not None:
             self.roll_fixed_trajs()
-            keep_incomplete = False
         elif self.n_actions > 0:
             self.roll_fixed_actions()
-            keep_incomplete = True
         else:
             raise ValueError("Must speficy n_trajs if timesteps=-1")
 
@@ -280,13 +281,13 @@ class DatasetRoller:
             )
         )
 
-        return RlDataset.from_gym3(
+        return TrajectoryDataset.from_gym3(
             states=states_arr,
             actions=actions_arr,
             rewards=rewards_arr,
             firsts=firsts_arr,
             features=features_arr,
-            keep_incomplete=keep_incomplete,
+            remove_incomplete=self.remove_incomplete,
         )
 
     def roll_fixed_actions(self):
@@ -334,14 +335,16 @@ def procgen_rollout_dataset(
         "first",
         "feature",
     ],
+    remove_incomplete: bool = True,
     tqdm: bool = False,
-) -> RlDataset:
+) -> TrajectoryDataset:
     roller = DatasetRoller(
         env=env,
         policy=policy,
         n_actions=timesteps,
         n_trajs=n_trajs,
         flags=flags,
+        remove_incomplete=remove_incomplete,
         tqdm=tqdm,
     )
     return roller.roll()
