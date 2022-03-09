@@ -177,7 +177,7 @@ def make_inference_outdir(config: ExperimentConfig) -> Path:
     elif inference_noise.name == "gt":
         inference_temp_str = "gt"
 
-    ars_name = config.ars_name.strip(".npy")
+    ars_name = config.ars_name.strip(".npy").replace(".", "-")
 
     if (normalize := config.preference.normalize_differences) is None:
         norm_str = "no-norm"
