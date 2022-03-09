@@ -25,6 +25,7 @@ dependencies:
     - scipy
     - gputil
     - hydra
+    - pyyaml
     - git+https://github.com/jordan-schneider/omegaconf.git
     # Dev
     - pytest

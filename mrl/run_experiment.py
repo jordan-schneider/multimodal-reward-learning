@@ -3,7 +3,8 @@ from pathlib import Path
 from typing import Literal, cast
 
 import hydra
-from omegaconf import MISSING
+import yaml
+from omegaconf import MISSING, OmegaConf
 
 from mrl.aligned_rewards.make_ars import main as make_ars
 from mrl.configs import (
@@ -36,6 +37,8 @@ def main(config: ExperimentConfig):
     rootdir = Path(config.rootdir)
     inference_outdir = make_inference_outdir(config)
     setup_logging(level=config.verbosity, outdir=inference_outdir, force=True)
+
+    write_config(config, inference_outdir)
 
     data_outname = make_pref_outname(
         config.preference.prefs_per_trial * config.n_trials,
@@ -129,6 +132,11 @@ def main(config: ExperimentConfig):
         seed=config.seed,
         verbosity=config.verbosity,
     )
+
+
+def write_config(config: ExperimentConfig, inference_outdir: Path) -> None:
+    config_yaml = OmegaConf.to_yaml(config)
+    yaml.dump(config_yaml, (inference_outdir / "config.yaml").open("w"))
 
 
 def make_pref_outname(
