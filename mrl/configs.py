@@ -98,6 +98,7 @@ class ExperimentConfig:
     seed: Optional[int] = None
     overwrite: bool = False
     verbosity: Literal["INFO", "DEBUG"] = "INFO"
+    hydra = {"output_subdir": "null"}
 
 
 def register_configs() -> None:
