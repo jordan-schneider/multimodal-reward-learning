@@ -12,7 +12,6 @@ from mrl.configs import (
     FixedPreference,
     FlipProb,
     GammaInference,
-    TrueInference,
     register_configs,
 )
 from mrl.dataset.preferences import (
@@ -153,6 +152,7 @@ def make_inference_outdir(config: ExperimentConfig) -> Path:
             "data-noise",
             "inference-fn",
             "inference-temp",
+            "ars",
             "normalization",
             "dedup",
         ],
@@ -164,6 +164,20 @@ def make_inference_outdir(config: ExperimentConfig) -> Path:
     elif preference_noise.name == "flip-prob":
         preference_noise = cast(FlipProb, preference_noise)
         data_noise = f"flip-{preference_noise.prob}"
+
+    inference_noise = config.inference.noise
+    if inference_noise.name == "gamma":
+        inference_noise = cast(GammaInference, inference_noise)
+        k = inference_noise.k
+        theta = inference_noise.theta
+        inference_temp_str = f"gamma({k}, {theta})"
+    elif inference_noise.name == "fixed":
+        inference_noise = cast(FixedInference, inference_noise)
+        inference_temp_str = f"fixed-{inference_noise.temp}"
+    elif inference_noise.name == "gt":
+        inference_temp_str = "gt"
+
+    ars_name = config.ars_name.strip(".npy")
 
     if (normalize := config.preference.normalize_differences) is None:
         norm_str = "no-norm"
@@ -181,23 +195,12 @@ def make_inference_outdir(config: ExperimentConfig) -> Path:
 
     dedup_str = "dedup" if config.preference.deduplicate else "no-dedup"
 
-    inference_noise = config.inference.noise
-    if inference_noise.name == "gamma":
-        inference_noise = cast(GammaInference, inference_noise)
-        k = inference_noise.k
-        theta = inference_noise.theta
-        inference_temp_str = f"gamma({k}, {theta})"
-    elif inference_noise.name == "fixed":
-        inference_noise = cast(FixedInference, inference_noise)
-        inference_temp_str = f"fixed-{inference_noise.temp}"
-    elif inference_noise.name == "gt":
-        inference_temp_str = "gt"
-
     return folders.add_experiment(
         {
             "data-noise": data_noise,
             "inference-fn": config.inference.likelihood_fn,
             "inference-temp": f"inference-{inference_temp_str}",
+            "ars": ars_name,
             "normalization": norm_str,
             "dedup": dedup_str,
         }
