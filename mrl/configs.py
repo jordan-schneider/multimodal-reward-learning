@@ -89,7 +89,7 @@ class ExperimentConfig:
     rootdir: str = (
         "/home/joschnei/multimodal-reward-learning/data/miner/near-original-reward/7"
     )
-    ars_name: str = "aligned_reward_set.npy"
+    ars_name: str = "ars.mixed.npy"
     n_trials: int = 1
     env: EnvConfig = EnvConfig()
     preference: PreferenceConfig = PreferenceConfig()
