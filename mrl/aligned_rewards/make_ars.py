@@ -81,11 +81,12 @@ def get_features(
                 policy=policy,
                 timesteps=1,
                 flags=["feature", "first"],
+                remove_incomplete=False,
             )
-            assert one_step.features is not None
-            assert one_step.features.shape[0] > 0
-            logging.debug(f"{one_step.features.shape=}")
-            nbytes = one_step.features.nbytes
+            assert one_step.data["features"] is not None
+            assert one_step.data["features"].shape[0] > 0
+            logging.debug(f"{one_step.data['features'].shape=}")
+            nbytes = one_step.data["features"].nbytes
             logging.debug(f"one_step nbytes={nbytes}")
             batch_timesteps = max_traj_batch_size(n_trajs, env.num, nbytes)
 

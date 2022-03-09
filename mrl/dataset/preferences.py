@@ -626,8 +626,8 @@ def traj_collect_step(
         assert not np.allclose(
             oriented_features[:, 0], oriented_features[:, 1]
         ), f"equal features not filtered"
-        assert np.all(oriented_features, features) or np.all(
-            oriented_features[[1, 0]], features
+        assert np.array_equal(oriented_features, features) or np.array_equal(
+            oriented_features[:, [1, 0]], features
         )
 
         feature_batch.append(oriented_features)
@@ -788,6 +788,8 @@ class Generator:
             flags=["feature", "first"],
             tqdm=self.tqdm,
         )
+        assert data_a.data["features"] is not None
+        assert data_b.data["features"] is not None
 
         return data_a.trajs(), data_b.trajs()
 
