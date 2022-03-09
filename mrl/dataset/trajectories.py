@@ -1,20 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
-from typing import (
-    Callable,
-    Dict,
-    Final,
-    Generator,
-    Iterable,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    TypeVar,
-    cast,
-)
+from dataclasses import dataclass
+from typing import (Callable, Dict, Final, Generator, Iterable, List, Literal,
+                    Optional, Tuple, TypeVar, cast)
 
 import numpy as np
 import torch
@@ -36,13 +25,12 @@ class TrajectoryDataset:
         actions: Optional[np.ndarray] = None,
         rewards: Optional[np.ndarray] = None,
         firsts: Optional[np.ndarray] = None,
-        dones: Optional[np.ndarray] = None,
         features: Optional[np.ndarray] = None,
     ) -> None:
         self.data: Dict[TrajectoryDataset.Attrs, Optional[np.ndarray]] = {
             name: value
             for name, value in zip(
-                self.NAMES, (states, actions, rewards, firsts, dones, features)
+                self.NAMES, (states, actions, rewards, firsts, features)
             )
         }
 
@@ -78,9 +66,13 @@ class TrajectoryDataset:
                 raise ValueError("No complete trajectories.")
             bounds_list: List[Tuple[int, int]] = []
             for env in range(n_envs):
-                firsts_index = np.nonzero(firsts[:, env])[0]
+                firsts_env = firsts[:, env]
+                firsts_index = np.nonzero(firsts_env)[0]
                 if len(firsts_index) == 0:
-                    logging.warning("No env restart in entire rollout.")
+                    if time >= 1000:
+                        logging.warning(
+                            "No env restart in entire rollout but 1000 timesteps passed."
+                        )
                     bounds_list.append((0, 0))
                     continue
                 bounds_list.append((firsts_index[0], firsts_index[-1]))
