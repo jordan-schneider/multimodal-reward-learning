@@ -5,9 +5,7 @@ import numpy as np
 
 
 class AlignedRewardSet:
-    def __init__(
-        self, path: Path, true_reward: np.ndarray, use_done_feature: bool = False
-    ) -> None:
+    def __init__(self, path: Path, true_reward: np.ndarray) -> None:
         self.diffs = np.load(path)
 
         assert np.all(true_reward @ self.diffs.T >= 0)
@@ -17,7 +15,9 @@ class AlignedRewardSet:
         self.true_reward = true_reward
 
     def prob_aligned(self, rewards: np.ndarray, densities: np.ndarray) -> np.ndarray:
-        assert densities.shape[0] == rewards.shape[0]
+        assert (
+            densities.shape[0] == rewards.shape[0]
+        ), f"Unequal amount of densities and rewards {densities.shape=}, {rewards.shape=}"
         assert len(densities.shape) <= 2
 
         aligned_reward_indices = np.all((rewards @ self.diffs.T) > 0, axis=1)

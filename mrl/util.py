@@ -50,6 +50,24 @@ def normalize_diffs(
     return diffs
 
 
+def normalize_vecs(x: np.ndarray) -> np.ndarray:
+    """Normalizes the vectors in an array on the 1th axis.
+
+    Args:
+        x (np.ndarray): 2D array of vectors.
+
+    Returns:
+        np.ndarray: 2D array x such that np.linalg.norm(x, axis=1) == 1
+    """
+    shape = x.shape
+    out: np.ndarray = (x.T / np.linalg.norm(x, axis=1)).T
+    assert out.shape == shape, f"shape: expected={shape} actual={out.shape}"
+    assert np.allclose(
+        np.linalg.norm(out, axis=1), 1
+    ), f"norm: expected={1} actual={np.linalg.norm(out, axis=1)}"
+    return out
+
+
 def batch(obs: torch.Tensor, obs_dims: int) -> torch.Tensor:
     if len(obs.shape) == obs_dims:
         return obs.reshape((1, *obs.shape))

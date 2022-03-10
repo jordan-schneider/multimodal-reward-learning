@@ -196,7 +196,9 @@ def gen_state_preferences(
     flip_probs: np.ndarray = np.empty((n_trials * prefs_per_trial,), dtype=np.float32)
 
     for trial in range(n_trials):
-        logging.info(f"Collecting state comparisons for trial {trial} of {n_trials}")
+        logging.info(
+            f"Collecting state comparisons for trial {trial + 1} of {n_trials}"
+        )
 
         trial_prefs = 0
         while trial_prefs < prefs_per_trial:
@@ -455,7 +457,7 @@ def gen_traj_preferences(
     flip_probs = np.empty((prefs_per_trial * n_trials,), dtype=np.float32)
 
     for trial in range(n_trials):
-        logging.info(f"Collecting traj comparisons for trial {trial} of {n_trials}")
+        logging.info(f"Collecting traj comparisons for trial {trial + 1} of {n_trials}")
         trial_prefs = 0
         while trial_prefs < prefs_per_trial:
             prefs_remaining = prefs_per_trial - trial_prefs
