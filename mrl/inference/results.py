@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd  # type: ignore
@@ -30,10 +30,11 @@ class Results:
         self.current_experiment = experiment_name
         (self.outdir / self.current_experiment).mkdir(exist_ok=True)
 
-    def update(self, name: str, value: Any) -> None:
+    def update(self, name: str, value: Any, save: bool = True) -> None:
         assert self.current_experiment is not None, "No current experiment"
         self.experiments[self.current_experiment][name] = value
-        dump(value, self.outdir / self.current_experiment / name)
+        if save:
+            dump(value, self.outdir / self.current_experiment / name)
 
     def has(self, name: str) -> bool:
         return any(name in exp.keys() for exp in self.experiments.values())
@@ -72,6 +73,9 @@ class Results:
 
         out = out.reset_index(drop=True)
         return out
+
+    def experiment_names(self) -> List[str]:
+        return list(self.experiments.keys())
 
     def getall_gt_likelihood(self) -> pd.DataFrame:
         out = pd.DataFrame(columns=["trial", "time", "likelihood_gt"])

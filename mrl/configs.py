@@ -84,6 +84,8 @@ class ExperimentConfig:
             "_self_",
             {"preference/noise": "flip-prob"},
             {"inference/noise": "gamma"},
+            {"override hydra/hydra_logging": "none"},
+            {"override hydra/job_logging": "none"},
         ]
     )
     rootdir: str = (
@@ -98,7 +100,17 @@ class ExperimentConfig:
     seed: Optional[int] = None
     overwrite: bool = False
     verbosity: Literal["INFO", "DEBUG"] = "INFO"
-    hydra = {"output_subdir": "null"}
+    hydra: Any = field(
+        default_factory=lambda: {
+            "output_subdir": None,
+            "run": {
+                "dir": ".",
+            },
+            "sweep": {
+                "dir": ".",
+            },
+        }
+    )
 
 
 def register_configs() -> None:

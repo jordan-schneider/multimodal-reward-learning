@@ -6,6 +6,7 @@ import hydra
 import yaml
 from omegaconf import MISSING, OmegaConf
 
+from mrl.aligned_rewards.aligned_reward_set import AlignedRewardSet
 from mrl.aligned_rewards.make_ars import main as make_ars
 from mrl.configs import (
     ExperimentConfig,
@@ -21,6 +22,8 @@ from mrl.dataset.preferences import (
     gen_traj_preferences,
 )
 from mrl.folders import HyperFolders
+from mrl.inference.analysis import analysis
+from mrl.inference.plots import plot_comparisons
 from mrl.inference.posterior import compare_modalities
 from mrl.util import setup_logging
 
@@ -106,21 +109,20 @@ def main(config: ExperimentConfig):
             env_name=config.env.name,
             outdir=rootdir,
             outname=config.ars_name,
-            seed=config.seed,
+            seed=config.seed if config.seed is not None else 0,
             verbosity=config.verbosity,
         )
 
     state_temp = float(state_path.parts[-3])
     traj_temp = float(traj_path.parts[-3])
 
-    compare_modalities(
+    results = compare_modalities(
         outdir=inference_outdir,
         data_rootdir=rootdir,
         state_temp=state_temp,
         traj_temp=traj_temp,
         state_name=state_path.name,
         traj_name=traj_path.name,
-        ars_name=config.ars_name,
         max_comparisons=config.preference.prefs_per_trial,
         deduplicate=config.preference.deduplicate,
         norm_diffs=config.preference.normalize_differences,
@@ -133,10 +135,22 @@ def main(config: ExperimentConfig):
         verbosity=config.verbosity,
     )
 
+    results.start("")
+    true_reward = results.get("true_reward")
+    results.close()
+
+    analysis(
+        results=results,
+        aligned_reward_set=AlignedRewardSet(
+            path=rootdir / config.ars_name, true_reward=true_reward
+        ),
+    )
+    plot_comparisons(results=results, outdir=inference_outdir)
+
 
 def write_config(config: ExperimentConfig, inference_outdir: Path) -> None:
     config_yaml = OmegaConf.to_yaml(config)
-    yaml.dump(config_yaml, (inference_outdir / "config.yaml").open("w"))
+    (inference_outdir / "config.yaml").open("w").write(config_yaml)
 
 
 def make_pref_outname(
