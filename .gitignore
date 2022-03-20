@@ -130,7 +130,7 @@ dmypy.json
 
 # Experiment data does not go in git
 data/
-
+data
 # scratch files
 scratch.*
 
