@@ -75,6 +75,7 @@ class InferenceConfig:
     noise: InferenceNoise = MISSING
     likelihood_fn: Literal["boltzmann", "hinge"] = "boltzmann"
     use_shift: bool = False
+    save_all: bool = False
 
 
 @dataclass
@@ -93,7 +94,7 @@ class ExperimentConfig:
     )
     ars_name: str = "ars.mixed.npy"
     n_trials: int = 1
-    append_trials: bool = False
+    append: bool = False
     env: EnvConfig = EnvConfig()
     preference: PreferenceConfig = PreferenceConfig()
     inference: InferenceConfig = InferenceConfig()

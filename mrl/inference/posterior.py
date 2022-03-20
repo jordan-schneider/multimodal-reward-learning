@@ -1,7 +1,7 @@
 import logging
 from math import sqrt
 from pathlib import Path
-from typing import Dict, Generator, List, Literal, Optional, cast
+from typing import Dict, Generator, List, Literal, Optional, Tuple, cast
 
 import bitmath  # type: ignore
 import fire  # type: ignore
@@ -35,6 +35,8 @@ def compare_modalities(
     n_trials: int = 1,
     plot_individual: bool = False,
     save_all: bool = False,
+    state_start_trial: int = 0,
+    traj_start_trial: int = 0,
     max_ram: str = "100G",
     seed: Optional[int] = None,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
@@ -75,6 +77,9 @@ verbosity={verbosity}"""
             state_name=state_name,
             traj_name=traj_name,
             dedup=deduplicate,
+            state_start_trial=state_start_trial,
+            traj_start_trial=traj_start_trial,
+            norm=norm_diffs,
         )
 
         results.start("")
@@ -101,6 +106,7 @@ verbosity={verbosity}"""
 
         reward_path = data_rootdir / "reward.npy"
         true_reward = load_ground_truth(reward_path=reward_path)
+        logging.debug(f"{true_reward=} from {reward_path=}")
 
         max_ram_nbytes = int(bitmath.parse_string_unsafe(max_ram).bytes)
         trial_batches = load_comparison_data(
@@ -188,25 +194,33 @@ def collect_paths(
     traj_temp: float,
     state_name: str,
     traj_name: str,
+    state_start_trial: int,
+    traj_start_trial: int,
     dedup: bool,
-) -> Dict[str, Path]:
+    norm: str,
+) -> Dict[str, Tuple[Path, int]]:
     dedup_str = "dedup" if dedup else "no-dedup"
-    paths: Dict[str, Path] = {}
-    state_root = rootdir / f"prefs/state/{state_temp}/{dedup_str}/{state_name}.features"
+    paths: Dict[str, Tuple[Path, int]] = {}
+    state_root = (
+        rootdir
+        / f"prefs/state/{state_temp}/{dedup_str}/norm-{norm}/{state_name}.features"
+    )
     state_path = Path(str(state_root) + ".npy")
 
-    traj_root = rootdir / f"prefs/traj/{traj_temp}/{dedup_str}/{traj_name}.features"
+    traj_root = (
+        rootdir / f"prefs/traj/{traj_temp}/{dedup_str}/norm-{norm}/{traj_name}.features"
+    )
     traj_path = Path(str(traj_root) + ".npy")
 
     if state_path.exists():
         logging.info(f"Loading states from {state_path}")
-        paths["state"] = state_root
+        paths["state"] = (state_root, state_start_trial)
     else:
         logging.warning(f"No file found at {state_path}")
 
     if traj_path.exists():
         logging.info(f"Loading trajectories from {traj_path}")
-        paths["traj"] = traj_root
+        paths["traj"] = (traj_root, traj_start_trial)
     else:
         logging.warning(f"No file found at {traj_path}")
 
@@ -225,7 +239,7 @@ def get_reward_ndims(path: Path) -> int:
 
 
 def load_comparison_data(
-    paths: Dict[str, Path],
+    paths: Dict[str, Tuple[Path, int]],
     max_comparisons: int,
     n_trials: int,
     ram_free: int,
@@ -233,7 +247,7 @@ def load_comparison_data(
 ) -> Generator[Dict[str, np.ndarray], None, None]:
     all_data: Dict[str, np.ndarray] = {}
     logging.debug(f"paths={paths}")
-    for key, path in paths.items():
+    for key, (path, start_trial) in paths.items():
         # TODO: Remove np_gather calls here, nothing is sharded anymore.
         all_trials = np_gather(
             indir=path.parent,
@@ -248,7 +262,7 @@ def load_comparison_data(
             raise RuntimeError(
                 f"{key} only has {all_trials.shape[1]} prefs per trial, need {max_comparisons}"
             )
-        all_data[key] = all_trials
+        all_data[key] = all_trials[start_trial:]
 
     logging.debug(f"data={all_data}")
 

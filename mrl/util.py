@@ -239,6 +239,7 @@ def setup_logging(
     name: str = "log.txt",
     multiple_files: bool = True,
     force: bool = False,
+    append: bool = False,
 ) -> None:
     FORMAT = "%(levelname)s:%(filename)s:%(lineno)d:%(asctime)s:%(message)s"
 
@@ -252,7 +253,7 @@ def setup_logging(
         ]
         path = str(outdir / name)
         if multiple_files and path not in files:
-            fh = logging.FileHandler(filename=path, mode="w")
+            fh = logging.FileHandler(filename=path, mode="a" if append else "w")
             fh.setLevel(level)
             fh.setFormatter(logging.Formatter(FORMAT))
             logging.getLogger().addHandler(fh)

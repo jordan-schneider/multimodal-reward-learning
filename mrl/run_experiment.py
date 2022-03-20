@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Literal, cast
+from typing import Tuple, cast
 
 import hydra
 from omegaconf import MISSING, OmegaConf
@@ -36,88 +36,19 @@ def main(config: ExperimentConfig):
         raise ValueError("Must specify inferene noise model")
     if config.inference.noise.name not in ["fixed", "gt"]:
         raise NotImplementedError("Prior noise models not implemented")
-
+    if config.overwrite and config.append:
+        raise ValueError("Can only specify one of overwrite or append")
     rootdir = Path(config.rootdir)
     inference_outdir = make_inference_outdir(config)
     setup_logging(level=config.verbosity, outdir=inference_outdir, force=True)
 
     write_config(config, inference_outdir)
 
-    data_outname = make_pref_outname(
-        config.preference.prefs_per_trial * config.n_trials,
-        config.preference.normalize_differences,
+    (state_path, state_start_trial), (traj_path, traj_start_trial) = get_prefs(
+        config, rootdir, inference_outdir
     )
-
-    noise = config.preference.noise
-    search_results_path = inference_outdir / "search_results.pkl"
-    if noise.name == "fixed" or (
-        noise.name == "flip-prob" and search_results_path.exists()
-    ):
-        if noise.name == "flip-prob":
-            cast(FlipProb, noise)
-            search_results = load(search_results_path)
-            state_temp = get_temp_from_pref_path(search_results["state"])
-            traj_temp = get_temp_from_pref_path(search_results["traj"])
-        else:
-            noise = cast(FixedPreference, noise)
-            state_temp = noise.temp
-            traj_temp = noise.temp
-
-        state_path = gen_state_preferences(
-            rootdir=rootdir,
-            env=config.env.name,
-            prefs_per_trial=config.preference.prefs_per_trial,
-            n_trials=config.n_trials,
-            n_parallel_envs=config.env.n_envs,
-            outname=data_outname,
-            temperature=state_temp,
-            deduplicate=config.preference.deduplicate,
-            normalize_step_features=config.env.normalize_step,
-            normalize_differences=config.preference.normalize_differences,
-            overwrite=config.overwrite,
-            verbosity=config.verbosity,
-        )
-        logging.debug(f"state_path returned: {state_path}")
-        traj_path = gen_traj_preferences(
-            rootdir=rootdir,
-            env=config.env.name,
-            prefs_per_trial=config.preference.prefs_per_trial,
-            n_trials=config.n_trials,
-            n_parallel_envs=config.env.n_envs,
-            outname=data_outname,
-            temperature=traj_temp,
-            deduplicate=config.preference.deduplicate,
-            normalize_step_features=config.env.normalize_step,
-            normalize_differences=config.preference.normalize_differences,
-            overwrite=config.overwrite,
-            verbosity=config.verbosity,
-        )
-        logging.debug(f"traj_path returned: {traj_path}")
-    elif noise.name == "flip-prob":
-        noise = cast(FlipProb, noise)
-
-        state_path, traj_path = gen_preferences(
-            rootdir=rootdir,
-            env=config.env.name,
-            outname=data_outname,
-            prefs_per_trial=config.preference.prefs_per_trial,
-            n_trials=config.n_trials,
-            n_calibration_prefs=noise.calibration_prefs,
-            n_envs=config.env.n_envs,
-            flip_prob=noise.prob,
-            init_state_temp=noise.init_state_temp,
-            init_traj_temp=noise.init_traj_temp,
-            deduplicate=config.preference.deduplicate,
-            normalize_step=config.env.normalize_step,
-            normalize_differences=config.preference.normalize_differences,
-            overwrite=config.overwrite,
-            verbosity=config.verbosity,
-        )
-        search_results = {
-            "state": state_path,
-            "traj": traj_path,
-        }
-        dump(search_results, inference_outdir / "search_results.pkl")
+    state_temp = get_temp_from_pref_path(state_path)
+    traj_temp = get_temp_from_pref_path(traj_path)
 
     reward_path = rootdir / "reward.npy"
     ars_path = rootdir / config.ars_name
@@ -131,10 +62,7 @@ def main(config: ExperimentConfig):
             verbosity=config.verbosity,
         )
 
-    state_temp = get_temp_from_pref_path(state_path)
-    traj_temp = get_temp_from_pref_path(traj_path)
-
-    results = Results(inference_outdir / "trials", load_contents=config.append_trials)
+    results = Results(inference_outdir / "trials", load_contents=config.append)
 
     results = compare_modalities(
         outdir=inference_outdir,
@@ -151,6 +79,9 @@ def main(config: ExperimentConfig):
         use_shift=config.inference.use_shift,
         inference_temp=config.inference.noise,
         n_trials=config.n_trials,
+        save_all=config.inference.save_all,
+        state_start_trial=state_start_trial,
+        traj_start_trial=traj_start_trial,
         max_ram=config.max_ram,
         seed=config.seed,
         verbosity=config.verbosity,
@@ -169,23 +100,92 @@ def main(config: ExperimentConfig):
     plot_comparisons(results=results, outdir=inference_outdir)
 
 
+def get_prefs(
+    config: ExperimentConfig, rootdir: Path, inference_outdir: Path
+) -> Tuple[Tuple[Path, int], Tuple[Path, int]]:
+    noise = config.preference.noise
+    search_results_path = inference_outdir / "search_results.pkl"
+    if noise.name == "fixed" or (
+        noise.name == "flip-prob" and search_results_path.exists()
+    ):
+        if noise.name == "flip-prob":
+            cast(FlipProb, noise)
+            logging.info("Temperature search already done")
+            search_results = load(search_results_path)
+            state_temp = search_results["state"]
+            traj_temp = search_results["traj"]
+        else:
+            noise = cast(FixedPreference, noise)
+            state_temp = noise.temp
+            traj_temp = noise.temp
+
+        state_path, state_start_trial = gen_state_preferences(
+            rootdir=rootdir,
+            env=config.env.name,
+            prefs_per_trial=config.preference.prefs_per_trial,
+            n_trials=config.n_trials,
+            n_parallel_envs=config.env.n_envs,
+            outname="prefs",
+            temperature=state_temp,
+            deduplicate=config.preference.deduplicate,
+            normalize_step_features=config.env.normalize_step,
+            normalize_differences=config.preference.normalize_differences,
+            append=config.append,
+            overwrite=config.overwrite,
+            verbosity=config.verbosity,
+        )
+        logging.debug(f"state_path returned: {state_path}")
+        traj_path, traj_start_trial = gen_traj_preferences(
+            rootdir=rootdir,
+            env=config.env.name,
+            prefs_per_trial=config.preference.prefs_per_trial,
+            n_trials=config.n_trials,
+            n_parallel_envs=config.env.n_envs,
+            outname="prefs",
+            temperature=traj_temp,
+            deduplicate=config.preference.deduplicate,
+            normalize_step_features=config.env.normalize_step,
+            normalize_differences=config.preference.normalize_differences,
+            append=config.append,
+            overwrite=config.overwrite,
+            verbosity=config.verbosity,
+        )
+        logging.debug(f"traj_path returned: {traj_path}")
+    elif noise.name == "flip-prob":
+        noise = cast(FlipProb, noise)
+
+        (state_path, state_start_trial), (
+            traj_path,
+            traj_start_trial,
+        ) = gen_preferences(
+            rootdir=rootdir,
+            env=config.env.name,
+            outname="prefs",
+            prefs_per_trial=config.preference.prefs_per_trial,
+            n_trials=config.n_trials,
+            n_calibration_prefs=noise.calibration_prefs,
+            n_envs=config.env.n_envs,
+            flip_prob=noise.prob,
+            init_state_temp=noise.init_state_temp,
+            init_traj_temp=noise.init_traj_temp,
+            deduplicate=config.preference.deduplicate,
+            normalize_step=config.env.normalize_step,
+            normalize_differences=config.preference.normalize_differences,
+            append=config.append,
+            overwrite=config.overwrite,
+            verbosity=config.verbosity,
+        )
+        search_results = {
+            "state": get_temp_from_pref_path(state_path),
+            "traj": get_temp_from_pref_path(traj_path),
+        }
+        dump(search_results, inference_outdir / "search_results.pkl")
+    return (state_path, state_start_trial), (traj_path, traj_start_trial)
+
+
 def write_config(config: ExperimentConfig, inference_outdir: Path) -> None:
     config_yaml = OmegaConf.to_yaml(config)
     (inference_outdir / "config.yaml").open("w").write(config_yaml)
-
-
-def make_pref_outname(
-    n_prefs: int,
-    normalize_differences: Literal[
-        "diff-length", "sum-length", "max-length", "log-diff-length", None
-    ],
-) -> str:
-    outname = str(n_prefs)
-    if normalize_differences == "diff-length":
-        outname += ".noise-norm-diff"
-    elif normalize_differences == "sum-length":
-        outname += ".noise-norm-sum"
-    return outname
 
 
 def make_inference_outdir(config: ExperimentConfig) -> Path:
@@ -250,8 +250,8 @@ def make_inference_outdir(config: ExperimentConfig) -> Path:
     )
 
 
-def get_temp_from_pref_path(state_path):
-    float(state_path.parts[-3])
+def get_temp_from_pref_path(state_path: Path) -> float:
+    return float(state_path.parts[-4])
 
 
 if __name__ == "__main__":
