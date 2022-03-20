@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import Literal, cast
 
 import hydra
-import yaml
 from omegaconf import MISSING, OmegaConf
 
 from mrl.aligned_rewards.aligned_reward_set import AlignedRewardSet
@@ -25,7 +24,8 @@ from mrl.folders import HyperFolders
 from mrl.inference.analysis import analysis
 from mrl.inference.plots import plot_comparisons
 from mrl.inference.posterior import compare_modalities
-from mrl.util import setup_logging
+from mrl.inference.results import Results
+from mrl.util import dump, load, setup_logging
 
 
 @hydra.main(config_path=None, config_name="experiment")
@@ -49,8 +49,20 @@ def main(config: ExperimentConfig):
     )
 
     noise = config.preference.noise
-    if noise.name == "fixed":
-        noise = cast(FixedPreference, noise)
+    search_results_path = inference_outdir / "search_results.pkl"
+    if noise.name == "fixed" or (
+        noise.name == "flip-prob" and search_results_path.exists()
+    ):
+        if noise.name == "flip-prob":
+            cast(FlipProb, noise)
+            search_results = load(search_results_path)
+            state_temp = get_temp_from_pref_path(search_results["state"])
+            traj_temp = get_temp_from_pref_path(search_results["traj"])
+        else:
+            noise = cast(FixedPreference, noise)
+            state_temp = noise.temp
+            traj_temp = noise.temp
+
         state_path = gen_state_preferences(
             rootdir=rootdir,
             env=config.env.name,
@@ -58,7 +70,7 @@ def main(config: ExperimentConfig):
             n_trials=config.n_trials,
             n_parallel_envs=config.env.n_envs,
             outname=data_outname,
-            temperature=noise.temp,
+            temperature=state_temp,
             deduplicate=config.preference.deduplicate,
             normalize_step_features=config.env.normalize_step,
             normalize_differences=config.preference.normalize_differences,
@@ -73,7 +85,7 @@ def main(config: ExperimentConfig):
             n_trials=config.n_trials,
             n_parallel_envs=config.env.n_envs,
             outname=data_outname,
-            temperature=noise.temp,
+            temperature=traj_temp,
             deduplicate=config.preference.deduplicate,
             normalize_step_features=config.env.normalize_step,
             normalize_differences=config.preference.normalize_differences,
@@ -83,6 +95,7 @@ def main(config: ExperimentConfig):
         logging.debug(f"traj_path returned: {traj_path}")
     elif noise.name == "flip-prob":
         noise = cast(FlipProb, noise)
+
         state_path, traj_path = gen_preferences(
             rootdir=rootdir,
             env=config.env.name,
@@ -100,6 +113,11 @@ def main(config: ExperimentConfig):
             overwrite=config.overwrite,
             verbosity=config.verbosity,
         )
+        search_results = {
+            "state": state_path,
+            "traj": traj_path,
+        }
+        dump(search_results, inference_outdir / "search_results.pkl")
 
     reward_path = rootdir / "reward.npy"
     ars_path = rootdir / config.ars_name
@@ -113,8 +131,10 @@ def main(config: ExperimentConfig):
             verbosity=config.verbosity,
         )
 
-    state_temp = float(state_path.parts[-3])
-    traj_temp = float(traj_path.parts[-3])
+    state_temp = get_temp_from_pref_path(state_path)
+    traj_temp = get_temp_from_pref_path(traj_path)
+
+    results = Results(inference_outdir / "trials", load_contents=config.append_trials)
 
     results = compare_modalities(
         outdir=inference_outdir,
@@ -123,6 +143,7 @@ def main(config: ExperimentConfig):
         traj_temp=traj_temp,
         state_name=state_path.name,
         traj_name=traj_path.name,
+        results=results,
         max_comparisons=config.preference.prefs_per_trial,
         deduplicate=config.preference.deduplicate,
         norm_diffs=config.preference.normalize_differences,
@@ -227,6 +248,10 @@ def make_inference_outdir(config: ExperimentConfig) -> Path:
             "dedup": dedup_str,
         }
     )
+
+
+def get_temp_from_pref_path(state_path):
+    float(state_path.parts[-3])
 
 
 if __name__ == "__main__":

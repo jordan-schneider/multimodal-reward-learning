@@ -16,7 +16,7 @@ def analysis(
     compute_mean_dispersions: bool = False,
 ):
     results.start("")
-    reward_samples = cast(np.ndarray, results.get("reward_samples"))
+    reward_samples = cast(np.ndarray, results.get("reward_sample"))
     true_reward = cast(np.ndarray, results.get("true_reward"))
 
     for trial in results.experiments:
@@ -24,7 +24,7 @@ def analysis(
             continue
         results.start(trial)
 
-        likelihoods = cast(Dict[str, np.ndarray], results.get("likelihoods"))
+        likelihoods = cast(Dict[str, np.ndarray], results.get("likelihood"))
         if aligned_reward_set is not None:
             logging.info("Computing P(aligned)")
             prob_aligned = {
@@ -37,11 +37,11 @@ def analysis(
 
         logging.info("Computing posterior entropies")
         entropies = {key: entropy(l) for key, l in likelihoods.items()}
-        results.update("entropies", entropies)
+        results.update("entropy", entropies)
 
         logging.info("Computing nonzero likelihood counts")
         counts = {key: np.sum(l > 0.0, axis=0) for key, l in likelihoods.items()}
-        results.update("counts", counts)
+        results.update("count", counts)
 
         logging.info("Computing raw and normalized mean rewards")
         save_means(reward_samples, likelihoods, results)
@@ -91,8 +91,8 @@ def save_means(
     for key, l in likelihoods.items():
         mean_rewards[key] = find_means(rewards=rewards, likelihoods=l)
         proj_mean_rewards[key] = normalize_vecs(mean_rewards[key])
-    results.update("mean_rewards", mean_rewards)
-    results.update("proj_mean_rewards", proj_mean_rewards)
+    results.update("mean_reward", mean_rewards)
+    results.update("proj_mean_reward", proj_mean_rewards)
 
 
 def find_means(rewards: np.ndarray, likelihoods: np.ndarray) -> np.ndarray:
@@ -135,7 +135,7 @@ def save_centroid_dispersions(
 ):
     centroid_per_modality = {}
     dispersion_centroid_per_modality = {}
-    proj_mean_rewards = results.get("proj_mean_rewards")
+    proj_mean_rewards = results.get("proj_mean_reward")
 
     for key, l in likelihoods.items():
         centroids = []
@@ -163,7 +163,7 @@ def save_centroid_dispersions(
     dispersion_centroid_per_modality[key] = np.array(dispersions)
 
     results.update("centroid_per_modality", centroid_per_modality)
-    results.update("dispersions_centroid", dispersion_centroid_per_modality)
+    results.update("dispersion_centroid", dispersion_centroid_per_modality)
     return proj_mean_rewards
 
 
