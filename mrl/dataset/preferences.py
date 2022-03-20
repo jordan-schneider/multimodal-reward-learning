@@ -42,13 +42,17 @@ def gen_preferences(
     normalize_differences: Literal[
         "diff-length", "sum-length", "max-length", "log-diff-length", None
     ] = None,
+    append: bool = False,
     overwrite: bool = False,
     seed: Optional[int] = None,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
-) -> Tuple[Path, Path]:
+) -> Tuple[Tuple[Path, int], Tuple[Path, int]]:
     rootdir = Path(rootdir)
     outdir = rootdir / "prefs"
     setup_logging(level=verbosity, outdir=outdir, multiple_files=False)
+
+    if append and overwrite:
+        raise ValueError("Cannot specify both append and overwrite.")
 
     reward = np.load(rootdir / "reward.npy")
     rng = np.random.default_rng(seed)
@@ -97,6 +101,7 @@ def gen_preferences(
         deduplicate=deduplicate,
         normalize_step_features=normalize_step,
         normalize_differences=normalize_differences,
+        append=append,
         overwrite=overwrite,
         verbosity=verbosity,
     )
@@ -113,12 +118,14 @@ def gen_preferences(
         deduplicate=deduplicate,
         normalize_step_features=normalize_step,
         normalize_differences=normalize_differences,
+        append=append,
         overwrite=overwrite,
         verbosity=verbosity,
     )
     return state_path, traj_path
 
 
+# TODO: Factor out common code between this and traj preferences
 def gen_state_preferences(
     rootdir: Path,
     env: FEATURE_ENV_NAMES,
@@ -133,22 +140,30 @@ def gen_state_preferences(
     normalize_differences: Literal[
         "diff-length", "sum-length", "max-length", "log-diff-length", None
     ] = None,
+    append: bool = False,
     overwrite: bool = False,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
-) -> Path:
+) -> Tuple[Path, int]:
     rootdir = Path(rootdir)
-    folders = HyperFolders(rootdir / "prefs", schema=["modality", "temp", "dedup"])
+
+    if append and overwrite:
+        raise ValueError("Cannot append and overwrite")
+
+    folders = HyperFolders(
+        rootdir / "prefs", schema=["modality", "temp", "dedup", "norm"]
+    )
     outdir = folders.add_experiment(
         {
             "modality": "state",
             "temp": temperature,
             "dedup": "dedup" if deduplicate else "no-dedup",
+            "norm": f"norm-{normalize_differences}",
         }
     )
-
-    setup_logging(level=verbosity, outdir=outdir, name=f"{outname}.log")
-
     outname = str(outname)
+
+    setup_logging(level=verbosity, outdir=outdir, name=f"{outname}.log", append=append)
+
     reward = np.load(rootdir / "reward.npy")
 
     rng = np.random.default_rng()
@@ -169,31 +184,59 @@ def gen_state_preferences(
         step_nbytes=generator.step_nbytes,
     )
 
+    step = generator.gen_state_pairs(1)
+    feature_dim = step[0].shape[1]
+
     if overwrite:
-        logging.info(f"Overwriting data at {outdir} with name {outname}")
-        np_remove(outdir, outname)
+        logging.info(f"Overwriting data at {outdir}")
+        np_remove(outdir, name="*")
+
+    # (trial, pref index, first/second, features)
+    features = np.empty(
+        (n_trials, prefs_per_trial, 2, feature_dim), dtype=step[0].dtype
+    )
+    flip_probs = np.empty((n_trials, prefs_per_trial), dtype=np.float32)
 
     current_prefs, current_flip_probs = load_data(outdir, outname)
 
-    if current_prefs is not None:
-        if (
-            current_prefs.shape[0] >= n_trials
-            and current_prefs.shape[1] >= prefs_per_trial
-        ):
-            logging.warning(f"No new states needed for {outdir}")
-            return outdir / outname
-        else:
-            logging.warning(
-                f"Existing data found at {outdir} with name {outname} but not enough data found, overwriting."
+    if current_prefs is not None and current_flip_probs is not None:
+        if append and current_prefs.shape[1] != prefs_per_trial:
+            raise ValueError(
+                f"Existing data uses different amount of prefs per trial, unsupported."
             )
 
-    step = generator.gen_state_pairs(1)
+        if len(current_flip_probs.shape) == 1:
+            # Old flip_probs used to be one dimensional, convert to new format
+            current_flip_probs = current_flip_probs.reshape(current_prefs.shape[:2])
 
-    # (trial, pref index, first/second, features)
-    features: np.ndarray = np.empty(
-        (n_trials, prefs_per_trial, 2, step[0].shape[1]), dtype=step[0].dtype
-    )
-    flip_probs: np.ndarray = np.empty((n_trials * prefs_per_trial,), dtype=np.float32)
+        if not append:
+            if (
+                current_prefs.shape[0] >= n_trials
+                and current_prefs.shape[1] >= prefs_per_trial
+            ):
+                logging.warning(f"No new states needed for {outdir}")
+                return outdir / outname, 0
+            else:
+                new_trials = max(0, n_trials - current_prefs.shape[0])
+                new_prefs_per_trial = max(0, prefs_per_trial - current_prefs.shape[1])
+                features = np.pad(
+                    current_prefs,
+                    [(0, new_trials), (0, new_prefs_per_trial), (0, 0), (0, 0)],
+                    "constant",
+                    constant_values=0,
+                )
+
+                if len(current_flip_probs.shape) == 1:
+                    # Old flip_probs used to be one dimensional, convert to new format
+                    current_flip_probs = current_flip_probs.reshape(
+                        current_prefs.shape[:2]
+                    )
+                flip_probs = np.pad(
+                    current_flip_probs,
+                    [(0, new_trials), (0, new_prefs_per_trial)],
+                    "constant",
+                    constant_values=0,
+                )
 
     for trial in range(n_trials):
         logging.info(
@@ -201,6 +244,10 @@ def gen_state_preferences(
         )
 
         trial_prefs = 0
+        if not append and current_prefs is not None and trial < current_prefs.shape[0]:
+            # If there is already some data in this row, start at the end of that existing data.
+            trial_prefs = current_prefs.shape[1]
+
         while trial_prefs < prefs_per_trial:
             new_features, new_probs = state_collect_step(
                 generator, batch_timesteps, reward, temperature, normalize_differences
@@ -231,35 +278,44 @@ def gen_state_preferences(
             end_index = min(trial_prefs + indices.shape[0], prefs_per_trial)
             overflow_index = end_index - trial_prefs
 
+            logging.debug(
+                f"{features.shape=}, {trial_prefs=}, {end_index=}, {indices.shape=}, {overflow_index=}"
+            )
+
             features[trial, trial_prefs:end_index] = new_features[indices][
                 :overflow_index
             ]
-            flip_probs[
-                trial * prefs_per_trial
-                + trial_prefs : trial * prefs_per_trial
-                + end_index
-            ] = new_probs[indices][:overflow_index]
+            flip_probs[trial, trial_prefs:end_index] = new_probs[indices][
+                :overflow_index
+            ]
 
             trial_prefs = end_index
 
             logging.info(f"Collected {trial_prefs} of {prefs_per_trial} preferences")
 
+    start_trial = 0
+    if append and current_prefs is not None and current_flip_probs is not None:
+        features = np.concatenate((current_prefs, features), axis=0)
+        flip_probs = np.concatenate((current_flip_probs, flip_probs), axis=0)
+        start_trial = current_prefs.shape[0]
+
     np.save(outdir / (outname + ".features.npy"), features)
     np.save(outdir / (outname + ".flip-probs.npy"), flip_probs)
 
-    plt.hist(flip_probs, bins=100)
+    plt.hist(flip_probs.flatten(), bins=100)
     plt.title(f"Histogram of noise flip probabilities (temp={temperature:0.5f})")
     plt.xlabel("Flip Probability")
     plt.xlim((0, 1))
     plt.savefig(outdir / (outname + ".flip-probs.png"))
     plt.close()
 
-    return outdir / outname
+    return outdir / outname, start_trial
 
 
 def load_data(
     outdir: Path, outname: str
 ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    logging.info(f"Loading data from {outdir}/{outname}")
     features_outpath = outdir / (outname + ".features.npy")
     flip_probs_outpath = outdir / (outname + ".flip-probs.npy")
 
@@ -268,12 +324,14 @@ def load_data(
     if features_outpath.exists() and flip_probs_outpath.exists():
         current_prefs = np.load(features_outpath)
         current_flip_probs = np.load(flip_probs_outpath)
-        if (
-            current_prefs.shape[0] * current_prefs.shape[1]
-            != current_flip_probs.shape[0]
-        ):
+
+        if len(current_flip_probs.shape) == 1:
+            # Old flip_probs used to be one dimensional, convert to new format
+            current_flip_probs = current_flip_probs.reshape(current_prefs.shape[:2])
+
+        if current_prefs.shape[:2] != current_flip_probs.shape[:2]:
             logging.warning(
-                "Differnent number of saved prefs and flip probs, deleting both."
+                "Different number of saved prefs and flip probs, deleting both."
             )
             np_remove(outdir, outname)
         else:
@@ -396,22 +454,30 @@ def gen_traj_preferences(
         "diff-length", "sum-length", "max-length", "log-diff-length", None
     ] = None,
     seed: Optional[int] = None,
+    append: bool = False,
     overwrite: bool = False,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
-) -> Path:
+) -> Tuple[Path, int]:
     rootdir = Path(rootdir)
-    folders = HyperFolders(rootdir / "prefs", schema=["modality", "temp", "dedup"])
+
+    if append and overwrite:
+        raise ValueError("Cannot append and overwrite")
+
+    folders = HyperFolders(
+        rootdir / "prefs", schema=["modality", "temp", "dedup", "norm"]
+    )
     outdir = folders.add_experiment(
         {
-            "modality": "traj",
+            "modality": "state",
             "temp": temperature,
             "dedup": "dedup" if deduplicate else "no-dedup",
+            "norm": f"norm-{normalize_differences}",
         }
     )
-
-    setup_logging(level=verbosity, outdir=outdir, name=f"{outname}.log")
-
     outname = str(outname)
+
+    setup_logging(level=verbosity, outdir=outdir, name=f"{outname}.log", append=append)
+
     reward = np.load(rootdir / "reward.npy")
 
     rng = np.random.default_rng(seed=seed)
@@ -432,33 +498,61 @@ def gen_traj_preferences(
         step_nbytes=generator.step_nbytes,
     )
 
+    step = generator.gen_state_pairs(1)
+    feature_dim = step[0].shape[1]
+
     if overwrite:
-        np_remove(outdir, outname)
+        np_remove(outdir, name="*")
+
+    # (trial, pref index, first/second, features)
+    features = np.empty(
+        (n_trials, prefs_per_trial, 2, feature_dim), dtype=step[0].dtype
+    )
+    flip_probs = np.empty((n_trials, prefs_per_trial), dtype=np.float32)
 
     current_prefs, current_flip_probs = load_data(outdir, outname)
 
-    if current_prefs is not None:
-        if (
-            current_prefs.shape[0] >= n_trials
-            and current_prefs.shape[1] >= prefs_per_trial
-        ):
-            logging.warning(f"No new states needed for {outdir}")
-            return outdir / outname
-        else:
-            logging.warning(
-                f"Existing data found at {outdir} with name {outname} but not enough data found, overwriting."
+    if current_prefs is not None and current_flip_probs is not None:
+        if append and current_prefs.shape[1] != prefs_per_trial:
+            raise ValueError(
+                f"Existing data uses different amount of prefs per trial, unsupported."
             )
 
-    step = generator.gen_state_pairs(1)
-    n_features = step[0].shape[1]
+        if len(current_flip_probs.shape) == 1:
+            # Old flip_probs used to be one dimensional, convert to new format
+            current_flip_probs = current_flip_probs.reshape(current_prefs.shape[:2])
 
-    features = np.empty((n_trials, prefs_per_trial, 2, n_features), dtype=step[0].dtype)
-    logging.debug(f"{n_trials=}, {features.shape=}")
-    flip_probs = np.empty((prefs_per_trial * n_trials,), dtype=np.float32)
+        if not append:
+            if (
+                current_prefs.shape[0] >= n_trials
+                and current_prefs.shape[1] >= prefs_per_trial
+            ):
+                logging.warning(f"No new states needed for {outdir}")
+                return outdir / outname, 0
+            else:
+                new_trials = min(0, n_trials - current_prefs.shape[0])
+                new_prefs_per_trial = min(0, prefs_per_trial - current_prefs.shape[1])
+                features = np.pad(
+                    current_prefs,
+                    [(0, new_trials), (0, new_prefs_per_trial)],
+                    "constant",
+                    constant_values=0,
+                )
+
+                flip_probs = np.pad(
+                    current_flip_probs,
+                    [(0, new_trials), (0, new_prefs_per_trial)],
+                    "constant",
+                    constant_values=0,
+                )
 
     for trial in range(n_trials):
         logging.info(f"Collecting traj comparisons for trial {trial + 1} of {n_trials}")
         trial_prefs = 0
+        if not append and current_prefs is not None and trial < current_prefs.shape[0]:
+            # If there is already some data in this row, start at the end of that existing data.
+            trial_prefs = current_prefs.shape[1]
+
         while trial_prefs < prefs_per_trial:
             prefs_remaining = prefs_per_trial - trial_prefs
             logging.info(
@@ -503,13 +597,18 @@ def gen_traj_preferences(
             features[trial, trial_prefs:end_index] = new_features[indices][
                 :overflow_index
             ]
-            flip_probs[
-                trial * prefs_per_trial
-                + trial_prefs : trial * prefs_per_trial
-                + end_index
-            ] = new_probs[indices][:overflow_index]
+            flip_probs[trial, trial_prefs:end_index] = new_probs[indices][
+                :overflow_index
+            ]
 
             trial_prefs = end_index
+            logging.info(f"Collected {trial_prefs} of {prefs_per_trial} preferences")
+
+    start_trial = 0
+    if append and current_prefs is not None and current_flip_probs is not None:
+        features = np.concatenate((current_prefs, features), axis=0)
+        flip_probs = np.concatenate((current_flip_probs, flip_probs), axis=0)
+        start_trial = current_prefs.shape[0]
 
     np.save(outdir / (outname + ".features.npy"), features)
     np.save(outdir / (outname + ".flip-probs.npy"), flip_probs)
@@ -521,7 +620,7 @@ def gen_traj_preferences(
     plt.savefig(outdir / (outname + ".flip-probs.png"))
     plt.close()
 
-    return outdir / outname
+    return outdir / outname, start_trial
 
 
 def calibrate_trajs(

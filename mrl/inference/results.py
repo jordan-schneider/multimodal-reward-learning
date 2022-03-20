@@ -80,6 +80,11 @@ class Results:
     def getall_gt_likelihood(self) -> pd.DataFrame:
         out = pd.DataFrame(columns=["trial", "time", "likelihood_gt"])
         for exp_name, exp in self.experiments.items():
+            if "likelihood" not in exp.keys():
+                logging.warning(
+                    f"No likelihood values in experiment {exp_name}, skipping"
+                )
+                continue
             likelihoods = exp["likelihood"]
             if isinstance(likelihoods, np.ndarray):
                 df = self.__make_df(["likelihood_gt"], likelihoods[-1])
