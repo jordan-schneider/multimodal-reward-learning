@@ -4,11 +4,11 @@ import fire  # type: ignore
 import gym3  # type: ignore
 import numpy as np
 from mpi4py import MPI  # type: ignore
+from mrl.envs.util import ENV_NAMES, make_env
+from mrl.util import find_policy_path
 from phasic_policy_gradient.train import train_fn
 
-from mrl.envs.util import ENV_NAMES, make_env
-from mrl.rewards import load_reward, make_rewards
-from mrl.util import find_policy_path
+# TODO: Fix the imports here
 
 
 def train(

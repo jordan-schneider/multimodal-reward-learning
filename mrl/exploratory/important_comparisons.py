@@ -5,15 +5,15 @@ from pathlib import Path
 from typing import Final
 
 import numpy as np
-import pandas as pd
-import seaborn as sns
-from matplotlib import pyplot as plt
+import pandas as pd  # type: ignore
+import seaborn as sns  # type: ignore
+from matplotlib import pyplot as plt  # type: ignore
 
 os.chdir("/home/joschnei/multimodal-reward-learning")
 
 
 def invert_permutation(p):
-    """The argument p is assumed to be some permutation of 0, 1, ..., len(p)-1. 
+    """The argument p is assumed to be some permutation of 0, 1, ..., len(p)-1.
     Returns an array s, where s[i] gives the index of i in p.
     """
     s = np.empty_like(p)
@@ -25,7 +25,8 @@ def invert_permutation(p):
 ROOTDIR: Final = Path("data/near-original-reward/7/prefs/compare-new")
 N_TRIALS: Final = 10
 dispersion_per_trial = [
-    pkl.load((ROOTDIR / f"trial-{i}/dispersion_gt.pkl").open("rb")) for i in range(N_TRIALS)
+    pkl.load((ROOTDIR / f"trial-{i}/dispersion_gt.pkl").open("rb"))
+    for i in range(N_TRIALS)
 ]
 modalities = dispersion_per_trial[0].keys()
 orders_per_trial = [
@@ -44,7 +45,10 @@ drop_in_dispersion = [
     for per_modality in dispersion_per_trial
 ]
 drop_in_dispersion = [
-    {modality: drop[invert_permutation(orders[modality])] for modality, drop in drops.items()}
+    {
+        modality: drop[invert_permutation(orders[modality])]
+        for modality, drop in drops.items()
+    }
     for orders, drops in zip(orders_per_trial, drop_in_dispersion)
 ]
 

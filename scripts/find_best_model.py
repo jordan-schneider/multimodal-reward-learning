@@ -56,8 +56,8 @@ def main(
         data = procgen_rollout_dataset(
             env, policy, timesteps=horizon, flags=["first"], tqdm=True
         )
-        assert data.firsts is not None
-        finished_trajs[model_path] = (np.sum(data.firsts), horizon)
+        assert data.data["firsts"] is not None
+        finished_trajs[model_path] = (np.sum(data.data['firsts']), horizon)
         # TODO: Check this for bugs after feature change.
         if print_all:
             print(f"{model_path} finished {finished_trajs[model_path][0]}/{horizon}")
