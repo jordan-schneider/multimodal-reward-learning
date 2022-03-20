@@ -93,6 +93,7 @@ class ExperimentConfig:
     )
     ars_name: str = "ars.mixed.npy"
     n_trials: int = 1
+    append_trials: bool = False
     env: EnvConfig = EnvConfig()
     preference: PreferenceConfig = PreferenceConfig()
     inference: InferenceConfig = InferenceConfig()

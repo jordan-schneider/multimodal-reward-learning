@@ -10,11 +10,13 @@ import numpy as np
 import pandas as pd  # type: ignore
 import seaborn as sns  # type: ignore
 from mrl.inference.results import Results
+from mrl.util import setup_logging
 
 
 def plot_comparisons(results: Results, outdir: Path) -> None:
     """Plot multiple comparison experiments"""
     if results.has("dispersion_gt"):
+        logging.info("Plotting dispersion_gt")
         dispersion_gt = results.getall("dispersion_gt")
         sns.relplot(
             data=dispersion_gt, x="time", y="dispersion_gt", hue="modality", kind="line"
@@ -24,6 +26,7 @@ def plot_comparisons(results: Results, outdir: Path) -> None:
         logging.warning("Results did not have dispersion gt")
 
     if results.has("prob_aligned"):
+        logging.info("Plotting prob_aligned")
         prob_aligned = results.getall("prob_aligned")
         sns.relplot(
             data=prob_aligned,
@@ -32,7 +35,12 @@ def plot_comparisons(results: Results, outdir: Path) -> None:
             hue="modality",
             kind="line",
         ).savefig(outdir / "prob_aligned.png")
-    elif results.has("likelihood"):
+        plt.close()
+    else:
+        logging.warning("Results did not have prob aligned")
+
+    if results.has("likelihood"):
+        logging.info("Plotting likelihood")
         likelihoods_gt = results.getall_gt_likelihood()
         sns.relplot(
             data=likelihoods_gt,
@@ -43,12 +51,13 @@ def plot_comparisons(results: Results, outdir: Path) -> None:
         ).savefig(outdir / "likelihood_gt.png")
         plt.close()
     else:
-        logging.warning("Results has neither prob aligned or likelihood")
+        logging.warning("Results did not have likelihood gt")
 
-    if results.has("entropies"):
-        entropies = results.getall("entropies")
+    if results.has("entropy"):
+        logging.info("Plotting entropy")
+        entropies = results.getall("entropy")
         sns.relplot(
-            data=entropies, x="time", y="entropies", hue="modality", kind="line"
+            data=entropies, x="time", y="entropy", hue="modality", kind="line"
         ).savefig(outdir / "entropy.png")
     else:
         logging.warning("Results does not have entropies")
@@ -58,15 +67,15 @@ def plot_comparison(results: Results, use_gt: bool = False) -> None:
     """Plot single comparison experiment"""
     assert results.current_experiment is not None, "No current experiment"
     outdir = results.outdir / results.current_experiment
-    if likelihoods := results.get("likelihoods"):
+    if likelihoods := results.get("likelihood"):
         plot_liklihoods(likelihoods, outdir)
 
         if use_gt:
             plot_gt_likelihood(likelihoods, outdir)
 
-    if entropies := results.get("entropies"):
+    if entropies := results.get("entropy"):
         plot_entropies(entropies, outdir)
-    if counts := results.get("counts"):
+    if counts := results.get("count"):
         plot_counts(counts, outdir)
 
     if dispersion_mean := results.get("dispersion_mean"):
@@ -75,10 +84,10 @@ def plot_comparison(results: Results, use_gt: bool = False) -> None:
     if centroid_per_modality := results.get("centroid_per_modality"):
         plot_rewards(rewards=centroid_per_modality, outdir=outdir, outname="centroids")
 
-    if mean_rewards := results.get("mean_rewards"):
-        plot_rewards(rewards=mean_rewards, outdir=outdir, outname="mean_rewards")
+    if mean_rewards := results.get("mean_reward"):
+        plot_rewards(rewards=mean_rewards, outdir=outdir, outname="mean_reward")
 
-    if dispersion_centroid_per_modality := results.get("dispersions_centroid"):
+    if dispersion_centroid_per_modality := results.get("dispersion_centroid"):
         plot_dispersions(
             dispersion_centroid_per_modality, outdir, outname="dispersion_centroid"
         )
@@ -261,6 +270,7 @@ def plot_entropies(entropies: Dict[str, np.ndarray], outdir: Path) -> None:
 
 def post_hoc_plot_comparisons(outdir: Path) -> None:
     outdir = Path(outdir)
+    setup_logging(level="INFO", outdir=outdir, name="post_hoc_plot_comparisons.log")
     results = Results(outdir=outdir / "trials", load_contents=True)
     plot_comparisons(results, outdir)
 

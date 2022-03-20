@@ -1,7 +1,7 @@
 import logging
 from math import sqrt
 from pathlib import Path
-from typing import Dict, Generator, Literal, Optional, cast
+from typing import Dict, Generator, List, Literal, Optional, cast
 
 import bitmath  # type: ignore
 import fire  # type: ignore
@@ -22,6 +22,7 @@ def compare_modalities(
     traj_temp: float,
     state_name: str,
     traj_name: str,
+    results: Results,
     n_samples: int = 100_000,
     max_comparisons: int = 1000,
     deduplicate: bool = False,
@@ -76,7 +77,6 @@ verbosity={verbosity}"""
             dedup=deduplicate,
         )
 
-        results = Results(outdir / "trials")
         results.start("")
 
         if inference_temp.name == "gt":
@@ -97,7 +97,7 @@ verbosity={verbosity}"""
         else:
             raise ValueError(f"Inference temp {inference_temp} not recognized")
 
-        results.update("temps", temps)
+        results.update("temp", temps)
 
         reward_path = data_rootdir / "reward.npy"
         true_reward = load_ground_truth(reward_path=reward_path)
@@ -122,9 +122,12 @@ verbosity={verbosity}"""
             # We're doing this so we can evalute the likelihood of the gt reward later.
             reward_samples = np.concatenate((reward_samples, [true_reward]), axis=0)
 
-        results.update("reward_samples", reward_samples)
+        results.update("reward_sample", reward_samples)
 
-        for trial, features in enumerate(trial_batches):
+        last_old_trial = get_last_trial(results.experiment_names())
+
+        for trial_offset, features in enumerate(trial_batches):
+            trial = last_old_trial + trial_offset + 1
             logging.info(f"Starting trial-{trial}")
             results.start(f"trial-{trial}")
 
@@ -156,6 +159,14 @@ verbosity={verbosity}"""
         logging.exception(e)
 
     return results
+
+
+def get_last_trial(experiment_names: List[str]) -> int:
+    trial = -1
+    for name in experiment_names:
+        if name.startswith("trial-"):
+            trial = max(trial, int(name[6:]))
+    return trial
 
 
 def load_ground_truth(
@@ -297,13 +308,13 @@ def make_likelihoods(
 def save_likelihoods(
     likelihoods: Dict[str, np.ndarray], results: Results, save_all: bool = False
 ) -> Results:
-    results.update("likelihoods", likelihoods, save=save_all)
+    results.update("likelihood", likelihoods, save=save_all)
     if not save_all:
         # Subsample 1% of the sampled rewards and reduce precision to save disk space by default.
         likelihood_samples = {
             k: v[::100].astype(np.float32) for k, v in likelihoods.items()
         }
-        results.update("likelihood_samples", likelihood_samples)
+        results.update("likelihood_sample", likelihood_samples)
     return results
 
 
