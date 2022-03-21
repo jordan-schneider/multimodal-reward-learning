@@ -2,11 +2,13 @@ name: mrl
 channels:
   - defaults
   - conda-forge
+  - bioconda
 dependencies:
   - python=3.8
   - mpi4py
   - cmake
   - qt=5.12.5
+  - java-jdk 
   - pip
   - pip:
     - gym3
@@ -24,7 +26,7 @@ dependencies:
     - argh
     - scipy
     - gputil
-    - hydra
+    - hydra-core
     - pyyaml
     - git+https://github.com/jordan-schneider/omegaconf.git
     # Dev
