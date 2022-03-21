@@ -468,7 +468,7 @@ def gen_traj_preferences(
     )
     outdir = folders.add_experiment(
         {
-            "modality": "state",
+            "modality": "traj",
             "temp": temperature,
             "dedup": "dedup" if deduplicate else "no-dedup",
             "norm": f"norm-{normalize_differences}",
