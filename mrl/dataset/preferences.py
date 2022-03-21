@@ -530,11 +530,11 @@ def gen_traj_preferences(
                 logging.warning(f"No new states needed for {outdir}")
                 return outdir / outname, 0
             else:
-                new_trials = min(0, n_trials - current_prefs.shape[0])
-                new_prefs_per_trial = min(0, prefs_per_trial - current_prefs.shape[1])
+                new_trials = max(0, n_trials - current_prefs.shape[0])
+                new_prefs_per_trial = max(0, prefs_per_trial - current_prefs.shape[1])
                 features = np.pad(
                     current_prefs,
-                    [(0, new_trials), (0, new_prefs_per_trial)],
+                    [(0, new_trials), (0, new_prefs_per_trial), (0, 0), (0, 0)],
                     "constant",
                     constant_values=0,
                 )
