@@ -21,6 +21,7 @@ class ExperimentDB:
         now = arrow.utcnow()
         fullpath = path.absolute()
         fullpath /= now.format("YYYY-MM-DD:HH:mm:ss")
+        fullpath.mkdir(parents=True)
         git_hash = open(self.git_dir / ".git/ORIG_HEAD", "r").readline().strip()
 
         value = self.Metadata(config=config, git_hash=git_hash)
