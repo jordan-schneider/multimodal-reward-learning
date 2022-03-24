@@ -15,11 +15,7 @@ from mrl.configs import (
     GammaInference,
     register_configs,
 )
-from mrl.dataset.preferences import (
-    gen_preferences,
-    gen_state_preferences,
-    gen_traj_preferences,
-)
+from mrl.dataset.preferences import gen_preferences, gen_preferences_flip_prob
 from mrl.folders import HyperFolders
 from mrl.inference.analysis import analysis
 from mrl.inference.plots import plot_comparisons
@@ -119,13 +115,15 @@ def get_prefs(
             state_temp = noise.temp
             traj_temp = noise.temp
 
-        state_path, state_start_trial = gen_state_preferences(
+        state_path, state_start_trial = gen_preferences(
             rootdir=rootdir,
             env=config.env.name,
+            modality="state",
             prefs_per_trial=config.preference.prefs_per_trial,
             n_trials=config.n_trials,
             n_parallel_envs=config.env.n_envs,
             outname="prefs",
+            max_length=config.preference.max_length,
             temperature=state_temp,
             deduplicate=config.preference.deduplicate,
             normalize_step_features=config.env.normalize_step,
@@ -135,13 +133,15 @@ def get_prefs(
             verbosity=config.verbosity,
         )
         logging.debug(f"state_path returned: {state_path}")
-        traj_path, traj_start_trial = gen_traj_preferences(
+        traj_path, traj_start_trial = gen_preferences(
             rootdir=rootdir,
             env=config.env.name,
+            modality="traj",
             prefs_per_trial=config.preference.prefs_per_trial,
             n_trials=config.n_trials,
             n_parallel_envs=config.env.n_envs,
             outname="prefs",
+            max_length=config.preference.max_length,
             temperature=traj_temp,
             deduplicate=config.preference.deduplicate,
             normalize_step_features=config.env.normalize_step,
@@ -157,7 +157,7 @@ def get_prefs(
         (state_path, state_start_trial), (
             traj_path,
             traj_start_trial,
-        ) = gen_preferences(
+        ) = gen_preferences_flip_prob(
             rootdir=rootdir,
             env=config.env.name,
             outname="prefs",
@@ -171,6 +171,7 @@ def get_prefs(
             deduplicate=config.preference.deduplicate,
             normalize_step=config.env.normalize_step,
             normalize_differences=config.preference.normalize_differences,
+            max_length=config.preference.max_length,
             append=config.append,
             overwrite=config.overwrite,
             verbosity=config.verbosity,

@@ -44,6 +44,7 @@ class PreferenceConfig:
     ] = "sum-length"
     deduplicate: bool = True
     noise: PreferenceNoise = MISSING
+    max_length: Optional[int] = None
 
 
 @dataclass
