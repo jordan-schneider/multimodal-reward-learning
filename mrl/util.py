@@ -28,11 +28,10 @@ def get_angle(v1: np.ndarray, v2: np.ndarray) -> float:
     )
 
 
+NORM_DIFF_MODES = Literal["diff-length", "sum-length", "max-length", "log-diff-length", None]
 def normalize_diffs(
     features: np.ndarray,
-    mode: Literal[
-        "diff-length", "sum-length", "max-length", "log-diff-length", None
-    ] = None,
+    mode: NORM_DIFF_MODES = None,
 ) -> np.ndarray:
     assert len(features.shape) == 3
     assert features.shape[1] == 2

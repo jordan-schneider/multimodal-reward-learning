@@ -6,7 +6,6 @@ from math import sqrt
 from pathlib import Path
 from typing import Callable, List, Literal, Optional, Tuple, cast
 
-import fire  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
 import numpy as np
 from mrl.dataset.roller import procgen_rollout_dataset, procgen_rollout_features
@@ -14,6 +13,7 @@ from mrl.envs.feature_envs import FeatureEnv  # type: ignore
 from mrl.envs.util import FEATURE_ENV_NAMES, get_root_env, make_env
 from mrl.folders import HyperFolders
 from mrl.util import (
+    NORM_DIFF_MODES,
     get_angle,
     get_policy,
     max_state_batch_size,
@@ -25,7 +25,7 @@ from mrl.util import (
 from phasic_policy_gradient.ppg import PhasicValueModel
 
 
-def gen_preferences(
+def gen_preferences_flip_prob(
     rootdir: Path,
     env: FEATURE_ENV_NAMES,
     outname: str,
@@ -39,9 +39,8 @@ def gen_preferences(
     sensitivity: float = 0.01,
     deduplicate: bool = False,
     normalize_step: bool = False,
-    normalize_differences: Literal[
-        "diff-length", "sum-length", "max-length", "log-diff-length", None
-    ] = None,
+    normalize_differences: NORM_DIFF_MODES = None,
+    max_length: Optional[int] = None,
     append: bool = False,
     overwrite: bool = False,
     seed: Optional[int] = None,
@@ -84,15 +83,17 @@ def gen_preferences(
         target_flip_prob=flip_prob,
         n_trajs=n_calibration_prefs,
         normalize_differences=normalize_differences,
+        max_length=max_length,
         init_temperature=init_traj_temp,
         sensitivity=sensitivity,
     )
     logging.info(f"Using temp={traj_temp} for trajs")
 
     logging.info("Generating state preferences")
-    state_path = gen_state_preferences(
+    state_path = gen_preferences(
         rootdir=rootdir,
         env=env,
+        modality="state",
         prefs_per_trial=prefs_per_trial,
         n_trials=n_trials,
         n_parallel_envs=n_envs,
@@ -107,9 +108,10 @@ def gen_preferences(
     )
 
     logging.info("Generating trajectory preferenes")
-    traj_path = gen_traj_preferences(
+    traj_path = gen_preferences(
         rootdir=rootdir,
         env=env,
+        modality="traj",
         prefs_per_trial=prefs_per_trial,
         n_trials=n_trials,
         n_parallel_envs=n_envs,
@@ -125,25 +127,24 @@ def gen_preferences(
     return state_path, traj_path
 
 
-# TODO: Factor out common code between this and traj preferences
-def gen_state_preferences(
+def gen_preferences(
     rootdir: Path,
     env: FEATURE_ENV_NAMES,
+    modality: Literal["state", "traj"],
     prefs_per_trial: int,
     n_trials: int,
     n_parallel_envs: int,
     outname: str,
+    max_length: Optional[int] = None,
     policy_path: Optional[Path] = None,
     temperature: float = 0.0,
     deduplicate: bool = False,
     normalize_step_features: bool = False,
-    normalize_differences: Literal[
-        "diff-length", "sum-length", "max-length", "log-diff-length", None
-    ] = None,
+    normalize_differences: NORM_DIFF_MODES = None,
     append: bool = False,
     overwrite: bool = False,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
-) -> Tuple[Path, int]:
+):
     rootdir = Path(rootdir)
 
     if append and overwrite:
@@ -154,13 +155,12 @@ def gen_state_preferences(
     )
     outdir = folders.add_experiment(
         {
-            "modality": "state",
+            "modality": modality,
             "temp": temperature,
             "dedup": "dedup" if deduplicate else "no-dedup",
             "norm": f"norm-{normalize_differences}",
         }
     )
-    outname = str(outname)
 
     setup_logging(level=verbosity, outdir=outdir, name=f"{outname}.log", append=append)
 
@@ -177,11 +177,9 @@ def gen_state_preferences(
         tqdm=True,
     )
 
-    states_per_batch = prefs_per_trial
-    batch_timesteps = max_state_batch_size(
-        n_states=states_per_batch,
-        n_parallel_envs=n_parallel_envs,
-        step_nbytes=generator.step_nbytes,
+    prefs_per_batch = prefs_per_trial
+    batch_timesteps = max_batch_size(
+        modality, prefs_per_trial, n_parallel_envs, generator, prefs_per_batch
     )
 
     step = generator.gen_state_pairs(1)
@@ -214,7 +212,7 @@ def gen_state_preferences(
                 current_prefs.shape[0] >= n_trials
                 and current_prefs.shape[1] >= prefs_per_trial
             ):
-                logging.warning(f"No new states needed for {outdir}")
+                logging.warning(f"No new prefs needed for {outdir}")
                 return outdir / outname, 0
             else:
                 new_trials = max(0, n_trials - current_prefs.shape[0])
@@ -240,7 +238,7 @@ def gen_state_preferences(
 
     for trial in range(n_trials):
         logging.info(
-            f"Collecting state comparisons for trial {trial + 1} of {n_trials}"
+            f"Collecting {modality} comparisons for trial {trial + 1} of {n_trials}"
         )
 
         trial_prefs = 0
@@ -249,9 +247,27 @@ def gen_state_preferences(
             trial_prefs = current_prefs.shape[1]
 
         while trial_prefs < prefs_per_trial:
-            new_features, new_probs = state_collect_step(
-                generator, batch_timesteps, reward, temperature, normalize_differences
-            )
+            prefs_remaining = prefs_per_trial - trial_prefs
+            if modality is "state":
+                new_features, new_probs = state_collect_step(
+                    generator,
+                    batch_timesteps,
+                    reward,
+                    temperature,
+                    normalize_differences,
+                )
+            elif modality is "traj":
+                new_features, new_probs = traj_collect_step(
+                    generator=generator,
+                    timesteps=batch_timesteps,
+                    n_trajs=prefs_remaining,
+                    reward=reward,
+                    temperature=temperature,
+                    normalize_differences=normalize_differences,
+                    max_length=max_length,
+                )
+            else:
+                raise ValueError(f"Modality {modality} must be 'state' or 'traj'")
             if new_features is None or new_probs is None:
                 continue
 
@@ -266,13 +282,21 @@ def gen_state_preferences(
             )
 
             if indices.shape[0] == 0:
-                states_per_batch *= 10
-                batch_timesteps = max_state_batch_size(
-                    n_states=states_per_batch,
-                    n_parallel_envs=n_parallel_envs,
-                    step_nbytes=generator.step_nbytes,
-                )
-
+                prefs_per_batch *= 10
+                if modality is "state":
+                    batch_timesteps = max_state_batch_size(
+                        n_states=prefs_per_batch,
+                        n_parallel_envs=n_parallel_envs,
+                        step_nbytes=generator.step_nbytes,
+                    )
+                elif modality is "traj":
+                    batch_timesteps = max_traj_batch_size(
+                        n_trajs=prefs_per_batch,
+                        n_parallel_envs=n_parallel_envs,
+                        step_nbytes=generator.step_nbytes,
+                    )
+                else:
+                    raise ValueError(f"Modality {modality} must be 'state' or 'traj'")
             logging.debug(f"{indices.shape[0]=}")
 
             end_index = min(trial_prefs + indices.shape[0], prefs_per_trial)
@@ -302,14 +326,43 @@ def gen_state_preferences(
     np.save(outdir / (outname + ".features.npy"), features)
     np.save(outdir / (outname + ".flip-probs.npy"), flip_probs)
 
+    plot_flip_probs(flip_probs, outdir, outname, temperature)
+
+    return outdir / outname, start_trial
+
+
+def max_batch_size(
+    modality: Literal["state", "traj"],
+    prefs_per_trial: int,
+    n_parallel_envs: int,
+    generator: Generator,
+    prefs_per_batch: int,
+) -> int:
+    if modality is "state":
+        return max_state_batch_size(
+            n_states=prefs_per_batch,
+            n_parallel_envs=n_parallel_envs,
+            step_nbytes=generator.step_nbytes,
+        )
+    elif modality is "traj":
+        return max_traj_batch_size(
+            n_trajs=prefs_per_trial,
+            n_parallel_envs=n_parallel_envs,
+            step_nbytes=generator.step_nbytes,
+        )
+    else:
+        raise ValueError(f"Modality {modality} must be 'state' or 'traj'")
+
+
+def plot_flip_probs(
+    flip_probs: np.ndarray, outdir: Path, outname: str, temperature: float
+) -> None:
     plt.hist(flip_probs.flatten(), bins=100)
     plt.title(f"Histogram of noise flip probabilities (temp={temperature:0.5f})")
     plt.xlabel("Flip Probability")
     plt.xlim((0, 1))
     plt.savefig(outdir / (outname + ".flip-probs.png"))
     plt.close()
-
-    return outdir / outname, start_trial
 
 
 def load_data(
@@ -319,11 +372,12 @@ def load_data(
     features_outpath = outdir / (outname + ".features.npy")
     flip_probs_outpath = outdir / (outname + ".flip-probs.npy")
 
-    current_prefs = None
-    current_flip_probs = None
+    current_prefs: Optional[np.ndarray] = None
+    current_flip_probs: Optional[np.ndarray] = None
     if features_outpath.exists() and flip_probs_outpath.exists():
         current_prefs = np.load(features_outpath)
         current_flip_probs = np.load(flip_probs_outpath)
+        assert current_prefs is not None and current_flip_probs is not None
 
         if len(current_flip_probs.shape) == 1:
             # Old flip_probs used to be one dimensional, convert to new format
@@ -354,9 +408,7 @@ def calibrate_states(
     generator: Generator,
     target_flip_prob: float,
     n_states: int,
-    normalize_differences: Literal[
-        "diff-length", "sum-length", "max-length", "log-diff-length", None
-    ],
+    normalize_differences: NORM_DIFF_MODES,
     init_temperature: float = 1.0,
     sensitivity: float = 0.05,
 ) -> float:
@@ -414,7 +466,7 @@ def state_collect_step(
     timesteps: int,
     reward: np.ndarray,
     temperature: float,
-    normalize_differences,
+    normalize_differences: NORM_DIFF_MODES,
 ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
     feature_a, feature_b = generator.gen_state_pairs(timesteps=timesteps)
     features = np.stack((feature_a, feature_b), axis=1)
@@ -439,198 +491,13 @@ def state_collect_step(
     return oriented_features, probs
 
 
-def gen_traj_preferences(
-    rootdir: Path,
-    env: FEATURE_ENV_NAMES,
-    prefs_per_trial: int,
-    n_trials: int,
-    n_parallel_envs: int,
-    outname: str,
-    policy_path: Optional[Path] = None,
-    temperature: float = 0.0,
-    deduplicate: bool = False,
-    normalize_step_features: bool = False,
-    normalize_differences: Literal[
-        "diff-length", "sum-length", "max-length", "log-diff-length", None
-    ] = None,
-    seed: Optional[int] = None,
-    append: bool = False,
-    overwrite: bool = False,
-    verbosity: Literal["INFO", "DEBUG"] = "INFO",
-) -> Tuple[Path, int]:
-    rootdir = Path(rootdir)
-
-    if append and overwrite:
-        raise ValueError("Cannot append and overwrite")
-
-    folders = HyperFolders(
-        rootdir / "prefs", schema=["modality", "temp", "dedup", "norm"]
-    )
-    outdir = folders.add_experiment(
-        {
-            "modality": "traj",
-            "temp": temperature,
-            "dedup": "dedup" if deduplicate else "no-dedup",
-            "norm": f"norm-{normalize_differences}",
-        }
-    )
-    outname = str(outname)
-
-    setup_logging(level=verbosity, outdir=outdir, name=f"{outname}.log", append=append)
-
-    reward = np.load(rootdir / "reward.npy")
-
-    rng = np.random.default_rng(seed=seed)
-
-    generator = Generator(
-        env_name=env,
-        n_envs=n_parallel_envs,
-        normalize_features=normalize_step_features,
-        policy_paths=[Path(policy_path), None] if policy_path is not None else [None],
-        rng=rng,
-        tqdm=True,
-    )
-
-    trajs_per_batch = prefs_per_trial
-    batch_timesteps = max_traj_batch_size(
-        n_trajs=prefs_per_trial,
-        n_parallel_envs=n_parallel_envs,
-        step_nbytes=generator.step_nbytes,
-    )
-
-    step = generator.gen_state_pairs(1)
-    feature_dim = step[0].shape[1]
-
-    if overwrite:
-        np_remove(outdir, name="*")
-
-    # (trial, pref index, first/second, features)
-    features = np.empty(
-        (n_trials, prefs_per_trial, 2, feature_dim), dtype=step[0].dtype
-    )
-    flip_probs = np.empty((n_trials, prefs_per_trial), dtype=np.float32)
-
-    current_prefs, current_flip_probs = load_data(outdir, outname)
-
-    if current_prefs is not None and current_flip_probs is not None:
-        if append and current_prefs.shape[1] != prefs_per_trial:
-            raise ValueError(
-                f"Existing data uses different amount of prefs per trial, unsupported."
-            )
-
-        if len(current_flip_probs.shape) == 1:
-            # Old flip_probs used to be one dimensional, convert to new format
-            current_flip_probs = current_flip_probs.reshape(current_prefs.shape[:2])
-
-        if not append:
-            if (
-                current_prefs.shape[0] >= n_trials
-                and current_prefs.shape[1] >= prefs_per_trial
-            ):
-                logging.warning(f"No new states needed for {outdir}")
-                return outdir / outname, 0
-            else:
-                new_trials = max(0, n_trials - current_prefs.shape[0])
-                new_prefs_per_trial = max(0, prefs_per_trial - current_prefs.shape[1])
-                features = np.pad(
-                    current_prefs,
-                    [(0, new_trials), (0, new_prefs_per_trial), (0, 0), (0, 0)],
-                    "constant",
-                    constant_values=0,
-                )
-
-                flip_probs = np.pad(
-                    current_flip_probs,
-                    [(0, new_trials), (0, new_prefs_per_trial)],
-                    "constant",
-                    constant_values=0,
-                )
-
-    for trial in range(n_trials):
-        logging.info(f"Collecting traj comparisons for trial {trial + 1} of {n_trials}")
-        trial_prefs = 0
-        if not append and current_prefs is not None and trial < current_prefs.shape[0]:
-            # If there is already some data in this row, start at the end of that existing data.
-            trial_prefs = current_prefs.shape[1]
-
-        while trial_prefs < prefs_per_trial:
-            prefs_remaining = prefs_per_trial - trial_prefs
-            logging.info(
-                f"Asking for {prefs_remaining} trajs or {batch_timesteps} timesteps"
-            )
-
-            new_features, new_probs = traj_collect_step(
-                generator=generator,
-                timesteps=batch_timesteps,
-                n_trajs=prefs_remaining,
-                reward=reward,
-                temperature=temperature,
-                normalize_differences=normalize_differences,
-            )
-
-            new_diffs = new_features[:, 0] - new_features[:, 1]
-            old_diffs = (
-                features[trial, :trial_prefs, 0] - features[trial, :trial_prefs, 1]
-            )
-            assert not np.any(np.all(new_diffs == 0, axis=1))
-            assert new_features.shape[1] == 2
-
-            logging.debug(f"{features.shape=}")
-            indices = (
-                find_soft_unique_indices(new=new_diffs, core=old_diffs)
-                if deduplicate
-                else np.ones_like(new_probs, dtype=bool)
-            )
-
-            if indices.shape[0] == 0:
-                # If no non-duplicate preferences were found, look for 10 times more next time
-                trajs_per_batch *= 10
-                batch_timesteps = max_traj_batch_size(
-                    n_trajs=trajs_per_batch,
-                    n_parallel_envs=n_parallel_envs,
-                    step_nbytes=generator.step_nbytes,
-                )
-
-            end_index = min(trial_prefs + indices.shape[0], prefs_per_trial)
-            overflow_index = end_index - trial_prefs
-
-            features[trial, trial_prefs:end_index] = new_features[indices][
-                :overflow_index
-            ]
-            flip_probs[trial, trial_prefs:end_index] = new_probs[indices][
-                :overflow_index
-            ]
-
-            trial_prefs = end_index
-            logging.info(f"Collected {trial_prefs} of {prefs_per_trial} preferences")
-
-    start_trial = 0
-    if append and current_prefs is not None and current_flip_probs is not None:
-        features = np.concatenate((current_prefs, features), axis=0)
-        flip_probs = np.concatenate((current_flip_probs, flip_probs), axis=0)
-        start_trial = current_prefs.shape[0]
-
-    np.save(outdir / (outname + ".features.npy"), features)
-    np.save(outdir / (outname + ".flip-probs.npy"), flip_probs)
-
-    plt.hist(flip_probs, bins=100)
-    plt.title(f"Histogram of noise flip probabilities (temp={temperature:0.5f})")
-    plt.xlabel("Flip Probability")
-    plt.xlim((0, 1))
-    plt.savefig(outdir / (outname + ".flip-probs.png"))
-    plt.close()
-
-    return outdir / outname, start_trial
-
-
 def calibrate_trajs(
     reward: np.ndarray,
     generator: Generator,
     target_flip_prob: float,
     n_trajs: int,
-    normalize_differences: Literal[
-        "diff-length", "sum-length", "max-length", "log-diff-length", None
-    ],
+    normalize_differences: NORM_DIFF_MODES,
+    max_length: Optional[int],
     init_temperature: float = 1.0,
     sensitivity: float = 0.05,
 ) -> float:
@@ -669,12 +536,13 @@ def calibrate_trajs(
         while n_diffs < n_trajs:
             logging.debug(f"{n_diffs}/{n_trajs}")
             _, probs_batch = traj_collect_step(
-                generator,
-                batch_timesteps,
-                n_trajs - n_diffs,
-                reward,
-                temperature,
-                normalize_differences,
+                generator=generator,
+                timesteps=batch_timesteps,
+                n_trajs=n_trajs - n_diffs,
+                reward=reward,
+                temperature=temperature,
+                normalize_differences=normalize_differences,
+                max_length=max_length,
             )
             assert (
                 len(probs_batch.shape) == 1
@@ -692,16 +560,24 @@ def traj_collect_step(
     n_trajs: int,
     reward: np.ndarray,
     temperature: float,
-    normalize_differences,
+    normalize_differences: NORM_DIFF_MODES,
+    max_length: Optional[int] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     feature_batch: List[np.ndarray] = []
     probs_batch: List[np.ndarray] = []
     for traj_a, traj_b in zip(
         *generator.gen_traj_pairs(timesteps=timesteps, n_trajs=n_trajs)
     ):
-        assert traj_a.features is not None and traj_b.features is not None
-        feature_a: np.ndarray = traj_a.features.sum(axis=0, keepdims=True)
-        feature_b: np.ndarray = traj_b.features.sum(axis=0, keepdims=True)
+        features_a = traj_a.features
+        features_b = traj_b.features
+        assert features_a is not None and features_b is not None
+
+        if max_length is not None:
+            features_a = features_a[:max_length]
+            features_b = features_b[:max_length]
+
+        feature_a: np.ndarray = features_a.sum(axis=0, keepdims=True)
+        feature_b: np.ndarray = features_b.sum(axis=0, keepdims=True)
         features = np.stack((feature_a, feature_b), axis=1)
         assert features.shape[:2] == (1, 2)
 
@@ -893,13 +769,3 @@ class Generator:
         assert data_b.data["features"] is not None
 
         return data_a.trajs(), data_b.trajs()
-
-
-if __name__ == "__main__":
-    fire.Fire(
-        {
-            "state": gen_state_preferences,
-            "traj": gen_traj_preferences,
-            "both": gen_preferences,
-        },
-    )
