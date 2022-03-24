@@ -132,7 +132,7 @@ dmypy.json
 data/
 data
 # scratch files
-scratch.*
+*scratch.*
 
 # Memory profiling folder
 memprof/
