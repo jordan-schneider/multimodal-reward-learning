@@ -16,6 +16,7 @@ from mrl.configs import (
     register_configs,
 )
 from mrl.dataset.preferences import gen_preferences, gen_preferences_flip_prob
+from mrl.experiment_db.experiment import ExperimentDB
 from mrl.folders import HyperFolders
 from mrl.inference.analysis import analysis
 from mrl.inference.plots import plot_comparisons
@@ -35,7 +36,8 @@ def main(config: ExperimentConfig):
     if config.overwrite and config.append:
         raise ValueError("Can only specify one of overwrite or append")
     rootdir = Path(config.rootdir)
-    inference_outdir = make_inference_outdir(config)
+    experiment_db = ExperimentDB(git_dir=Path())
+    inference_outdir = experiment_db.add(rootdir / "inference", config)
     setup_logging(level=config.verbosity, outdir=inference_outdir, force=True)
 
     write_config(config, inference_outdir)
@@ -187,68 +189,6 @@ def get_prefs(
 def write_config(config: ExperimentConfig, inference_outdir: Path) -> None:
     config_yaml = OmegaConf.to_yaml(config)
     (inference_outdir / "config.yaml").open("w").write(config_yaml)
-
-
-def make_inference_outdir(config: ExperimentConfig) -> Path:
-    folders = HyperFolders(
-        Path(config.rootdir) / "compare",
-        schema=[
-            "data-noise",
-            "inference-fn",
-            "inference-temp",
-            "ars",
-            "normalization",
-            "dedup",
-        ],
-    )
-    preference_noise = config.preference.noise
-    if preference_noise.name == "fixed":
-        preference_noise = cast(FixedPreference, preference_noise)
-        data_noise = f"pref-{preference_noise.temp}"
-    elif preference_noise.name == "flip-prob":
-        preference_noise = cast(FlipProb, preference_noise)
-        data_noise = f"flip-{preference_noise.prob}"
-
-    inference_noise = config.inference.noise
-    if inference_noise.name == "gamma":
-        inference_noise = cast(GammaInference, inference_noise)
-        k = inference_noise.k
-        theta = inference_noise.theta
-        inference_temp_str = f"gamma({k}, {theta})"
-    elif inference_noise.name == "fixed":
-        inference_noise = cast(FixedInference, inference_noise)
-        inference_temp_str = f"fixed-{inference_noise.temp}"
-    elif inference_noise.name == "gt":
-        inference_temp_str = "gt"
-
-    ars_name = config.ars_name.strip(".npy").replace(".", "-")
-
-    if (normalize := config.preference.normalize_differences) is None:
-        norm_str = "no-norm"
-    elif normalize not in [
-        "diff-length",
-        "sum-length",
-        "max-length",
-        "log-diff-length",
-    ]:
-        raise ValueError(
-            f"Invalid normalization: {config.preference.normalize_differences}"
-        )
-    else:
-        norm_str = normalize
-
-    dedup_str = "dedup" if config.preference.deduplicate else "no-dedup"
-
-    return folders.add_experiment(
-        {
-            "data-noise": data_noise,
-            "inference-fn": config.inference.likelihood_fn,
-            "inference-temp": f"inference-{inference_temp_str}",
-            "ars": ars_name,
-            "normalization": norm_str,
-            "dedup": dedup_str,
-        }
-    )
 
 
 def get_temp_from_pref_path(state_path: Path) -> float:
