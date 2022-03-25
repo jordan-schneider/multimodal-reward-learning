@@ -8,20 +8,14 @@ from typing import Callable, List, Literal, Optional, Tuple, cast
 
 import matplotlib.pyplot as plt  # type: ignore
 import numpy as np
-from mrl.dataset.roller import procgen_rollout_dataset, procgen_rollout_features
+from mrl.dataset.roller import (procgen_rollout_dataset,
+                                procgen_rollout_features)
 from mrl.envs.feature_envs import FeatureEnv  # type: ignore
 from mrl.envs.util import FEATURE_ENV_NAMES, get_root_env, make_env
 from mrl.folders import HyperFolders
-from mrl.util import (
-    NORM_DIFF_MODES,
-    get_angle,
-    get_policy,
-    max_state_batch_size,
-    max_traj_batch_size,
-    normalize_diffs,
-    np_remove,
-    setup_logging,
-)
+from mrl.util import (NORM_DIFF_MODES, get_angle, get_policy,
+                      max_state_batch_size, max_traj_batch_size,
+                      normalize_diffs, np_remove, setup_logging)
 from phasic_policy_gradient.ppg import PhasicValueModel
 
 
@@ -151,7 +145,7 @@ def gen_preferences(
         raise ValueError("Cannot append and overwrite")
 
     folders = HyperFolders(
-        rootdir / "prefs", schema=["modality", "temp", "dedup", "norm"]
+        rootdir / "prefs", schema=["modality", "temp", "dedup", "norm", "length"]
     )
     outdir = folders.add_experiment(
         {
@@ -159,6 +153,7 @@ def gen_preferences(
             "temp": temperature,
             "dedup": "dedup" if deduplicate else "no-dedup",
             "norm": f"norm-{normalize_differences}",
+            "length": f"length-{max_length}" if max_length is not None else "no-max",
         }
     )
 
