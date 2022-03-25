@@ -3,7 +3,6 @@ from math import sqrt
 from pathlib import Path
 from typing import Dict, Generator, List, Literal, Optional, Tuple, cast
 
-import bitmath  # type: ignore
 import fire  # type: ignore
 import numpy as np
 from mrl.configs import FixedInference, InferenceNoise, TrueInference
@@ -12,20 +11,22 @@ from mrl.reward_model.boltzmann import boltzmann_likelihood
 from mrl.reward_model.hinge import hinge_likelihood
 from mrl.reward_model.likelihood import Likelihood
 from mrl.reward_model.logspace import cum_likelihoods
-from mrl.util import normalize_diffs, normalize_vecs, np_gather, setup_logging
+from mrl.util import (
+    get_temp_from_pref_path,
+    normalize_diffs,
+    normalize_vecs,
+    setup_logging,
+)
 
 
 def compare_modalities(
     outdir: Path,
-    data_rootdir: Path,
-    state_temp: float,
-    traj_temp: float,
-    state_name: str,
-    traj_name: str,
+    reward_path: Path,
+    state_path: Path,
+    traj_path: Path,
     results: Results,
     n_samples: int = 100_000,
     max_comparisons: int = 1000,
-    deduplicate: bool = False,
     norm_diffs: Literal[
         "diff-length", "sum-length", "max-length", "log-diff-length", None
     ] = None,
@@ -37,9 +38,8 @@ def compare_modalities(
     save_all: bool = False,
     state_start_trial: int = 0,
     traj_start_trial: int = 0,
-    max_ram: str = "100G",
-    seed: Optional[int] = None,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
+    rng: np.random.Generator = np.random.default_rng(),
 ) -> Results:
     try:
         outdir = Path(outdir)
@@ -47,44 +47,34 @@ def compare_modalities(
         setup_logging(outdir=outdir, level=verbosity)
 
         logging.info(
-            f"""outdir={outdir},
-data_rootdir={data_rootdir},
-{state_temp=},
-{traj_temp=},
-{state_name=},
-{traj_name=},
-n_samples={n_samples},
-max_comparisons={max_comparisons},
-{deduplicate=},
-norm_diffs={norm_diffs},
-use_hinge={use_hinge},
-use_shift={use_shift},
+            f"""{outdir=},
+{reward_path=},
+{state_path=},
+{traj_path=},
+{n_samples=},
+{max_comparisons=},
+{norm_diffs=},
+{use_hinge=},
+{use_shift=},
 {inference_temp=},
-n_trials={n_trials},
+{n_trials=},
 {plot_individual=},
-save_all={save_all},
-{max_ram=},
-seed={seed},
-verbosity={verbosity}"""
+{save_all=},
+{verbosity=}"""
         )
 
-        rng = np.random.default_rng(seed=seed)
-
         paths = collect_paths(
-            data_rootdir,
-            state_temp=state_temp,
-            traj_temp=traj_temp,
-            state_name=state_name,
-            traj_name=traj_name,
-            dedup=deduplicate,
+            state_path=state_path,
+            traj_path=traj_path,
             state_start_trial=state_start_trial,
             traj_start_trial=traj_start_trial,
-            norm=norm_diffs,
         )
 
         results.start("")
 
         if inference_temp.name == "gt":
+            state_temp = get_temp_from_pref_path(state_path)
+            traj_temp = get_temp_from_pref_path(traj_path)
             temps = {
                 "state": state_temp,
                 "traj": traj_temp,
@@ -104,16 +94,13 @@ verbosity={verbosity}"""
 
         results.update("temp", temps)
 
-        reward_path = data_rootdir / "reward.npy"
         true_reward = load_ground_truth(reward_path=reward_path)
         logging.debug(f"{true_reward=} from {reward_path=}")
 
-        max_ram_nbytes = int(bitmath.parse_string_unsafe(max_ram).bytes)
         trial_batches = load_comparison_data(
             paths=paths,
             max_comparisons=max_comparisons,
             n_trials=n_trials,
-            ram_free=max_ram_nbytes,
             rng=rng,
         )
 
@@ -189,38 +176,21 @@ def load_ground_truth(
 
 
 def collect_paths(
-    rootdir: Path,
-    state_temp: float,
-    traj_temp: float,
-    state_name: str,
-    traj_name: str,
+    state_path: Path,
+    traj_path: Path,
     state_start_trial: int,
     traj_start_trial: int,
-    dedup: bool,
-    norm: str,
 ) -> Dict[str, Tuple[Path, int]]:
-    dedup_str = "dedup" if dedup else "no-dedup"
     paths: Dict[str, Tuple[Path, int]] = {}
-    state_root = (
-        rootdir
-        / f"prefs/state/{state_temp}/{dedup_str}/norm-{norm}/{state_name}.features"
-    )
-    state_path = Path(str(state_root) + ".npy")
-
-    traj_root = (
-        rootdir / f"prefs/traj/{traj_temp}/{dedup_str}/norm-{norm}/{traj_name}.features"
-    )
-    traj_path = Path(str(traj_root) + ".npy")
-
     if state_path.exists():
         logging.info(f"Loading states from {state_path}")
-        paths["state"] = (state_root, state_start_trial)
+        paths["state"] = (state_path, state_start_trial)
     else:
         logging.warning(f"No file found at {state_path}")
 
     if traj_path.exists():
         logging.info(f"Loading trajectories from {traj_path}")
-        paths["traj"] = (traj_root, traj_start_trial)
+        paths["traj"] = (traj_path, traj_start_trial)
     else:
         logging.warning(f"No file found at {traj_path}")
 
@@ -242,18 +212,12 @@ def load_comparison_data(
     paths: Dict[str, Tuple[Path, int]],
     max_comparisons: int,
     n_trials: int,
-    ram_free: int,
     rng: np.random.Generator,
 ) -> Generator[Dict[str, np.ndarray], None, None]:
     all_data: Dict[str, np.ndarray] = {}
     logging.debug(f"paths={paths}")
     for key, (path, start_trial) in paths.items():
-        # TODO: Remove np_gather calls here, nothing is sharded anymore.
-        all_trials = np_gather(
-            indir=path.parent,
-            name=path.name,
-            max_nbytes=ram_free // len(paths),
-        )
+        all_trials = np.load(path)
         if n_trials > all_trials.shape[0]:
             raise RuntimeError(
                 f"{key} only has data for {all_trials.shape[0]} trials, but need {n_trials}"
