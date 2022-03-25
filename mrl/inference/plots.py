@@ -39,9 +39,9 @@ def plot_comparisons(results: Results, outdir: Path) -> None:
     else:
         logging.warning("Results did not have prob aligned")
 
-    if results.has("likelihood"):
+    if results.has("gt_likelihood"):
         logging.info("Plotting likelihood")
-        likelihoods_gt = results.getall_gt_likelihood()
+        likelihoods_gt = results.get("gt_likelihood")
         sns.relplot(
             data=likelihoods_gt,
             x="time",
