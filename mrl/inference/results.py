@@ -77,28 +77,6 @@ class Results:
     def experiment_names(self) -> List[str]:
         return list(self.experiments.keys())
 
-    def getall_gt_likelihood(self) -> pd.DataFrame:
-        out = pd.DataFrame(columns=["trial", "time", "likelihood_gt"])
-        for exp_name, exp in self.experiments.items():
-            if "likelihood" not in exp.keys():
-                logging.warning(
-                    f"No likelihood values in experiment {exp_name}, skipping"
-                )
-                continue
-            likelihoods = exp["likelihood"]
-            if isinstance(likelihoods, np.ndarray):
-                df = self.__make_df(["likelihood_gt"], likelihoods[-1])
-                df["trial"] = exp_name
-                out = out.append(df.copy())
-            elif isinstance(likelihoods, dict):
-                for modality, v in likelihoods.items():
-                    df = self.__make_df(["likelihood_gt"], v[-1])
-                    df["trial"] = exp_name
-                    df["modality"] = modality
-                    out = out.append(df.copy())
-        out = out.reset_index(drop=True)
-        return out
-
     @staticmethod
     def __make_df(columns: Sequence[str], value: np.ndarray) -> pd.DataFrame:
         assert value.ndim == 1, "Only 1D arrays supported"

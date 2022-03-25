@@ -140,6 +140,7 @@ def compare_modalities(
                     else boltzmann_likelihood,
                     use_shift=use_shift,
                     results=results,
+                    true_reward=true_reward,
                     temps=temps,
                     save_all=save_all,
                 )
@@ -254,6 +255,7 @@ def make_likelihoods(
     reward_likelihood: Likelihood,
     use_shift: bool,
     results: Results,
+    true_reward: Optional[np.ndarray] = None,
     temps: Optional[Dict[str, float]] = None,
     save_all: bool = False,
 ) -> Results:
@@ -276,6 +278,15 @@ def make_likelihoods(
         key: cum_likelihoods(log_likelihoods=l, shift=use_shift)
         for key, l in log_likelihoods.items()
     }
+
+    if true_reward is not None:
+        indices = np.nonzero(np.all(true_reward == reward_samples, axis=1))
+        if len(indices) > 0:
+            gt_likelihood: Dict[str, np.ndarray] = {
+                modality: likelihood[indices[0][0]]
+                for modality, likelihood in likelihoods.items()
+            }
+            results.update("gt_likelihood", gt_likelihood)
 
     logging.info("Saving total likelihoods")
     save_likelihoods(likelihoods, results, save_all)
