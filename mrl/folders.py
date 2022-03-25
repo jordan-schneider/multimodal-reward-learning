@@ -47,7 +47,7 @@ class HyperFolders:
                 new_path.mkdir(parents=True, exist_ok=True)
                 shutil.copytree(self.rootdir / old_path, new_path, dirs_exist_ok=True)
         shutil.rmtree(self.rootdir)
-        out.rename(self.rootdir)
+        shutil.move(str(out), self.rootdir)
         self.schema = new_schema
 
     def check(self) -> None:
