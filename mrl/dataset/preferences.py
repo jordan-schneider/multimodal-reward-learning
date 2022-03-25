@@ -2,21 +2,38 @@ from __future__ import annotations
 
 import logging
 import random
+from dataclasses import dataclass
 from math import sqrt
 from pathlib import Path
-from typing import Callable, List, Literal, Optional, Tuple, cast
+from typing import Callable, Dict, List, Literal, Optional, Tuple, cast
 
 import matplotlib.pyplot as plt  # type: ignore
 import numpy as np
-from mrl.dataset.roller import (procgen_rollout_dataset,
-                                procgen_rollout_features)
+from mrl.dataset.roller import procgen_rollout_dataset, procgen_rollout_features
 from mrl.envs.feature_envs import FeatureEnv  # type: ignore
 from mrl.envs.util import FEATURE_ENV_NAMES, get_root_env, make_env
 from mrl.folders import HyperFolders
-from mrl.util import (NORM_DIFF_MODES, get_angle, get_policy,
-                      max_state_batch_size, max_traj_batch_size,
-                      normalize_diffs, np_remove, setup_logging)
+from mrl.util import (
+    NORM_DIFF_MODES,
+    dump,
+    get_angle,
+    get_policy,
+    load,
+    max_state_batch_size,
+    max_traj_batch_size,
+    normalize_diffs,
+    np_remove,
+    setup_logging,
+)
 from phasic_policy_gradient.ppg import PhasicValueModel
+
+
+@dataclass(frozen=True)
+class TemperatureSearchKey:
+    flip_prob: float
+    modality: Literal["state", "traj"]
+    deduplicate: bool
+    normalize_differences: NORM_DIFF_MODES
 
 
 def gen_preferences_flip_prob(
@@ -37,8 +54,8 @@ def gen_preferences_flip_prob(
     max_length: Optional[int] = None,
     append: bool = False,
     overwrite: bool = False,
-    seed: Optional[int] = None,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
+    rng: np.random.Generator = np.random.default_rng(),
 ) -> Tuple[Tuple[Path, int], Tuple[Path, int]]:
     rootdir = Path(rootdir)
     outdir = rootdir / "prefs"
@@ -48,7 +65,6 @@ def gen_preferences_flip_prob(
         raise ValueError("Cannot specify both append and overwrite.")
 
     reward = np.load(rootdir / "reward.npy")
-    rng = np.random.default_rng(seed)
 
     generator = Generator(
         env_name=env,
@@ -58,30 +74,60 @@ def gen_preferences_flip_prob(
         rng=rng,
     )
 
-    logging.info("Searching for state temperature")
-    state_temp = calibrate_states(
-        reward=reward,
-        generator=generator,
-        target_flip_prob=flip_prob,
-        n_states=n_calibration_prefs,
+    temp_search_results_path = rootdir / "search_results.pkl"
+    temp_search_results: Dict[TemperatureSearchKey, float] = {}
+    if temp_search_results_path.exists():
+        temp_search_results = load(temp_search_results_path)
+
+    state_key = TemperatureSearchKey(
+        flip_prob=flip_prob,
+        modality="state",
+        deduplicate=deduplicate,
         normalize_differences=normalize_differences,
-        init_temperature=init_state_temp,
-        sensitivity=sensitivity,
     )
+    if overwrite:
+        del temp_search_results[state_key]
+    state_temp = temp_search_results.get(state_key, None)
+    if state_temp is None:
+        logging.info("Searching for state temperature")
+        state_temp = calibrate_states(
+            reward=reward,
+            generator=generator,
+            target_flip_prob=flip_prob,
+            n_states=n_calibration_prefs,
+            normalize_differences=normalize_differences,
+            init_temperature=init_state_temp,
+            sensitivity=sensitivity,
+        )
+        temp_search_results[state_key] = state_temp
     logging.info(f"Using temp={state_temp} for states")
 
-    logging.info("Searching for trajectory temperature")
-    traj_temp = calibrate_trajs(
-        reward=reward,
-        generator=generator,
-        target_flip_prob=flip_prob,
-        n_trajs=n_calibration_prefs,
+    traj_key = TemperatureSearchKey(
+        flip_prob=flip_prob,
+        modality="traj",
+        deduplicate=deduplicate,
         normalize_differences=normalize_differences,
-        max_length=max_length,
-        init_temperature=init_traj_temp,
-        sensitivity=sensitivity,
     )
+    if overwrite:
+        del temp_search_results[traj_key]
+    traj_temp = temp_search_results.get(traj_key, None)
+    if traj_temp is None:
+        logging.info("Searching for trajectory temperature")
+        traj_temp = calibrate_trajs(
+            reward=reward,
+            generator=generator,
+            target_flip_prob=flip_prob,
+            n_trajs=n_calibration_prefs,
+            normalize_differences=normalize_differences,
+            max_length=max_length,
+            init_temperature=init_traj_temp,
+            sensitivity=sensitivity,
+            rng=rng,
+        )
+        temp_search_results[traj_key] = traj_temp
     logging.info(f"Using temp={traj_temp} for trajs")
+
+    dump(temp_search_results, temp_search_results_path)
 
     logging.info("Generating state preferences")
     state_path = gen_preferences(
@@ -92,6 +138,7 @@ def gen_preferences_flip_prob(
         n_trials=n_trials,
         n_parallel_envs=n_envs,
         outname=outname,
+        max_length=max_length,
         temperature=state_temp,
         deduplicate=deduplicate,
         normalize_step_features=normalize_step,
@@ -101,7 +148,7 @@ def gen_preferences_flip_prob(
         verbosity=verbosity,
     )
 
-    logging.info("Generating trajectory preferenes")
+    logging.info("Generating trajectory preferences")
     traj_path = gen_preferences(
         rootdir=rootdir,
         env=env,
@@ -110,6 +157,7 @@ def gen_preferences_flip_prob(
         n_trials=n_trials,
         n_parallel_envs=n_envs,
         outname=outname,
+        max_length=max_length,
         temperature=traj_temp,
         deduplicate=deduplicate,
         normalize_step_features=normalize_step,
@@ -138,6 +186,7 @@ def gen_preferences(
     append: bool = False,
     overwrite: bool = False,
     verbosity: Literal["INFO", "DEBUG"] = "INFO",
+    rng: np.random.Generator = np.random.default_rng(),
 ):
     rootdir = Path(rootdir)
 
@@ -156,12 +205,11 @@ def gen_preferences(
             "length": f"length-{max_length}" if max_length is not None else "no-max",
         }
     )
+    features_outpath = outdir / (outname + ".features.npy")
 
     setup_logging(level=verbosity, outdir=outdir, name=f"{outname}.log", append=append)
 
     reward = np.load(rootdir / "reward.npy")
-
-    rng = np.random.default_rng()
 
     generator = Generator(
         env_name=env,
@@ -208,7 +256,7 @@ def gen_preferences(
                 and current_prefs.shape[1] >= prefs_per_trial
             ):
                 logging.warning(f"No new prefs needed for {outdir}")
-                return outdir / outname, 0
+                return features_outpath, 0
             else:
                 new_trials = max(0, n_trials - current_prefs.shape[0])
                 new_prefs_per_trial = max(0, prefs_per_trial - current_prefs.shape[1])
@@ -243,7 +291,7 @@ def gen_preferences(
 
         while trial_prefs < prefs_per_trial:
             prefs_remaining = prefs_per_trial - trial_prefs
-            if modality is "state":
+            if modality == "state":
                 new_features, new_probs = state_collect_step(
                     generator,
                     batch_timesteps,
@@ -251,7 +299,7 @@ def gen_preferences(
                     temperature,
                     normalize_differences,
                 )
-            elif modality is "traj":
+            elif modality == "traj":
                 new_features, new_probs = traj_collect_step(
                     generator=generator,
                     timesteps=batch_timesteps,
@@ -260,6 +308,7 @@ def gen_preferences(
                     temperature=temperature,
                     normalize_differences=normalize_differences,
                     max_length=max_length,
+                    rng=rng,
                 )
             else:
                 raise ValueError(f"Modality {modality} must be 'state' or 'traj'")
@@ -318,12 +367,12 @@ def gen_preferences(
         flip_probs = np.concatenate((current_flip_probs, flip_probs), axis=0)
         start_trial = current_prefs.shape[0]
 
-    np.save(outdir / (outname + ".features.npy"), features)
+    np.save(features_outpath, features)
     np.save(outdir / (outname + ".flip-probs.npy"), flip_probs)
 
     plot_flip_probs(flip_probs, outdir, outname, temperature)
 
-    return outdir / outname, start_trial
+    return features_outpath, start_trial
 
 
 def max_batch_size(
@@ -491,6 +540,7 @@ def calibrate_trajs(
     generator: Generator,
     target_flip_prob: float,
     n_trajs: int,
+    rng: np.random.Generator,
     normalize_differences: NORM_DIFF_MODES,
     max_length: Optional[int],
     init_temperature: float = 1.0,
@@ -538,6 +588,7 @@ def calibrate_trajs(
                 temperature=temperature,
                 normalize_differences=normalize_differences,
                 max_length=max_length,
+                rng=rng,
             )
             assert (
                 len(probs_batch.shape) == 1
@@ -557,6 +608,7 @@ def traj_collect_step(
     temperature: float,
     normalize_differences: NORM_DIFF_MODES,
     max_length: Optional[int] = None,
+    rng: np.random.Generator = np.random.default_rng(),
 ) -> Tuple[np.ndarray, np.ndarray]:
     feature_batch: List[np.ndarray] = []
     probs_batch: List[np.ndarray] = []
@@ -568,8 +620,10 @@ def traj_collect_step(
         assert features_a is not None and features_b is not None
 
         if max_length is not None:
-            features_a = features_a[:max_length]
-            features_b = features_b[:max_length]
+            start_a = rng.integers(low=0, high=max(1, features_a.shape[0] - max_length))
+            start_b = rng.integers(low=0, high=max(1, features_b.shape[0] - max_length))
+            features_a = features_a[start_a : start_a + max_length]
+            features_b = features_b[start_b : start_b + max_length]
 
         feature_a: np.ndarray = features_a.sum(axis=0, keepdims=True)
         feature_b: np.ndarray = features_b.sum(axis=0, keepdims=True)

@@ -3,26 +3,19 @@ from pathlib import Path
 from typing import Tuple, cast
 
 import hydra
+import numpy as np
 from omegaconf import MISSING, OmegaConf
 
 from mrl.aligned_rewards.aligned_reward_set import AlignedRewardSet
 from mrl.aligned_rewards.make_ars import main as make_ars
-from mrl.configs import (
-    ExperimentConfig,
-    FixedInference,
-    FixedPreference,
-    FlipProb,
-    GammaInference,
-    register_configs,
-)
+from mrl.configs import ExperimentConfig, FixedPreference, FlipProb, register_configs
 from mrl.dataset.preferences import gen_preferences, gen_preferences_flip_prob
 from mrl.experiment_db.experiment import ExperimentDB
-from mrl.folders import HyperFolders
 from mrl.inference.analysis import analysis
 from mrl.inference.plots import plot_comparisons
 from mrl.inference.posterior import compare_modalities
 from mrl.inference.results import Results
-from mrl.util import dump, load, setup_logging
+from mrl.util import load, setup_logging
 
 
 @hydra.main(config_path=None, config_name="experiment")
@@ -42,11 +35,11 @@ def main(config: ExperimentConfig):
 
     write_config(config, inference_outdir)
 
-    (state_path, state_start_trial), (traj_path, traj_start_trial) = get_prefs(
-        config, rootdir, inference_outdir
+    rng = np.random.default_rng(seed=config.seed)
+
+    ((state_path, state_start_trial), (traj_path, traj_start_trial)) = get_prefs(
+        config, rootdir, inference_outdir, rng=rng
     )
-    state_temp = get_temp_from_pref_path(state_path)
-    traj_temp = get_temp_from_pref_path(traj_path)
 
     reward_path = rootdir / "reward.npy"
     ars_path = rootdir / config.ars_name
@@ -64,14 +57,11 @@ def main(config: ExperimentConfig):
 
     results = compare_modalities(
         outdir=inference_outdir,
-        data_rootdir=rootdir,
-        state_temp=state_temp,
-        traj_temp=traj_temp,
-        state_name=state_path.name,
-        traj_name=traj_path.name,
+        reward_path=rootdir / "reward.npy",
+        state_path=state_path,
+        traj_path=traj_path,
         results=results,
         max_comparisons=config.preference.prefs_per_trial,
-        deduplicate=config.preference.deduplicate,
         norm_diffs=config.preference.normalize_differences,
         use_hinge=config.inference.likelihood_fn == "hinge",
         use_shift=config.inference.use_shift,
@@ -80,9 +70,8 @@ def main(config: ExperimentConfig):
         save_all=config.inference.save_all,
         state_start_trial=state_start_trial,
         traj_start_trial=traj_start_trial,
-        max_ram=config.max_ram,
-        seed=config.seed,
         verbosity=config.verbosity,
+        rng=rng,
     )
 
     results.start("")
@@ -99,7 +88,10 @@ def main(config: ExperimentConfig):
 
 
 def get_prefs(
-    config: ExperimentConfig, rootdir: Path, inference_outdir: Path
+    config: ExperimentConfig,
+    rootdir: Path,
+    inference_outdir: Path,
+    rng: np.random.Generator,
 ) -> Tuple[Tuple[Path, int], Tuple[Path, int]]:
     noise = config.preference.noise
     search_results_path = inference_outdir / "search_results.pkl"
@@ -133,6 +125,7 @@ def get_prefs(
             append=config.append,
             overwrite=config.overwrite,
             verbosity=config.verbosity,
+            rng=rng,
         )
         logging.debug(f"state_path returned: {state_path}")
         traj_path, traj_start_trial = gen_preferences(
@@ -151,6 +144,7 @@ def get_prefs(
             append=config.append,
             overwrite=config.overwrite,
             verbosity=config.verbosity,
+            rng=rng,
         )
         logging.debug(f"traj_path returned: {traj_path}")
     elif noise.name == "flip-prob":
@@ -177,22 +171,14 @@ def get_prefs(
             append=config.append,
             overwrite=config.overwrite,
             verbosity=config.verbosity,
+            rng=rng,
         )
-        search_results = {
-            "state": get_temp_from_pref_path(state_path),
-            "traj": get_temp_from_pref_path(traj_path),
-        }
-        dump(search_results, inference_outdir / "search_results.pkl")
     return (state_path, state_start_trial), (traj_path, traj_start_trial)
 
 
 def write_config(config: ExperimentConfig, inference_outdir: Path) -> None:
     config_yaml = OmegaConf.to_yaml(config)
     (inference_outdir / "config.yaml").open("w").write(config_yaml)
-
-
-def get_temp_from_pref_path(state_path: Path) -> float:
-    return float(state_path.parts[-4])
 
 
 if __name__ == "__main__":

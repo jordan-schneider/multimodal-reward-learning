@@ -18,6 +18,13 @@ from scipy.optimize import linprog  # type: ignore
 from mrl.dataset.random_policy import RandomPolicy
 
 
+def get_temp_from_pref_path(path: Path) -> float:
+    parts = path.parts
+    prefs_index = parts.index("prefs")
+    temp_index = prefs_index + 2  # prefs/modality/temp/...
+    return float(parts[temp_index])
+
+
 def get_angle(v1: np.ndarray, v2: np.ndarray) -> float:
     return np.arccos(
         np.clip(
@@ -28,7 +35,11 @@ def get_angle(v1: np.ndarray, v2: np.ndarray) -> float:
     )
 
 
-NORM_DIFF_MODES = Literal["diff-length", "sum-length", "max-length", "log-diff-length", None]
+NORM_DIFF_MODES = Literal[
+    "diff-length", "sum-length", "max-length", "log-diff-length", None
+]
+
+
 def normalize_diffs(
     features: np.ndarray,
     mode: NORM_DIFF_MODES = None,
@@ -183,38 +194,6 @@ def find_policy_path(
 def find_best_gpu() -> torch.device:
     device_id = GPUtil.getFirstAvailable(order="load")[0]
     return torch.device(f"cuda:{device_id}")
-
-
-def np_gather(
-    indir: Path,
-    name: str,
-    max_nbytes: int = -1,
-) -> np.ndarray:
-    paths = [
-        path
-        for path in indir.iterdir()
-        if path.is_file() and re.search(f"/{name}(.[0-9]+)?.npy", str(path))
-    ]
-    logging.info(f"Gathering from {paths}")
-    if len(paths) == 0:
-        raise FileNotFoundError(f"No {name} files found in {indir}")
-    shards = []
-
-    nbytes = 0
-    while len(paths) > 0 and (max_nbytes == -1 or nbytes < max_nbytes):
-        path = paths.pop()
-        array: np.ndarray = np.load(path)
-        rows_only = array.reshape((array.shape[0], -1))
-        finite_rows = np.all(np.isfinite(rows_only), axis=1)
-        nonzero_rows = np.any(rows_only != 0, axis=1)
-        if not np.all(finite_rows) or not np.all(nonzero_rows):
-            array = array[finite_rows & nonzero_rows]
-            np.save(path, array)
-        nbytes += array.nbytes
-        shards.append(array)
-    data = np.concatenate(shards)
-    logging.info(f"Loaded array with shape {data.shape} from {indir}")
-    return data
 
 
 def np_remove(indir: Path, name: str) -> None:

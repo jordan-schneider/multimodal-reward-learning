@@ -7,8 +7,6 @@ import fire  # type: ignore
 import numpy as np
 from matplotlib import pyplot as plt  # type: ignore
 
-from mrl.util import np_gather
-
 
 def overlap(
     outdir: Path,
@@ -24,10 +22,10 @@ def overlap(
     normals: Dict[str, np.ndarray] = {}
     if state_path is not None:
         state_path = Path(state_path)
-        normals["state"] = np_gather(state_path.parent, state_path.name, n_normals)
+        normals["state"] = np.load(state_path)
     if traj_path is not None:
         traj_path = Path(traj_path)
-        normals["traj"] = np_gather(traj_path.parent, traj_path.name, n_normals)
+        normals["traj"] = np.load(traj_path)
 
     if normalize:
         for name, data in normals.items():
@@ -57,7 +55,9 @@ def overlap(
     plt.savefig(outdir / "overlap.png")
 
 
-def find_unique(normal_groups: Dict[str, np.ndarray], ball_size: float) -> Dict[str, int]:
+def find_unique(
+    normal_groups: Dict[str, np.ndarray], ball_size: float
+) -> Dict[str, int]:
     out: Dict[str, int] = {}
     for name, normals in normal_groups.items():
         n_unique = 0
@@ -65,7 +65,10 @@ def find_unique(normal_groups: Dict[str, np.ndarray], ball_size: float) -> Dict[
             if name == other_name:
                 continue
             dists = np.array(
-                [np.min(np.linalg.norm(normal - other_normals, axis=1)) for normal in normals]
+                [
+                    np.min(np.linalg.norm(normal - other_normals, axis=1))
+                    for normal in normals
+                ]
             )
             n_unique += np.sum(dists > ball_size)
         out[name] = n_unique
