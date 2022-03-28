@@ -41,14 +41,14 @@ def plot_comparisons(results: Results, outdir: Path) -> None:
 
     if results.has("gt_likelihood"):
         logging.info("Plotting likelihood")
-        likelihoods_gt = results.get("gt_likelihood")
+        likelihoods_gt = results.getall("gt_likelihood")
         sns.relplot(
             data=likelihoods_gt,
             x="time",
-            y="likelihood_gt",
+            y="gt_likelihood",
             hue="modality",
             kind="line",
-        ).savefig(outdir / "likelihood_gt.png")
+        ).savefig(outdir / "gt_likelihood.png")
         plt.close()
     else:
         logging.warning("Results did not have likelihood gt")
