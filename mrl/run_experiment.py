@@ -9,7 +9,7 @@ from omegaconf import MISSING, OmegaConf
 from mrl.aligned_rewards.aligned_reward_set import AlignedRewardSet
 from mrl.aligned_rewards.make_ars import main as make_ars
 from mrl.configs import ExperimentConfig, FixedPreference, FlipProb, register_configs
-from mrl.dataset.preferences import gen_preferences, gen_preferences_flip_prob
+from mrl.dataset.preferences import PreferenceGenerator
 from mrl.experiment_db.experiment import ExperimentDB
 from mrl.inference.analysis import analysis
 from mrl.inference.plots import plot_comparisons
@@ -95,6 +95,23 @@ def get_prefs(
 ) -> Tuple[Tuple[Path, int], Tuple[Path, int]]:
     noise = config.preference.noise
     search_results_path = inference_outdir / "search_results.pkl"
+
+    generator = PreferenceGenerator(
+        rootdir=rootdir,
+        env=config.env.name,
+        outname="prefs",
+        rng=rng,
+        prefs_per_trial=config.preference.prefs_per_trial,
+        n_trials=config.n_trials,
+        n_envs=config.env.n_envs,
+        deduplicate=config.preference.deduplicate,
+        normalize_step=config.env.normalize_step,
+        normalize_differences=config.preference.normalize_differences,
+        append=config.append,
+        overwrite=config.overwrite,
+        verbosity=config.verbosity,
+    )
+
     if noise.name == "fixed" or (
         noise.name == "flip-prob" and search_results_path.exists()
     ):
@@ -109,41 +126,13 @@ def get_prefs(
             state_temp = noise.temp
             traj_temp = noise.temp
 
-        state_path, state_start_trial = gen_preferences(
-            rootdir=rootdir,
-            env=config.env.name,
-            modality="state",
-            prefs_per_trial=config.preference.prefs_per_trial,
-            n_trials=config.n_trials,
-            n_parallel_envs=config.env.n_envs,
-            outname="prefs",
-            temperature=state_temp,
-            deduplicate=config.preference.deduplicate,
-            normalize_step_features=config.env.normalize_step,
-            normalize_differences=config.preference.normalize_differences,
-            append=config.append,
-            overwrite=config.overwrite,
-            verbosity=config.verbosity,
-            rng=rng,
+        state_path, state_start_trial = generator.gen_preferences(
+            modality="state", temperature=state_temp
         )
         logging.debug(f"state_path returned: {state_path}")
-        traj_path, traj_start_trial = gen_preferences(
-            rootdir=rootdir,
-            env=config.env.name,
+        traj_path, traj_start_trial = generator.gen_preferences(
             modality="traj",
-            prefs_per_trial=config.preference.prefs_per_trial,
-            n_trials=config.n_trials,
-            n_parallel_envs=config.env.n_envs,
-            outname="prefs",
-            max_length=config.preference.max_length,
             temperature=traj_temp,
-            deduplicate=config.preference.deduplicate,
-            normalize_step_features=config.env.normalize_step,
-            normalize_differences=config.preference.normalize_differences,
-            append=config.append,
-            overwrite=config.overwrite,
-            verbosity=config.verbosity,
-            rng=rng,
         )
         logging.debug(f"traj_path returned: {traj_path}")
     elif noise.name == "flip-prob":
@@ -152,25 +141,11 @@ def get_prefs(
         (state_path, state_start_trial), (
             traj_path,
             traj_start_trial,
-        ) = gen_preferences_flip_prob(
-            rootdir=rootdir,
-            env=config.env.name,
-            outname="prefs",
-            prefs_per_trial=config.preference.prefs_per_trial,
-            n_trials=config.n_trials,
+        ) = generator.gen_preferences_flip_prob(
             n_calibration_prefs=noise.calibration_prefs,
-            n_envs=config.env.n_envs,
             flip_prob=noise.prob,
             init_state_temp=noise.init_state_temp,
             init_traj_temp=noise.init_traj_temp,
-            deduplicate=config.preference.deduplicate,
-            normalize_step=config.env.normalize_step,
-            normalize_differences=config.preference.normalize_differences,
-            max_length=config.preference.max_length,
-            append=config.append,
-            overwrite=config.overwrite,
-            verbosity=config.verbosity,
-            rng=rng,
         )
     return (state_path, state_start_trial), (traj_path, traj_start_trial)
 

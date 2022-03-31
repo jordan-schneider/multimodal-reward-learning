@@ -132,6 +132,27 @@ def reinit(n: torch.nn.Module) -> None:
     n.apply(_init)
 
 
+def max_batch_size(
+    modality: Literal["state", "traj"],
+    prefs: int,
+    n_parallel_envs: int,
+    step_nbytes: int,
+) -> int:
+    if modality == "state":
+        return max_state_batch_size(
+            n_states=prefs,
+            n_parallel_envs=n_parallel_envs,
+            step_nbytes=step_nbytes,
+        )
+    elif modality == "traj":
+        return max_traj_batch_size(
+            n_trajs=prefs,
+            n_parallel_envs=n_parallel_envs,
+            step_nbytes=step_nbytes,
+        )
+    else:
+        raise ValueError(f"Modality {modality} must be 'state' or 'traj'")
+
 def max_state_batch_size(n_states: int, n_parallel_envs: int, step_nbytes: int) -> int:
     gc.collect()
     free_memory = psutil.virtual_memory().available
