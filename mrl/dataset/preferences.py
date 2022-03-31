@@ -5,7 +5,7 @@ import random
 from dataclasses import dataclass
 from math import sqrt
 from pathlib import Path
-from typing import Callable, Dict, List, Literal, Optional, Tuple, cast
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, cast
 
 import matplotlib.pyplot as plt  # type: ignore
 import numpy as np
@@ -193,17 +193,8 @@ def gen_preferences(
     if append and overwrite:
         raise ValueError("Cannot append and overwrite")
 
-    folders = HyperFolders(
-        rootdir / "prefs", schema=["modality", "temp", "dedup", "norm", "length"]
-    )
-    outdir = folders.add_experiment(
-        {
-            "modality": modality,
-            "temp": temperature,
-            "dedup": "dedup" if deduplicate else "no-dedup",
-            "norm": f"norm-{normalize_differences}",
-            "length": f"length-{max_length}" if max_length is not None else "no-max",
-        }
+    outdir = setup_outdir(
+        rootdir, modality, max_length, temperature, deduplicate, normalize_differences
     )
     features_outpath = outdir / (outname + ".features.npy")
 
@@ -373,6 +364,34 @@ def gen_preferences(
     plot_flip_probs(flip_probs, outdir, outname, temperature)
 
     return features_outpath, start_trial
+
+
+def setup_outdir(
+    rootdir: Path,
+    modality: Literal["state", "traj"],
+    max_length: Optional[int],
+    temperature: float,
+    deduplicate: bool,
+    normalize_differences: NORM_DIFF_MODES,
+):
+    schema = ["modality", "temp", "dedup", "norm"]
+    if modality == "traj":
+        schema.append("length")
+
+    folders = HyperFolders(rootdir / "prefs", schema=schema)
+    hyper_values: Dict[str, Any] = {
+        "modality": modality,
+        "temp": temperature,
+        "dedup": "dedup" if deduplicate else "no-dedup",
+        "norm": f"norm-{normalize_differences}",
+    }
+    if modality is "traj":
+        hyper_values["length"] = (
+            f"length-{max_length}" if max_length is not None else "no-max",
+        )
+
+    outdir = folders.add_experiment(hyper_values)
+    return outdir
 
 
 def max_batch_size(
