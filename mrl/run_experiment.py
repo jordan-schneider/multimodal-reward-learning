@@ -117,7 +117,6 @@ def get_prefs(
             n_trials=config.n_trials,
             n_parallel_envs=config.env.n_envs,
             outname="prefs",
-            max_length=config.preference.max_length,
             temperature=state_temp,
             deduplicate=config.preference.deduplicate,
             normalize_step_features=config.env.normalize_step,
