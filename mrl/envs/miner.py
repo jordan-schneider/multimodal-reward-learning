@@ -1,9 +1,11 @@
 import logging
-from typing import Any, Dict, Final, List, Optional, Tuple, Type, Union, cast
+from itertools import product
+from typing import Any, Dict, Final, List, Sequence, Tuple, Union, cast
 
 import numpy as np
 from mrl.envs.feature_envs import FeatureEnv, StateInterface
 from mrl.envs.gym3_util import recover_grid
+from mrl.util import normalize_vecs
 
 __DIST_ARRAY = np.array(
     [[np.abs(x) + np.abs(y) for x in range(-34, 35)] for y in range(-34, 35)]
@@ -62,6 +64,7 @@ class Miner(FeatureEnv[MinerState]):
         "right": 7,
         "stay": 4,
     }
+    _N_FEATURES: int = 4
 
     class State(MinerState):
         # Allows the typing for Miner.State to work.
@@ -81,11 +84,11 @@ class Miner(FeatureEnv[MinerState]):
         normalize_features: bool = False,
         **kwargs,
     ) -> None:
-        if reward_weights.shape[0] != 4:
+        if reward_weights.shape[0] != self._N_FEATURES:
             raise ValueError(f"Must supply 4 reward weights, {reward_weights=}")
 
         self._reward_weights = reward_weights
-        self._n_features = reward_weights.shape[0]
+        self._n_features = self._N_FEATURES
         self.use_normalized_features = normalize_features
         super().__init__(
             num=num,
@@ -241,3 +244,23 @@ class Miner(FeatureEnv[MinerState]):
                 f"There are {n_diamonds} this step vs {last_n_diamonds} last step, and first={first}."
             )
         return n_diamonds != last_n_diamonds
+
+    @staticmethod
+    def make_reward_weights(
+        values_per_dim: int = 2,
+        feature_ranges: Sequence[Tuple[float, float]] = [
+            (-1, 0),
+            (-0.1, 0),
+            (-0.1, 0),
+        ],
+    ) -> np.ndarray:
+        rewards = np.empty((values_per_dim ** len(feature_ranges), Miner._N_FEATURES))
+        features = [
+            np.linspace(start, stop, num=values_per_dim)
+            for start, stop in feature_ranges
+        ]
+        # Reverse for backward compatibility reasons.
+        rewards[:, 1:] = np.stack(product(*features))[::-1]
+        rewards[:, 0] = 1.0
+
+        return normalize_vecs(rewards)

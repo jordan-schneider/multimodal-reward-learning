@@ -1,27 +1,23 @@
 from pathlib import Path
+from typing import List
 
 import fire  # type: ignore
 import gym3  # type: ignore
 import numpy as np
 from mpi4py import MPI  # type: ignore
-from mrl.envs.util import ENV_NAMES, make_env
+from mrl.envs.util import FEATURE_ENV_NAMES, make_env, setup_env_folder
 from mrl.util import find_policy_path
 from phasic_policy_gradient.train import train_fn
-
-# TODO: Fix the imports here
 
 
 def train(
     path: Path,
-    env_name: ENV_NAMES,
+    env_name: FEATURE_ENV_NAMES,
     seed: int = 0,
     n_parallel_envs: int = 64,
     n_minibatch: int = 8,
     total_interacts: int = 100_000_000,
-    fix_reward_sign: bool = False,
-    use_original_reward: bool = False,
-    use_near_original_reward: bool = False,
-    replications: int = 1,
+    replications: str = "1",
     overwrite: bool = False,
     port=29500,
 ) -> None:
@@ -30,24 +26,26 @@ def train(
 
     comm = MPI.COMM_WORLD
 
-    rng = np.random.default_rng(seed)
-    make_rewards(
-        path=path,
-        env=env_name,
-        rng=rng,
-        comm=comm,
-        overwrite=overwrite,
-        fix_reward_sign=fix_reward_sign,
-        use_original=use_original_reward,
-        use_near_original=use_near_original_reward,
-        replications=replications,
-    )
+    repls = parse_replications(replications)
+    max_replication = max(repls)
 
-    for replication in range(replications):
+    env_type = type(make_env(name=env_name, num=1))
+    if comm.Get_rank() == 0:
+        setup_env_folder(
+            env_dir=path,
+            env=env_type,
+            n_reward_values=max_replication,
+            overwrite=overwrite,
+        )
+    comm.bcast(
+        env_type, root=0
+    )  # Forcing other threads to wait for 0 thread to finish making rewards.
+
+    for replication in repls:
         repl_path = path / str(replication)
         env = make_env(
             name=env_name,
-            reward=load_reward(path=repl_path, comm=comm),
+            reward=np.load(repl_path / "reward.npy"),
             num=n_parallel_envs,
             rand_seed=seed + replication,
         )
@@ -73,6 +71,13 @@ def train(
             comm=comm,
             port=port,
         )
+
+
+def parse_replications(replications: str) -> List[int]:
+    if "," in replications:
+        return sum([parse_replications(g) for g in replications.split(",")], start=[])
+    start, stop = replications.split("-")
+    return list(range(int(start), int(stop) + 1))
 
 
 if __name__ == "__main__":
