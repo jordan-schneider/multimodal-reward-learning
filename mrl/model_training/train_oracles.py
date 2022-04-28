@@ -22,6 +22,7 @@ def train(
     port=29500,
 ) -> None:
     path = Path(path)
+    path /= env_name
     path.mkdir(parents=True, exist_ok=True)
 
     comm = MPI.COMM_WORLD
@@ -81,4 +82,4 @@ def parse_replications(replications: str) -> List[int]:
 
 
 if __name__ == "__main__":
-    fire.Fire({"train": train})
+    fire.Fire(train)
