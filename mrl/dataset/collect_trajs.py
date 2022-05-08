@@ -44,7 +44,7 @@ def main(
 
     for policy_path in policies:
         device = find_best_gpu()
-        policy = make_model(env, arch="detach")
+        policy = make_model(env, arch="shared")
         policy.load_state_dict(torch.load(policy_path, map_location=device))
         policy = policy.to(device)
 
