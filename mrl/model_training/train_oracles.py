@@ -30,12 +30,12 @@ def train(
     repls = parse_replications(replications)
     max_replication = max(repls)
 
-    env_type = type(make_env(name=env_name, num=1))
+    env_type = type(make_env(name=env_name, num=1, reward=1, extract_rgb=False))
     if comm.Get_rank() == 0:
         setup_env_folder(
             env_dir=path,
             env=env_type,
-            n_reward_values=max_replication,
+            n_rewards=max_replication,
             overwrite=overwrite,
         )
     comm.bcast(
@@ -50,8 +50,6 @@ def train(
             num=n_parallel_envs,
             rand_seed=seed + replication,
         )
-        env = gym3.ExtractDictObWrapper(env, "rgb")
-
         model_path, model_iter = find_policy_path(repl_path / "models", overwrite)
 
         start_time = model_iter * 100_000  # LogSaveHelper ic_per_save value
@@ -75,6 +73,8 @@ def train(
 
 
 def parse_replications(replications: str) -> List[int]:
+    if type(replications) == int:
+        return [int(replications)]
     if "," in replications:
         return sum([parse_replications(g) for g in replications.split(",")], start=[])
     start, stop = replications.split("-")

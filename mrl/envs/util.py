@@ -69,13 +69,13 @@ def get_root_env(env: Wrapper, max_layers: int = 100) -> Env:
 
 
 def setup_env_folder(
-    env_dir: Path, env: Type[FeatureEnv], n_reward_values: int, overwrite: bool = False
+    env_dir: Path, env: Type[FeatureEnv], n_rewards: int, overwrite: bool = False
 ):
     env_dir = Path(env_dir)
     env_dir.mkdir(parents=True, exist_ok=True)
 
-    rewards = env.make_reward_weights(n_reward_values)
-    for i, reward in rewards:
+    rewards = env.make_reward_weights(n_rewards)
+    for i, reward in enumerate(rewards):
         reward_dir = env_dir / str(i + 1)
         reward_dir.mkdir(parents=True, exist_ok=True)
         reward_path = reward_dir / "reward.npy"

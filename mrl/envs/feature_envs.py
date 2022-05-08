@@ -29,7 +29,7 @@ class FeatureEnv(ProcgenGym3Env, Generic[S]):
 
     @staticmethod
     def make_reward_weights(
-        values_per_dim: int = -1,
+        n_rewards: int = -1,
         feature_ranges: Sequence[Tuple[float, float]] = [],
     ) -> np.ndarray:
         raise NotImplementedError()
