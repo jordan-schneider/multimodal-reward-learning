@@ -1,5 +1,5 @@
-import logging
 from itertools import product
+from math import floor
 from typing import Any, Dict, Final, List, Sequence, Tuple, Union, cast
 
 import numpy as np
@@ -247,14 +247,16 @@ class Miner(FeatureEnv[MinerState]):
 
     @staticmethod
     def make_reward_weights(
-        values_per_dim: int = 2,
+        n_rewards: int = 2,
         feature_ranges: Sequence[Tuple[float, float]] = [
             (-1, 0),
             (-0.1, 0),
             (-0.1, 0),
         ],
     ) -> np.ndarray:
-        rewards = np.empty((values_per_dim ** len(feature_ranges), Miner._N_FEATURES))
+        n_dim = len(feature_ranges)
+        values_per_dim = floor(n_rewards ** (1 / n_dim))
+        rewards = np.empty((values_per_dim ** n_dim, Miner._N_FEATURES))
         features = [
             np.linspace(start, stop, num=values_per_dim)
             for start, stop in feature_ranges
