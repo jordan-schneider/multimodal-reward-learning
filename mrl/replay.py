@@ -4,12 +4,13 @@ from typing import cast
 import fire  # type: ignore
 import numpy as np
 import torch
-from gym3 import ExtractDictObWrapper, VideoRecorderWrapper  # type: ignore
-from phasic_policy_gradient.ppg import PhasicValueModel
+from gym3 import VideoRecorderWrapper  # type: ignore
 from phasic_policy_gradient.roller import Roller
+from phasic_policy_gradient.train import make_model
 from PIL import Image  # type: ignore
 
 from mrl.envs.util import ENV_NAMES, make_env
+from mrl.util import find_best_gpu
 
 
 def replay(
@@ -19,14 +20,15 @@ def replay(
     outdir: Path,
     horizon: int = 1000,
 ) -> None:
-    model = cast(PhasicValueModel, torch.load(model_path))
-    model = model.to(model.device)
+    env = make_env(name=env_name, reward=0, num=n_videos, render_mode="rgb_array")
+
+    device = find_best_gpu()
+
+    model = make_model(env, arch="shared").to(device=device)
+    model.load_state_dict(torch.load(model_path, map_location=device))
 
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-
-    env = make_env(name=env_name, reward=0, num=n_videos, render_mode="rgb_array")
-    env = ExtractDictObWrapper(env, "rgb")
 
     writer_kwargs = {
         "codec": "libx264rgb",
