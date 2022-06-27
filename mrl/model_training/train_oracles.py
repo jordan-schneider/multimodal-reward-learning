@@ -2,12 +2,29 @@ from pathlib import Path
 from typing import List
 
 import fire  # type: ignore
-import gym3  # type: ignore
 import numpy as np
+from linear_procgen.feature_envs import FeatureEnv
+from linear_procgen.util import ENV_NAMES as FEATURE_ENV_NAMES
+from linear_procgen.util import make_env
 from mpi4py import MPI  # type: ignore
-from mrl.envs.util import FEATURE_ENV_NAMES, make_env, setup_env_folder
+from mrl.envs.rewards import make_reward_weights
 from mrl.util import find_policy_path
 from phasic_policy_gradient.train import train_fn
+
+
+def setup_env_folder(
+    env_dir: Path, env: FeatureEnv, n_rewards: int, overwrite: bool = False
+):
+    env_dir = Path(env_dir)
+    env_dir.mkdir(parents=True, exist_ok=True)
+
+    rewards = make_reward_weights(env, n_rewards)
+    for i, reward in enumerate(rewards):
+        reward_dir = env_dir / str(i + 1)
+        reward_dir.mkdir(parents=True, exist_ok=True)
+        reward_path = reward_dir / "reward.npy"
+        if overwrite or not reward_path.exists():
+            np.save(reward_path, reward)
 
 
 def train(
@@ -30,16 +47,16 @@ def train(
     repls = parse_replications(replications)
     max_replication = max(repls)
 
-    env_type = type(make_env(name=env_name, num=1, reward=1, extract_rgb=False))
+    tmp_env = make_env(name=env_name, num=1, reward=1, extract_rgb=False)
     if comm.Get_rank() == 0:
         setup_env_folder(
             env_dir=path,
-            env=env_type,
+            env=tmp_env,
             n_rewards=max_replication,
             overwrite=overwrite,
         )
     comm.bcast(
-        env_type, root=0
+        tmp_env, root=0
     )  # Forcing other threads to wait for 0 thread to finish making rewards.
 
     for replication in repls:

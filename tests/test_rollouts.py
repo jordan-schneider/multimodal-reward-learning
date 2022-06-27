@@ -2,14 +2,16 @@ from typing import Final
 
 import numpy as np
 from gym3 import ExtractDictObWrapper  # type: ignore
+from linear_procgen import Miner
 from mrl.dataset.random_policy import RandomPolicy
 from mrl.dataset.roller import DatasetRoller, procgen_rollout
-from mrl.envs import Miner
+
+N_FEATURES = 5
 
 
 def test_rollout_fills_arrays():
     NUM: Final[int] = 2
-    env = Miner(np.zeros(4), num=NUM)
+    env = Miner(np.zeros(N_FEATURES), num=NUM)
     env = ExtractDictObWrapper(env, "rgb")
 
     policy = RandomPolicy(env.ac_space, num=NUM)
@@ -24,7 +26,7 @@ def test_rollout_always_firsts():
     N_ENVS: Final[int] = 100
     N_TRAJS = 100
     T = 1001
-    env = Miner(np.zeros(4), num=N_ENVS)
+    env = Miner(np.zeros(N_FEATURES), num=N_ENVS)
     env = ExtractDictObWrapper(env, "rgb")
 
     policy = RandomPolicy(env.ac_space, num=N_ENVS)

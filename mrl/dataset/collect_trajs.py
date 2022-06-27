@@ -11,7 +11,7 @@ from gym3 import ExtractDictObWrapper  # type: ignore
 from mrl.dataset.random_policy import RandomPolicy
 from mrl.dataset.roller import procgen_rollout_dataset
 from mrl.dataset.trajectory_db import FeatureDataset
-from mrl.envs import Miner
+from linear_procgen import Miner
 from mrl.util import find_best_gpu
 from phasic_policy_gradient.train import make_model
 

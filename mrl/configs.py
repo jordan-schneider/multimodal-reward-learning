@@ -4,14 +4,13 @@ from dataclasses import dataclass, field
 from typing import Any, List, Literal, Optional
 
 from hydra.core.config_store import ConfigStore
+from linear_procgen.util import ENV_NAMES
 from omegaconf import MISSING
-
-from mrl.envs.util import FEATURE_ENV_NAMES
 
 
 @dataclass
 class EnvConfig:
-    name: FEATURE_ENV_NAMES = "miner"
+    name: ENV_NAMES = "miner"
     n_envs: int = 100
     normalize_step: bool = False
 

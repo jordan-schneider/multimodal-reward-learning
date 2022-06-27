@@ -6,8 +6,9 @@ from typing import Dict, Tuple
 import fire  # type: ignore
 import numpy as np
 import torch
+from linear_procgen.util import ENV_NAMES as FEATURE_ENV_NAMES
+from linear_procgen.util import make_env
 from mrl.dataset.roller import procgen_rollout_dataset
-from mrl.envs.util import FEATURE_ENV_NAMES, make_env
 from mrl.util import find_best_gpu
 from phasic_policy_gradient.train import make_model
 
@@ -57,7 +58,7 @@ def main(
             env, policy, timesteps=horizon, flags=["first"], tqdm=True
         )
         assert data.data["firsts"] is not None
-        finished_trajs[model_path] = (np.sum(data.data['firsts']), horizon)
+        finished_trajs[model_path] = (np.sum(data.data["firsts"]), horizon)
         # TODO: Check this for bugs after feature change.
         if print_all:
             print(f"{model_path} finished {finished_trajs[model_path][0]}/{horizon}")

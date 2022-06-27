@@ -7,8 +7,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 from gym3.extract_dict_ob import ExtractDictObWrapper  # type: ignore
-from mrl.envs import Maze, Miner
-from mrl.envs.util import FEATURE_ENV_NAMES, make_env
+from linear_procgen import Maze, Miner
+from linear_procgen.util import ENV_NAMES as FEATURE_ENV_NAMES
+from linear_procgen.util import make_env
 from mrl.util import batch, find_best_gpu, get_policy, setup_logging
 from tqdm import trange  # type: ignore
 
