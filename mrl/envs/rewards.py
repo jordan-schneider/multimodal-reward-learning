@@ -23,6 +23,8 @@ def _make_miner_reward(
     env: Miner,
     n_rewards: int,
     feature_ranges: Sequence[Tuple[float, float]] = [
+        (0, 1),
+        (-0.1, 0),
         (-1, 0),
         (-0.1, 0),
         (-0.1, 0),

@@ -55,9 +55,7 @@ def train(
             n_rewards=max_replication,
             overwrite=overwrite,
         )
-    comm.bcast(
-        tmp_env, root=0
-    )  # Forcing other threads to wait for 0 thread to finish making rewards.
+    comm.Barrier()  # Forcing other threads to wait for 0 thread to finish making rewards.
 
     for replication in repls:
         repl_path = path / str(replication)
