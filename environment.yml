@@ -10,6 +10,7 @@ dependencies:
   - qt=5.12.5
   - java-jdk 
   - pip
+  - redis-cli
   - pip:
     - gym3
     - torch
