@@ -30,6 +30,7 @@ dependencies:
     - hydra-core
     - pyyaml
     - git+https://github.com/jordan-schneider/omegaconf.git
+    - git+https://github.com/jordan-schneider/linear-procgen.git
     # Dev
     - pytest
     - hypothesis

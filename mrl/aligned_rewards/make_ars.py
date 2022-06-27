@@ -9,9 +9,10 @@ from typing import List, Literal, Optional
 import fire  # type: ignore
 import numpy as np
 import torch
+from linear_procgen.util import ENV_NAMES as FEATURE_ENV_NAMES
+from linear_procgen.util import get_root_env, make_env
 from mrl.dataset.preferences import get_policy
 from mrl.dataset.roller import procgen_rollout_dataset, procgen_rollout_features
-from mrl.envs.util import FEATURE_ENV_NAMES, get_root_env, make_env
 from mrl.memprof import get_memory
 from mrl.util import is_redundant, max_traj_batch_size, setup_logging
 from phasic_policy_gradient.ppg import PhasicValueModel

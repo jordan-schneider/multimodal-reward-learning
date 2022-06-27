@@ -9,9 +9,10 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, cast
 
 import matplotlib.pyplot as plt  # type: ignore
 import numpy as np
+from linear_procgen.feature_envs import FeatureEnv
+from linear_procgen.util import ENV_NAMES as FEATURE_ENV_NAMES
+from linear_procgen.util import get_root_env, make_env
 from mrl.dataset.roller import procgen_rollout_dataset, procgen_rollout_features
-from mrl.envs.feature_envs import FeatureEnv  # type: ignore
-from mrl.envs.util import FEATURE_ENV_NAMES, get_root_env, make_env
 from mrl.folders import HyperFolders
 from mrl.util import (
     NORM_DIFF_MODES,

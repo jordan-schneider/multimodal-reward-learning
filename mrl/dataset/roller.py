@@ -5,8 +5,8 @@ from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union, c
 import numpy as np
 import torch
 from mrl.dataset.trajectories import TrajectoryDataset
-from mrl.envs.feature_envs import FeatureEnv
-from mrl.envs.util import get_root_env
+from linear_procgen.feature_envs import FeatureEnv
+from linear_procgen.util import get_root_env
 from mrl.memprof import get_memory
 from phasic_policy_gradient.ppg import PhasicValueModel
 from procgen import ProcgenGym3Env

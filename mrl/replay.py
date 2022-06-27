@@ -1,15 +1,14 @@
 from pathlib import Path
-from typing import cast
 
 import fire  # type: ignore
 import numpy as np
 import torch
 from gym3 import VideoRecorderWrapper  # type: ignore
+from linear_procgen.util import ENV_NAMES, make_env
 from phasic_policy_gradient.roller import Roller
 from phasic_policy_gradient.train import make_model
 from PIL import Image  # type: ignore
 
-from mrl.envs.util import ENV_NAMES, make_env
 from mrl.util import find_best_gpu
 
 

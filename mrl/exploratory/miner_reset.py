@@ -1,6 +1,6 @@
 import fire  # type: ignore
 import numpy as np
-from mrl.envs.util import get_root_env, make_env
+from linear_procgen.util import get_root_env, make_env
 
 
 def main() -> None:

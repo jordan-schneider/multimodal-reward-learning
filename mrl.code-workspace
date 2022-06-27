@@ -8,6 +8,9 @@
 		},
 		{
 			"path": "../phasic-policy-gradient"
+		},
+		{
+			"path": "../linear-procgen"
 		}
 	],
 	"settings": {

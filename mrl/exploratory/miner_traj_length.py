@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt  # type: ignore
 import numpy as np
 from mrl.dataset.roller import procgen_rollout_dataset
 from mrl.dataset.trajectories import TrajectoryDataset
-from mrl.envs.util import make_env
+from linear_procgen.util import make_env
 from mrl.util import get_policy, is_redundant
 
 
