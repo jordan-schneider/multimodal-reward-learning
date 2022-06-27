@@ -12,7 +12,7 @@ import torch
 from gym3 import ExtractDictObWrapper  # type: ignore
 from mrl.dataset.offline_buffer import RlDataset
 from mrl.dataset.roller import procgen_rollout
-from mrl.envs.util import ENV_NAMES, make_env
+from linear_procgen.util import ENV_NAMES, make_env
 from mrl.model_training.online_batcher import BatchGenerator
 from mrl.model_training.writer import SequentialWriter
 from mrl.util import find_best_gpu, find_policy_path, reinit, setup_logging
