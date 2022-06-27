@@ -36,6 +36,8 @@ def test_first(seed: int) -> None:
 
         go_down(env)
 
+        # Take two empty actions because the first one is a noop frame to show users that the agent died.
+        env.act(np.array([NONE]))
         env.act(np.array([NONE]))
         _, _, first = env.observe()
         assert (
@@ -71,6 +73,7 @@ def test_grid_items(actions: List[int], seed: int) -> None:
 def test_empty_increasing(actions: List[int], seed: int):
     env = Miner(reward_weights=np.zeros(N_FEATURES), num=1, rand_seed=seed)
     last_n_empty = -1
+    states: List[Miner.MinerState] = []
     for action in actions:
         env.act(np.array([action]))
         _, _, first = env.observe()
@@ -79,10 +82,15 @@ def test_empty_increasing(actions: List[int], seed: int):
             last_n_empty = -1
 
         state = env.make_latent_states()[0]
+        states.append(state)
 
         n_empty = np.sum(state.grid == 100)
 
-        assert n_empty >= last_n_empty
+        if n_empty < last_n_empty:
+            states_str = "".join(str(state.grid) + "\n\n" for state in states)
+            assert (
+                state.grid[state.agent_pos[0]][state.agent_pos[1]] == 12
+            ), f"n_empty decreased from {last_n_empty} to {n_empty} and player did not just die. actions={actions}, states=\n{states_str}"
         last_n_empty = n_empty
 
 

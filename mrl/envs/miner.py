@@ -29,6 +29,8 @@ class MinerState(StateInterface):
         6: "exit",
         9: "dirt",
         10: "oob_wall",
+        11: "mud",
+        12: "dead_player",
         100: "space",
     }
 
@@ -192,14 +194,14 @@ class Miner(FeatureEnv[MinerState]):
         # You are only in danger if the thing directly above you is moving
         if state.grid[agent_x, agent_y + 1] in {3, 4}:
             return (True, 1) if return_time_to_die else True
-        elif state.grid[agent_x, agent_y + 1] in {1, 2, 9, 10}:
+        elif state.grid[agent_x, agent_y + 1] in {1, 2, 9, 10, 11, 12}:
             return (False, -1) if return_time_to_die else False
 
         for y in range(agent_y + 2, state.grid.shape[1]):
             if state.grid[agent_x, y] in {1, 2, 3, 4}:
                 t = y - agent_y
                 return (True, t) if return_time_to_die else True
-            elif state.grid[agent_x, y] in {9, 10}:
+            elif state.grid[agent_x, y] in {9, 10, 11, 12}:
                 return (False, -1) if return_time_to_die else False
 
         return (False, -1) if return_time_to_die else False
