@@ -4,7 +4,7 @@ packages = find_packages()
 package_data = {package: ["py.typed"] for package in packages}
 
 setup(
-    name="multimodal-reward-learning",
+    name="mrl",
     packages=packages,
     version="0.0.1",
     package_data=package_data,
