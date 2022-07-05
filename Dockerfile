@@ -2,9 +2,12 @@
 FROM docker.io/library/python:3.8-slim
 RUN apt update && apt install -y git default-jre cmake g++ qtbase5-dev mpich && rm -rf /var/lib/apt/lists/*
 WORKDIR .
-RUN python -m pip install gym3
 COPY requirements.txt requirements.txt
+COPY requirements-problematic.txt requirements-problematic.txt
+
+RUN python -m pip install mpi4py
 RUN python -m pip install -r requirements.txt
+RUN python -m pip install -r requirements-problematic.txt
 
 # Copy over your python code
 COPY mrl/ mrl/

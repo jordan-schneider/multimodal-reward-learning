@@ -1,9 +1,7 @@
-mpi4py
 gym3
 gym
 filelock
 numpy>=1.21
-git+https://github.com/jordan-schneider/linear-procgen.git
 git+https://github.com/jordan-schneider/phasic-policy-gradient.git
 git+https://github.com/jordan-schneider/omegaconf.git
 torch
