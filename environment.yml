@@ -6,12 +6,10 @@ channels:
 dependencies:
   - python=3.8
   - mesalib
-  - openmpi-mpicc
   - cmake
   - qt=5.12.5
   - java-jdk 
   - redis
-  - mpi4py
   - pip
   - pip:
     - -r requirements.txt

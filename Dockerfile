@@ -5,7 +5,6 @@ WORKDIR .
 COPY requirements.txt requirements.txt
 COPY requirements-problematic.txt requirements-problematic.txt
 
-RUN python -m pip install mpi4py
 RUN python -m pip install -r requirements.txt
 RUN python -m pip install -r requirements-problematic.txt
 
