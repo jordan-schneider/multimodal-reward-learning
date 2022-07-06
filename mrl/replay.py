@@ -7,7 +7,6 @@ from gym3 import VideoRecorderWrapper  # type: ignore
 from linear_procgen.util import ENV_NAMES, make_env
 from phasic_policy_gradient.roller import Roller
 from phasic_policy_gradient.train import make_model
-from PIL import Image  # type: ignore
 
 from mrl.util import find_best_gpu
 
@@ -42,6 +41,7 @@ def replay(
             writer_kwargs=writer_kwargs,
             info_key="rgb",
             prefix=str(i) + "_",
+            fps=1,
         )
     done = np.zeros((n_videos,), dtype=bool)
 
@@ -59,11 +59,6 @@ def replay(
         t += 1
         firsts = out["first"]
         done = done | firsts.cpu().numpy()
-
-
-def frames_to_gif(frames: np.ndarray, filename: Path) -> None:
-    imgs = [Image.fromarray(frame) for frame in frames]
-    imgs[0].save(filename, save_all=True, append_images=imgs[1:], duration=100, loop=0)
 
 
 if __name__ == "__main__":
