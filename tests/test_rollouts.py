@@ -6,7 +6,7 @@ from linear_procgen import Miner
 from mrl.dataset.random_policy import RandomPolicy
 from mrl.dataset.roller import DatasetRoller, procgen_rollout
 
-N_FEATURES = 5
+N_FEATURES = 6
 
 
 def test_rollout_fills_arrays():

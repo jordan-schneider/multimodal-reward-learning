@@ -29,7 +29,7 @@ def fix_shape(rootdir: Path, name: str) -> None:
         if len(arr.shape) != 2:
             print(file)
             print(arr.shape)
-            arr = arr.reshape((-1, 5))
+            arr = arr.reshape((-1, 6))
             np.save(file, arr)
 
         if np.any(np.all(arr == 0, axis=1)):
