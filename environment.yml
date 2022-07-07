@@ -4,6 +4,7 @@ channels:
   - bioconda
   - defaults
 dependencies:
+  - c-compiler
   - python=3.8
   - mesalib
   - cmake
