@@ -9,7 +9,7 @@ from tqdm import tqdm  # type: ignore
 
 
 def make_sphere_cover(
-    n_samples: int, rng: np.random.Generator, dims: int = 5
+    n_samples: int, rng: np.random.Generator, dims: int = 6
 ) -> np.ndarray:
     samples = rng.standard_normal(size=(n_samples, dims))
     samples = (samples.T / np.linalg.norm(samples, axis=1)).T

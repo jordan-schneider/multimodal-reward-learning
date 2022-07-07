@@ -8,10 +8,10 @@ import numpy as np
 import torch
 from argh import arg  # type: ignore
 from gym3 import ExtractDictObWrapper  # type: ignore
+from linear_procgen import Miner
 from mrl.dataset.random_policy import RandomPolicy
 from mrl.dataset.roller import procgen_rollout_dataset
 from mrl.dataset.trajectory_db import FeatureDataset
-from linear_procgen import Miner
 from mrl.util import find_best_gpu
 from phasic_policy_gradient.train import make_model
 
@@ -39,7 +39,7 @@ def main(
     else:
         dataset = FeatureDataset(rng=rng)
 
-    env = Miner(reward_weights=np.zeros(5), num=n_envs)
+    env = Miner(reward_weights=np.zeros(6), num=n_envs)
     env = ExtractDictObWrapper(env, "rgb")
 
     for policy_path in policies:
