@@ -8,8 +8,10 @@ from linear_procgen.util import ENV_NAMES as FEATURE_ENV_NAMES
 from linear_procgen.util import make_env
 from mpi4py import MPI  # type: ignore
 from mrl.envs.rewards import make_reward_weights
+from mrl.model_training.writer import SequentialWriter
 from mrl.util import find_policy_path
 from phasic_policy_gradient.train import train_fn
+from torch.utils.tensorboard.writer import SummaryWriter
 
 
 def setup_env_folder(
@@ -64,6 +66,7 @@ def train(
             reward=np.load(repl_path / "reward.npy"),
             num=n_parallel_envs,
             rand_seed=seed + replication,
+            log_writer=SequentialWriter(SummaryWriter(log_dir=repl_path / "logs/env")),
         )
         model_path, model_iter = find_policy_path(repl_path / "models", overwrite)
 
@@ -81,7 +84,7 @@ def train(
             arch="detach",
             interacts_total=total_interacts,
             n_epoch_vf=6,
-            log_dir=repl_path / "logs",
+            log_dir=repl_path / "logs/train",
             comm=comm,
             port=port,
         )
