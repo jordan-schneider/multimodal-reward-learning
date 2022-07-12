@@ -7,6 +7,7 @@ dependencies:
   - c-compiler
   - python=3.8
   - mesalib
+  - openmpi-mpicc
   - cmake
   - qt=5.12.5
   - java-jdk 
