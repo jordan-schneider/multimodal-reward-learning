@@ -1,3 +1,4 @@
+import logging
 import pickle as pkl
 from pathlib import Path
 from typing import List
@@ -42,6 +43,7 @@ def main(
     env = make_env(name="miner", num=n_envs, reward=0)
 
     for policy_path in policies:
+        logging.info(f"Collecting {timesteps} steps from policy at {policy_path}")
         device = find_best_gpu()
         policy = make_model(env, arch="shared")
         policy.load_state_dict(torch.load(policy_path, map_location=device))

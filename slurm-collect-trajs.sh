@@ -15,5 +15,16 @@
 POLICY_DIR=data/miner/$SLURM_ARRAY_TASK_ID/models
 LAST_MODEL=$(ls $POLICY_DIR | grep -o -E "[0-9]+" | sort -n | tail -n 1)
 
+# n-envs Determined empirically
+
 ./build_env.sh
-srun --cpus-per-task=8 conda run -n mrl time python mrl/dataset/collect_trajs.py --policies $POLICY_DIR/model500.jd $POLICY_DIR/model1000.jd $POLICY_DIR/model1500.jd  $POLICY_DIR/model$LAST_MODEL.jd --outdir data/miner/$SLURM_ARRAY_TASK_ID/  --timesteps 10000 --n-envs $((4 * 2**$SLURM_ARRAY_TASK_ID)) --seed=1978345789
+srun --cpus-per-task=8 conda run -n mrl time python mrl/dataset/collect_trajs.py \
+  --policies \
+    $POLICY_DIR/model$LAST_MODEL.jd \
+    $POLICY_DIR/model500.jd \
+    $POLICY_DIR/model1000.jd \
+    $POLICY_DIR/model1500.jd \
+  --outdir data/miner/$SLURM_ARRAY_TASK_ID/ \
+  --timesteps 1000000 \
+  --n-envs 1024 \
+  --seed 1978345789
