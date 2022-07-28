@@ -25,6 +25,6 @@ srun --cpus-per-task=8 conda run -n mrl time python mrl/dataset/collect_trajs.py
     $POLICY_DIR/model1000.jd \
     $POLICY_DIR/model1500.jd \
   --outdir data/miner/$SLURM_ARRAY_TASK_ID/ \
-  --timesteps 1000000 \
+  --timesteps 10000 \
   --n-envs 1024 \
   --seed 1978345789

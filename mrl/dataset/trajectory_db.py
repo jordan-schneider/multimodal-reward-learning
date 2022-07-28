@@ -1,6 +1,6 @@
 from itertools import product
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Sequence, Tuple, Union
+from typing import Dict, Final, List, Literal, Optional, Sequence, Tuple, Union, cast
 
 import arrow
 import numpy as np
@@ -17,7 +17,7 @@ def count_items(arr: np.ndarray, item_shape: Tuple[int, ...]) -> int:
 
 
 def not_all_equal(x: Sequence) -> bool:
-    return any(x[0] == x[i] for i in range(1, len(x)))
+    return any(x[0] != x[i] for i in range(1, len(x)))
 
 
 def batch(
@@ -33,18 +33,24 @@ def batch(
 
 
 class FeatureDataset:
-    def __init__(self, rng: np.random.Generator):
-        self.df = pd.DataFrame(
-            columns=[
-                "policy",
-                "datetime",
-                "length",
-                "states",
-                "features",
-                "actions",
-                "total_feature",
-            ]
-        )
+    BASE_COLS: Final[List[str]] = [
+        "policy",
+        "datetime",
+        "length",
+        "states",
+        "features",
+        "actions",
+        "total_feature",
+    ]
+
+    def __init__(
+        self, rng: np.random.Generator, extra_cols: Optional[Sequence[str]] = None
+    ):
+        cols = list(self.BASE_COLS)
+        if extra_cols is not None:
+            cols += list(extra_cols)
+        self.df = pd.DataFrame(columns=cols)
+        # Paths to policy models -> indices into df
         self.states: Dict[str, Optional[np.ndarray]] = {}
 
         self.rng = rng
@@ -60,12 +66,24 @@ class FeatureDataset:
         states: Union[Sequence[np.ndarray], np.ndarray, None] = None,
         state_features: Union[Sequence[np.ndarray], np.ndarray, None] = None,
         actions: Union[Sequence[np.ndarray], np.ndarray, None] = None,
+        extras: Optional[Dict[str, Union[Sequence[np.ndarray], np.ndarray]]] = None,
     ) -> None:
-        if states is None and state_features is None and actions is None:
+        if (
+            states is None
+            and state_features is None
+            and actions is None
+            and extras is None
+        ):
             raise ValueError(
-                "Must provide at least one of states, state_features, or actions."
+                "Must provide at least one of states, state_features, actions, or extras."
             )
-        types = [type(a) for a in (states, state_features, actions) if a is not None]
+        if extras is None:
+            extras = {}
+        types = [
+            type(a)
+            for a in (states, state_features, actions, *extras.values())
+            if a is not None
+        ]
         if not_all_equal(types):
             raise ValueError(f"Provided types are not all the same: {types}")
 
@@ -73,9 +91,19 @@ class FeatureDataset:
             (states, state_features, actions)
         )
 
+        extras_by_traj = cast(
+            Dict[str, np.ndarray],
+            {name: batch((arr,))[0] for name, arr in extras.items()},
+        )
+
         lens = [
             len(a)
-            for a in (state_by_traj, feature_by_traj, action_by_traj)
+            for a in (
+                state_by_traj,
+                feature_by_traj,
+                action_by_traj,
+                *extras_by_traj.values(),
+            )
             if a is not None
         ]
         if not_all_equal(lens):
@@ -92,12 +120,21 @@ class FeatureDataset:
                 feature_by_traj[traj] if feature_by_traj is not None else None
             )
             traj_action = action_by_traj[traj] if action_by_traj is not None else None
+            traj_extras = {name: arr[traj] for name, arr in extras_by_traj.items()}
 
             lens = [
                 len(arr)
-                for arr in (traj_state, traj_feature, traj_action)
+                for arr in (
+                    traj_state,
+                    traj_feature,
+                    traj_action,
+                    *traj_extras.values(),
+                )
                 if arr is not None
             ]
+            # import pdb
+
+            # pdb.set_trace()
             if not_all_equal(lens):
                 raise ValueError(f"Length of trajectory {traj} not consistent: {lens}")
 
@@ -109,6 +146,7 @@ class FeatureDataset:
                 traj_feature,
                 traj_action,
                 np.sum(traj_feature, axis=0) if traj_feature is not None else None,
+                *[traj_extras[key] for key in self.df.columns[len(self.BASE_COLS) :]],
             )
             self.states[str(policy)] = None
 
@@ -148,7 +186,7 @@ class FeatureDataset:
     def get_even_states(self, n: int) -> np.ndarray:
         policies = self.df["policy"].unique()
         n_policies = len(policies)
-        states_per_model_pair = max(1, n // (n_policies ** 2))
+        states_per_model_pair = max(1, n // (n_policies**2))
 
         out = []
         for first, second in product(policies, policies):
@@ -168,7 +206,7 @@ class FeatureDataset:
     def get_even_trajs(self, n: int) -> np.ndarray:
         policies = self.df["policy"].unique()
         n_policies = len(policies)
-        trajs_per_model_pair = max(1, n // (n_policies ** 2))
+        trajs_per_model_pair = max(1, n // (n_policies**2))
 
         out = []
         for first, second in product(policies, policies):
