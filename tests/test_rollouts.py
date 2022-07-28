@@ -40,7 +40,7 @@ def test_rollout_always_firsts():
     ) -> np.ndarray:
         return np.array([i["grid"] for i in info])
 
-    grid_shape = (N_ENVS, *env.get_info()[0]["grid"].shape)
+    grid_shape = env.get_info()[0]["grid"].shape
 
     roller = DatasetRoller(
         env=env,
