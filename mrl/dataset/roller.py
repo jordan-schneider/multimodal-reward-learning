@@ -1,12 +1,23 @@
 import gc
 import logging
-from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union, cast
+from typing import (
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    Union,
+    cast,
+)
 
 import numpy as np
 import torch
-from mrl.dataset.trajectories import TrajectoryDataset
 from linear_procgen.feature_envs import FeatureEnv
 from linear_procgen.util import get_root_env
+from mrl.dataset.trajectories import TrajectoryDataset
 from mrl.memprof import get_memory
 from phasic_policy_gradient.ppg import PhasicValueModel
 from procgen import ProcgenGym3Env
@@ -167,6 +178,19 @@ def procgen_rollout_features(
 
 
 class DatasetRoller:
+    class Hook(Protocol):
+        def __call__(
+            self,
+            state: np.ndarray,
+            action: Optional[np.ndarray],
+            reward: np.ndarray,
+            first: np.ndarray,
+            info: List[Dict[str, Any]],
+        ) -> np.ndarray:
+            """Recording hook that accepts a env.num states, rewards, firsts, infos, and possibly actions.
+            You may not recieve an action, e.g. if this is the last state in a trajectory."""
+            raise NotImplementedError()
+
     def __init__(
         self,
         env: ProcgenGym3Env,
@@ -180,6 +204,7 @@ class DatasetRoller:
             "first",
             "feature",
         ],
+        extras: Optional[Sequence[Tuple[Hook, str, Tuple[int, ...]]]] = None,
         remove_incomplete: bool = False,
         tqdm: bool = False,
     ):
@@ -215,6 +240,22 @@ class DatasetRoller:
             (n_actions + 1, env.num, self.root_env.n_features), "feature"
         )
 
+        self.extras = (
+            {
+                name: ArrayOrList(
+                    np.empty((n_actions + 1, env.num, *out_shape), dtype=np.float32)
+                    if self.fixed_size_arrays
+                    else []
+                )
+                for _, name, out_shape in extras
+            }
+            if extras is not None
+            else None
+        )
+        self.hooks = (
+            {name: hook for hook, name, _ in extras} if extras is not None else None
+        )
+
         self.remove_incomplete = remove_incomplete
 
     def make_array(
@@ -230,10 +271,12 @@ class DatasetRoller:
     def record(
         self,
         t: int,
+        state: np.ndarray,
+        action: Optional[np.ndarray],
+        reward: np.ndarray,
+        first: np.ndarray,
         feature: Optional[np.ndarray],
-        state: Optional[np.ndarray],
-        reward: Optional[np.ndarray],
-        first: Optional[np.ndarray],
+        info: List[Dict[str, Any]],
     ) -> None:
         if self.states is not None and state is not None:
             self.states[t] = state
@@ -243,23 +286,37 @@ class DatasetRoller:
             self.firsts[t] = first
         if self.features is not None and feature is not None:
             self.features[t] = feature
+        if self.actions is not None and action is not None:
+            self.actions[t] = action
+        if self.extras is not None and info is not None:
+            assert self.hooks is not None
+            for name, hook in self.hooks.items():
+                self.extras[name][t] = hook(state, action, reward, first, info)
 
     def step(self, t: int) -> np.ndarray:
         with torch.no_grad():
             reward, state, first = self.env.observe()
-            self.record(t, self.root_env.features, state, reward, first)
             state_tensor = torch.tensor(state)
             first_tensor = torch.tensor(first)
-            del reward, state
             init_state = self.policy.initial_state(self.env.num)
             action_tensor, _, _ = self.policy.act(
                 state_tensor, first_tensor, init_state
             )
             del state_tensor, first_tensor, init_state
             action = cast(np.ndarray, cast(torch.Tensor, action_tensor).cpu().numpy())
+
+            self.record(
+                t=t,
+                state=state,
+                action=action,
+                reward=reward,
+                first=first,
+                feature=self.root_env.features,
+                info=self.env.get_info(),
+            )
+
             self.env.act(action)
-            if self.actions is not None:
-                self.actions[t] = action
+
             return first
 
     def roll(self) -> TrajectoryDataset:
@@ -281,12 +338,22 @@ class DatasetRoller:
             )
         )
 
+        extras_arrs = (
+            {
+                name: extra.numpy() if extra is not None else None
+                for name, extra in self.extras.items()
+            }
+            if self.extras is not None
+            else None
+        )
+
         return TrajectoryDataset.from_gym3(
             states=states_arr,
             actions=actions_arr,
             rewards=rewards_arr,
             firsts=firsts_arr,
             features=features_arr,
+            extras=extras_arrs,
             remove_incomplete=self.remove_incomplete,
         )
 
@@ -297,7 +364,16 @@ class DatasetRoller:
             self.step(t)
 
         reward, state, first = self.env.observe()
-        self.record(self.n_actions, self.root_env.features, state, reward, first)
+        info = self.env.get_info()
+        self.record(
+            t=self.n_actions,
+            state=state,
+            action=None,
+            reward=reward,
+            first=first,
+            feature=self.root_env.features,
+            info=info,
+        )
 
     def roll_fixed_trajs(self, garbage_collection_period: int = 500):
         assert self.n_trajs is not None
@@ -320,7 +396,15 @@ class DatasetRoller:
             # TODO: This duplicates states if you're appending to the output and reusing the roller.
             # But we're never reusing the roller right now.
             reward, state, first = self.env.observe()
-            self.record(self.n_actions, self.root_env.features, state, reward, first)
+            self.record(
+                t=self.n_actions,
+                state=state,
+                action=None,
+                reward=reward,
+                first=first,
+                feature=self.root_env.features,
+                info=self.env.get_info(),
+            )
 
 
 def procgen_rollout_dataset(
@@ -335,6 +419,7 @@ def procgen_rollout_dataset(
         "first",
         "feature",
     ],
+    extras: Optional[Sequence[Tuple[DatasetRoller.Hook, str, Tuple[int, ...]]]] = None,
     remove_incomplete: bool = True,
     tqdm: bool = False,
 ) -> TrajectoryDataset:
@@ -344,6 +429,7 @@ def procgen_rollout_dataset(
         n_actions=timesteps,
         n_trajs=n_trajs,
         flags=flags,
+        extras=extras,
         remove_incomplete=remove_incomplete,
         tqdm=tqdm,
     )

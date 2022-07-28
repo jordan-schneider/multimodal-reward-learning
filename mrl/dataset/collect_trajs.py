@@ -8,7 +8,6 @@ import arrow
 import numpy as np
 import torch
 from argh import arg  # type: ignore
-from gym3 import ExtractDictObWrapper  # type: ignore
 from linear_procgen.util import make_env
 from mrl.dataset.random_policy import RandomPolicy
 from mrl.dataset.roller import procgen_rollout_dataset
