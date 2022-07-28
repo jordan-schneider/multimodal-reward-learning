@@ -1,4 +1,4 @@
-from typing import Final
+from typing import Any, Dict, Final, List, Optional
 
 import numpy as np
 from gym3 import ExtractDictObWrapper  # type: ignore
@@ -31,12 +31,24 @@ def test_rollout_always_firsts():
 
     policy = RandomPolicy(env.ac_space, num=N_ENVS)
 
+    def grid_hook(
+        state: np.ndarray,
+        action: Optional[np.ndarray],
+        reward: np.ndarray,
+        first: np.ndarray,
+        info: List[Dict[str, Any]],
+    ) -> np.ndarray:
+        return np.array([i["grid"] for i in info])
+
+    grid_shape = (N_ENVS, *env.get_info()[0]["grid"].shape)
+
     roller = DatasetRoller(
         env=env,
         policy=policy,
         n_actions=T,
         n_trajs=N_TRAJS,
-        flags=["first", "feature"],
+        flags=["state", "action", "reward", "first", "feature"],
+        extras=[(grid_hook, "grid", grid_shape)],
         remove_incomplete=True,
     )
 

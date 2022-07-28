@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import (Callable, Dict, Final, Generator, Iterable, List, Literal,
-                    Optional, Tuple, TypeVar, cast)
+from itertools import chain
+from typing import (Callable, Dict, Final, Generator, Iterable, List, Optional,
+                    Tuple, TypeVar, cast)
 
 import numpy as np
 import torch
 
 
 class TrajectoryDataset:
-    Attrs = Literal["states", "actions", "rewards", "firsts", "features"]
-    NAMES: Final[Tuple[Attrs, ...]] = (
+    NAMES: Final[Tuple[str, ...]] = (
         "states",
         "actions",
         "rewards",
@@ -26,13 +26,16 @@ class TrajectoryDataset:
         rewards: Optional[np.ndarray] = None,
         firsts: Optional[np.ndarray] = None,
         features: Optional[np.ndarray] = None,
+        extras: Optional[Dict[str, np.ndarray]] = None,
     ) -> None:
-        self.data: Dict[TrajectoryDataset.Attrs, Optional[np.ndarray]] = {
+        self.data: Dict[str, Optional[np.ndarray]] = {
             name: value
             for name, value in zip(
                 self.NAMES, (states, actions, rewards, firsts, features)
             )
         }
+        if extras is not None:
+            self.data.update(extras)
 
     def __len__(self) -> int:
         def get_len(arr: np.ndarray) -> int:
@@ -50,11 +53,20 @@ class TrajectoryDataset:
         rewards: Optional[np.ndarray] = None,
         firsts: Optional[np.ndarray] = None,
         features: Optional[np.ndarray] = None,
+        extras: Optional[Dict[str, np.ndarray]] = None,
         remove_incomplete: bool = True,
     ) -> Dict[str, np.ndarray]:
         out: Dict[str, np.ndarray] = {}
 
-        data = (states, actions, rewards, firsts, features)
+        data: Tuple[Optional[np.ndarray], ...] = (
+            states,
+            actions,
+            rewards,
+            firsts,
+            features,
+        )
+        if extras is not None:
+            data += tuple(extras.values())
 
         time = get_first(lambda x: x.shape[0], data)
         n_envs = get_first(lambda x: x.shape[1], data)
@@ -83,7 +95,10 @@ class TrajectoryDataset:
                 (np.zeros(n_envs, dtype=int), np.ones(n_envs, dtype=int) * time)
             ).T
 
-        for name, arr in zip(TrajectoryDataset.NAMES, data):
+        for name, arr in chain(
+            zip(TrajectoryDataset.NAMES, data),
+            extras.items() if extras is not None else (),
+        ):
             if arr is None:
                 continue
             out[name] = np.concatenate(
@@ -99,19 +114,26 @@ class TrajectoryDataset:
         rewards: Optional[np.ndarray] = None,
         firsts: Optional[np.ndarray] = None,
         features: Optional[np.ndarray] = None,
+        extras: Optional[Dict[str, np.ndarray]] = None,
         remove_incomplete: bool = True,
     ) -> TrajectoryDataset:
         """Builds RLDataset from procgen_rollout output arrays"""
-
+        data = TrajectoryDataset.process_gym3(
+            states=states,
+            actions=actions,
+            rewards=rewards,
+            firsts=firsts,
+            features=features,
+            extras=extras,
+            remove_incomplete=remove_incomplete,
+        )
         return cls(
-            **TrajectoryDataset.process_gym3(
-                states=states,
-                actions=actions,
-                rewards=rewards,
-                firsts=firsts,
-                features=features,
-                remove_incomplete=remove_incomplete,
-            )
+            states=data.pop("states", None),
+            actions=data.pop("actions", None),
+            rewards=data.pop("rewards", None),
+            firsts=data.pop("firsts", None),
+            features=data.pop("features", None),
+            extras=data,
         )
 
     def append_gym3(
@@ -122,6 +144,7 @@ class TrajectoryDataset:
         rewards: Optional[np.ndarray] = None,
         firsts: Optional[np.ndarray] = None,
         features: Optional[np.ndarray] = None,
+        extras: Optional[Dict[str, np.ndarray]] = None,
     ) -> TrajectoryDataset:
         data = TrajectoryDataset.process_gym3(
             states=states,
@@ -129,13 +152,15 @@ class TrajectoryDataset:
             rewards=rewards,
             firsts=firsts,
             features=features,
+            extras=extras,
         )
 
         for name, arr in data.items():
-            name = cast(TrajectoryDataset.Attrs, name)
-            if arr is None or self.data[name] is None:
+            cur_data = self.data[name]
+            if arr is None or cur_data is None:
                 continue
-            self.data[name] = np.concatenate((self.data[name], arr), axis=0)
+
+            self.data[name] = np.concatenate((cur_data, arr), axis=0)
         return self
 
     def get_bytes(self) -> int:
@@ -145,14 +170,29 @@ class TrajectoryDataset:
                 total += arr.nbytes
         return total
 
+    def _get_extras(self) -> Optional[Dict[str, np.ndarray]]:
+        has_extras = len(self.NAMES) < len(self.data)
+
+        return (
+            {
+                name: arr
+                for name, arr in self.data.items()
+                if name not in self.NAMES and arr is not None
+            }
+            if has_extras
+            else None
+        )
+
     @dataclass
     class Traj:
         states: Optional[np.ndarray] = None
-        features: Optional[np.ndarray] = None
         actions: Optional[np.ndarray] = None
         rewards: Optional[np.ndarray] = None
+        features: Optional[np.ndarray] = None
+        extras: Optional[Dict[str, np.ndarray]] = None
 
     def get_traj(self, start: int, end: int) -> Traj:
+        extras = self._get_extras()
         return self.Traj(
             states=self.data["states"][start:end]
             if self.data["states"] is not None
@@ -166,6 +206,9 @@ class TrajectoryDataset:
             rewards=self.data["rewards"][start:end]
             if self.data["rewards"] is not None
             else None,
+            extras={name: arr[start:end] for name, arr in extras.items()}
+            if extras is not None
+            else None,
         )
 
     def trajs(self) -> Generator[Traj, None, None]:
@@ -177,9 +220,10 @@ class TrajectoryDataset:
             # Only one timestep provided
             yield self.Traj(
                 states=self.data["states"],
-                features=self.data["features"],
                 actions=self.data["actions"],
                 rewards=self.data["rewards"],
+                features=self.data["features"],
+                extras=self._get_extras(),
             )
             return
 
@@ -190,6 +234,7 @@ class TrajectoryDataset:
                 features=self.data["features"],
                 actions=self.data["actions"],
                 rewards=self.data["rewards"],
+                extras=self._get_extras(),
             )
             return
 
@@ -198,6 +243,7 @@ class TrajectoryDataset:
             yield self.get_traj(start, end)
             start = end
 
+        extras = self._get_extras()
         yield TrajectoryDataset.Traj(
             states=self.data["states"][end:]
             if self.data["states"] is not None
@@ -210,6 +256,9 @@ class TrajectoryDataset:
             else None,
             features=self.data["features"][end:]
             if self.data["features"] is not None
+            else None,
+            extras={name: arr[end:] for name, arr in extras.items()}
+            if extras is not None
             else None,
         )
 
