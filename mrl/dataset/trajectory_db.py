@@ -61,12 +61,14 @@ class FeatureDataset:
 
     def append(
         self,
-        policy: Path,
+        policy: str,
         time: arrow.Arrow,
         states: Union[Sequence[np.ndarray], np.ndarray, None] = None,
         state_features: Union[Sequence[np.ndarray], np.ndarray, None] = None,
         actions: Union[Sequence[np.ndarray], np.ndarray, None] = None,
-        extras: Optional[Dict[str, Union[Sequence[np.ndarray], np.ndarray]]] = None,
+        extras: Union[
+            Dict[str, Sequence[np.ndarray]], Dict[str, np.ndarray], None
+        ] = None,
     ) -> None:
         if (
             states is None
@@ -78,7 +80,7 @@ class FeatureDataset:
                 "Must provide at least one of states, state_features, actions, or extras."
             )
         if extras is None:
-            extras = {}
+            extras = cast(Dict[str, Sequence[np.ndarray]], {})
         types = [
             type(a)
             for a in (states, state_features, actions, *extras.values())
@@ -139,7 +141,7 @@ class FeatureDataset:
                 raise ValueError(f"Length of trajectory {traj} not consistent: {lens}")
 
             self.df.loc[len(self.df)] = (
-                str(policy),
+                policy,
                 time.datetime,
                 lens[0],
                 traj_state,
@@ -148,7 +150,7 @@ class FeatureDataset:
                 np.sum(traj_feature, axis=0) if traj_feature is not None else None,
                 *[traj_extras[key] for key in self.df.columns[len(self.BASE_COLS) :]],
             )
-            self.states[str(policy)] = None
+            self.states[policy] = None
 
         if init:
             self.init_df()
