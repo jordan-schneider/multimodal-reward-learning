@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gpus=1
 #SBATCH --nodes=1
-#SBATCH --mem=31G
+#SBATCH --mem=29G
 #SBATCH --partition=debug
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=jordan.jack.schneider@gmail.com
@@ -18,13 +18,13 @@ LAST_MODEL=$(ls $POLICY_DIR | grep -o -E "[0-9]+" | sort -n | tail -n 1)
 # n-envs Determined empirically
 
 ./build_env.sh
-srun --cpus-per-task=8 conda run -n mrl time python mrl/dataset/collect_trajs.py \
+srun --cpus-per-task=8 --immediate conda run -n mrl time python mrl/dataset/collect_trajs.py \
   --policies \
     $POLICY_DIR/model$LAST_MODEL.jd \
     $POLICY_DIR/model500.jd \
     $POLICY_DIR/model1000.jd \
     $POLICY_DIR/model1500.jd \
   --outdir data/miner/$SLURM_ARRAY_TASK_ID/ \
-  --timesteps 5000 \
+  --timesteps 2000 \
   --n-envs 1024 \
   --seed 1978345789

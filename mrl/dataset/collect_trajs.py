@@ -38,22 +38,22 @@ def main(
 ) -> None:
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    outpath = outdir / "trajectories.pkl"
+    out_shard = 0
+    outpath = outdir / f"trajectories_{out_shard}.pkl"
+    while outpath.exists():
+        out_shard += 1
+        outpath = outdir / f"trajectories_{out_shard}.pkl"
 
     rng = np.random.default_rng(seed=seed)
     torch.manual_seed(seed)
-
-    if outpath.exists():
-        dataset = pkl.load(outpath.open("rb"))
-        dataset.rng = rng
-    else:
-        dataset = FeatureDataset(rng=rng, extra_cols=["grid"])
 
     env = make_env(name="miner", num=n_envs, reward=0)
     grid_shape = env.get_info()[0]["grid"].shape
 
     for policy_path in policies:
         logging.info(f"Collecting {timesteps} steps from policy at {policy_path}")
+
+        dataset = FeatureDataset(rng=rng, extra_cols=["grid"])
         device = find_best_gpu()
         policy = make_model(env, arch="shared")
         policy.load_state_dict(torch.load(policy_path, map_location=device))
@@ -66,6 +66,7 @@ def main(
             flags=["action", "first", "feature"],
             extras=[(grid_hook, "grid", grid_shape)],
         ).trajs()
+        del policy
         for traj in trajs:
             assert (
                 traj.features is not None
@@ -73,15 +74,19 @@ def main(
                 and traj.extras is not None
             )
             dataset.append(
-                policy=policy_path,
+                policy=str(policy_path),
                 time=arrow.now(),
                 state_features=traj.features,
                 actions=traj.actions,
                 extras=traj.extras,
             )
-        del policy
+        pkl.dump(dataset, outpath.open("wb"))
+        del dataset
+        out_shard += 1
+        outpath = outdir / f"trajectories_{out_shard}.pkl"
 
     if use_random:
+        dataset = FeatureDataset(rng=rng, extra_cols=["grid"])
         policy = RandomPolicy(actype=env.ac_space, num=n_envs)
         trajs = procgen_rollout_dataset(
             env=env,
@@ -90,6 +95,7 @@ def main(
             flags=["action", "first", "feature"],
             extras=[(grid_hook, "grid", grid_shape)],
         ).trajs()
+        del policy
         for traj in trajs:
             assert (
                 traj.features is not None
@@ -103,8 +109,7 @@ def main(
                 actions=traj.actions,
                 extras=traj.extras,
             )
-
-    pkl.dump(dataset, outpath.open("wb"))
+        pkl.dump(dataset, outpath.open("wb"))
 
 
 if __name__ == "__main__":
