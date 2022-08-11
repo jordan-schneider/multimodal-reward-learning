@@ -134,9 +134,7 @@ class FeatureDataset:
                 )
                 if arr is not None
             ]
-            # import pdb
 
-            # pdb.set_trace()
             if not_all_equal(lens):
                 raise ValueError(f"Length of trajectory {traj} not consistent: {lens}")
 
