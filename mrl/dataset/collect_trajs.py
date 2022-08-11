@@ -26,6 +26,26 @@ def grid_hook(
     return np.array([i["grid"] for i in info])
 
 
+def agent_pos_hook(
+    state: np.ndarray,
+    action: Optional[np.ndarray],
+    reward: np.ndarray,
+    first: np.ndarray,
+    info: List[Dict[str, Any]],
+) -> np.ndarray:
+    return np.array([i["agent_pos"] for i in info])
+
+
+def exit_pos_hook(
+    state: np.ndarray,
+    action: Optional[np.ndarray],
+    reward: np.ndarray,
+    first: np.ndarray,
+    info: List[Dict[str, Any]],
+) -> np.ndarray:
+    return np.array([i["exit_pos"] for i in info])
+
+
 @arg("--policies", type=Path, nargs="+")
 @arg("--outdir", type=Path)
 def main(
@@ -64,7 +84,11 @@ def main(
             policy=policy,
             timesteps=timesteps,
             flags=["action", "first", "feature"],
-            extras=[(grid_hook, "grid", grid_shape)],
+            extras=[
+                (grid_hook, "grid", grid_shape),
+                (agent_pos_hook, "agent_pos", (2,)),
+                (exit_pos_hook, "exit_pos", (2,)),
+            ],
         ).trajs()
         del policy
         for traj in trajs:
