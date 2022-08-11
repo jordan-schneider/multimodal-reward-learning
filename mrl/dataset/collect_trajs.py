@@ -73,7 +73,7 @@ def main(
     for policy_path in policies:
         logging.info(f"Collecting {timesteps} steps from policy at {policy_path}")
 
-        dataset = FeatureDataset(rng=rng, extra_cols=["grid"])
+        dataset = FeatureDataset(rng=rng, extra_cols=["grid", "agent_pos", "exit_pos"])
         device = find_best_gpu()
         policy = make_model(env, arch="shared")
         policy.load_state_dict(torch.load(policy_path, map_location=device))
@@ -110,14 +110,18 @@ def main(
         outpath = outdir / f"trajectories_{out_shard}.pkl"
 
     if use_random:
-        dataset = FeatureDataset(rng=rng, extra_cols=["grid"])
+        dataset = FeatureDataset(rng=rng, extra_cols=["grid", "agent_pos", "exit_pos"])
         policy = RandomPolicy(actype=env.ac_space, num=n_envs)
         trajs = procgen_rollout_dataset(
             env=env,
             policy=policy,
             timesteps=timesteps,
             flags=["action", "first", "feature"],
-            extras=[(grid_hook, "grid", grid_shape)],
+            extras=[
+                (grid_hook, "grid", grid_shape),
+                (agent_pos_hook, "agent_pos", (2,)),
+                (exit_pos_hook, "exit_pos", (2,)),
+            ],
         ).trajs()
         del policy
         for traj in trajs:
