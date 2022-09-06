@@ -26,6 +26,16 @@ def grid_hook(
     return np.array([i["grid"] for i in info])
 
 
+def grid_shape_hook(
+    state: np.ndarray,
+    action: Optional[np.ndarray],
+    reward: np.ndarray,
+    first: np.ndarray,
+    info: List[Dict[str, Any]],
+) -> np.ndarray:
+    return np.array([i["grid_shape"] for i in info])
+
+
 def agent_pos_hook(
     state: np.ndarray,
     action: Optional[np.ndarray],
@@ -86,6 +96,7 @@ def main(
             flags=["action", "first", "feature"],
             extras=[
                 (grid_hook, "grid", grid_shape),
+                (grid_shape_hook, "grid_shape", (2,)),
                 (agent_pos_hook, "agent_pos", (2,)),
                 (exit_pos_hook, "exit_pos", (2,)),
             ],
