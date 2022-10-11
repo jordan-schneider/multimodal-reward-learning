@@ -1,7 +1,17 @@
 import gc
 import logging
-from typing import (Any, Dict, List, Literal, Optional, Protocol, Sequence,
-                    Tuple, Union, cast)
+from typing import (
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    Union,
+    cast,
+)
 
 import numpy as np
 import torch
@@ -65,7 +75,10 @@ def procgen_rollout(
 
 class ArrayOrList:
     def __init__(
-        self, val: Union[np.ndarray, List[np.ndarray]], max_list_len: int = 1000
+        self,
+        val: Union[np.ndarray, List[np.ndarray]],
+        max_list_len: int = 1000,
+        dtype: np.dtype = np.dtype(np.float32),
     ) -> None:
         self.val = val
         self.list = isinstance(val, list)
@@ -74,7 +87,7 @@ class ArrayOrList:
         if self.list:
             self.offset = 0
             if len(self.val) > 0:
-                self.array = np.empty((0, *self.val[0].shape))
+                self.array = np.empty((0, *self.val[0].shape), dtype=dtype)
             else:
                 self.make_array_on_set = True
 
@@ -195,7 +208,7 @@ class DatasetRoller:
             "first",
             "feature",
         ],
-        extras: Optional[Sequence[Tuple[Hook, str, Tuple[int, ...]]]] = None,
+        extras: Optional[Sequence[Tuple[Hook, str, Tuple[int, ...], np.dtype]]] = None,
         remove_incomplete: bool = False,
         tqdm: bool = False,
     ):
@@ -234,17 +247,17 @@ class DatasetRoller:
         self.extras = (
             {
                 name: ArrayOrList(
-                    np.empty((n_actions + 1, env.num, *out_shape), dtype=np.float32)
+                    np.empty((n_actions + 1, env.num, *out_shape), dtype=dtype)
                     if self.fixed_size_arrays
                     else []
                 )
-                for _, name, out_shape in extras
+                for _, name, out_shape, dtype in extras
             }
             if extras is not None
             else None
         )
         self.hooks = (
-            {name: hook for hook, name, _ in extras} if extras is not None else None
+            {name: hook for hook, name, _, _ in extras} if extras is not None else None
         )
 
         self.remove_incomplete = remove_incomplete
@@ -268,7 +281,7 @@ class DatasetRoller:
         first: np.ndarray,
         feature: Optional[np.ndarray],
         info: List[Dict[str, Any]],
-        cstate: List[bytes] = None,
+        cstate: List[bytes],
     ) -> None:
         if self.states is not None and state is not None:
             self.states[t] = state
@@ -287,8 +300,8 @@ class DatasetRoller:
 
     def step(self, t: int) -> np.ndarray:
         with torch.no_grad():
-            cstate = self.env.get_state()
             reward, state, first = self.env.observe()
+            cstate = self.root_env.get_state()
             state_tensor = torch.tensor(state)
             first_tensor = torch.tensor(first)
             init_state = self.policy.initial_state(self.env.num)
@@ -306,7 +319,7 @@ class DatasetRoller:
                 first=first,
                 feature=self.root_env.features,
                 info=self.env.get_info(),
-                cstate=cstate
+                cstate=cstate,
             )
 
             self.env.act(action)
@@ -367,6 +380,7 @@ class DatasetRoller:
             first=first,
             feature=self.root_env.features,
             info=info,
+            cstate=self.root_env.get_state(),
         )
 
     def roll_fixed_trajs(self, garbage_collection_period: int = 500):
@@ -398,6 +412,7 @@ class DatasetRoller:
                 first=first,
                 feature=self.root_env.features,
                 info=self.env.get_info(),
+                cstate=self.root_env.get_state(),
             )
 
 
@@ -413,7 +428,9 @@ def procgen_rollout_dataset(
         "first",
         "feature",
     ],
-    extras: Optional[Sequence[Tuple[DatasetRoller.Hook, str, Tuple[int, ...]]]] = None,
+    extras: Optional[
+        Sequence[Tuple[DatasetRoller.Hook, str, Tuple[int, ...], np.dtype]]
+    ] = None,
     remove_incomplete: bool = True,
     tqdm: bool = False,
 ) -> TrajectoryDataset:

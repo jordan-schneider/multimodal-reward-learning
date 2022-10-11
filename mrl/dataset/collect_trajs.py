@@ -36,7 +36,7 @@ def grid_shape_hook(
     info: List[Dict[str, Any]],
     cstate: List[bytes],
 ) -> np.ndarray:
-    return np.array([i["grid_shape"] for i in info])
+    return np.array([i["grid_size"] for i in info])
 
 
 def agent_pos_hook(
@@ -62,7 +62,7 @@ def exit_pos_hook(
 
 
 def assert_no_fire_before_end(traj: TrajectoryDataset.Traj) -> None:
-    assert traj.extras is not None and not np.any(traj.extras["grid"][:-1] == 12)
+    assert traj.extras is not None and not np.any(traj.extras["grids"][:-1] == 12)
 
 
 def cstate_hook(
@@ -100,11 +100,20 @@ def main(
     env = make_env(name="miner", num=n_envs, reward=0)
     grid_shape = env.get_info()[0]["grid"].shape
 
+    extras = [
+        (cstate_hook, "cstates", tuple(), np.dtype("S22326")),
+        (grid_hook, "grids", grid_shape, np.dtype(np.uint8)),
+        (grid_shape_hook, "grid_shape", (2,), np.dtype(np.uint8)),
+        (agent_pos_hook, "agent_pos", (2,), np.dtype(np.uint8)),
+        (exit_pos_hook, "exit_pos", (2,), np.dtype(np.uint8)),
+    ]
+
     for policy_path in policies:
         logging.info(f"Collecting {timesteps} steps from policy at {policy_path}")
 
         dataset = FeatureDataset(
-            rng=rng, extra_cols=["cstate", "grid", "agent_pos", "exit_pos"]
+            rng=rng,
+            extra_cols=["cstates", "grids", "grid_shape", "agent_pos", "exit_pos"],
         )
         device = find_best_gpu()
         policy = make_model(env, arch="shared")
@@ -116,13 +125,7 @@ def main(
             policy=policy,
             timesteps=timesteps,
             flags=["action", "first", "feature"],
-            extras=[
-                (cstate_hook, "cstate", tuple()),
-                (grid_hook, "grid", grid_shape),
-                (grid_shape_hook, "grid_shape", (2,)),
-                (agent_pos_hook, "agent_pos", (2,)),
-                (exit_pos_hook, "exit_pos", (2,)),
-            ],
+            extras=extras,
         ).trajs()
         del policy
         for traj in trajs:
@@ -145,18 +148,17 @@ def main(
         outpath = outdir / f"trajectories_{out_shard}.pkl"
 
     if use_random:
-        dataset = FeatureDataset(rng=rng, extra_cols=["grid", "agent_pos", "exit_pos"])
+        dataset = FeatureDataset(
+            rng=rng,
+            extra_cols=["cstates", "grids", "grid_shape", "agent_pos", "exit_pos"],
+        )
         policy = RandomPolicy(actype=env.ac_space, num=n_envs)
         trajs = procgen_rollout_dataset(
             env=env,
             policy=policy,
             timesteps=timesteps,
             flags=["action", "first", "feature"],
-            extras=[
-                (grid_hook, "grid", grid_shape),
-                (agent_pos_hook, "agent_pos", (2,)),
-                (exit_pos_hook, "exit_pos", (2,)),
-            ],
+            extras=extras,
         ).trajs()
         del policy
         for traj in trajs:
