@@ -1,17 +1,7 @@
 import gc
 import logging
-from typing import (
-    Any,
-    Dict,
-    List,
-    Literal,
-    Optional,
-    Protocol,
-    Sequence,
-    Tuple,
-    Union,
-    cast,
-)
+from typing import (Any, Dict, List, Literal, Optional, Protocol, Sequence,
+                    Tuple, Union, cast)
 
 import numpy as np
 import torch
@@ -186,6 +176,7 @@ class DatasetRoller:
             reward: np.ndarray,
             first: np.ndarray,
             info: List[Dict[str, Any]],
+            cstate: List[bytes],
         ) -> np.ndarray:
             """Recording hook that accepts a env.num states, rewards, firsts, infos, and possibly actions.
             You may not recieve an action, e.g. if this is the last state in a trajectory."""
@@ -277,6 +268,7 @@ class DatasetRoller:
         first: np.ndarray,
         feature: Optional[np.ndarray],
         info: List[Dict[str, Any]],
+        cstate: List[bytes] = None,
     ) -> None:
         if self.states is not None and state is not None:
             self.states[t] = state
@@ -291,10 +283,11 @@ class DatasetRoller:
         if self.extras is not None and info is not None:
             assert self.hooks is not None
             for name, hook in self.hooks.items():
-                self.extras[name][t] = hook(state, action, reward, first, info)
+                self.extras[name][t] = hook(state, action, reward, first, info, cstate)
 
     def step(self, t: int) -> np.ndarray:
         with torch.no_grad():
+            cstate = self.env.get_state()
             reward, state, first = self.env.observe()
             state_tensor = torch.tensor(state)
             first_tensor = torch.tensor(first)
@@ -313,6 +306,7 @@ class DatasetRoller:
                 first=first,
                 feature=self.root_env.features,
                 info=self.env.get_info(),
+                cstate=cstate
             )
 
             self.env.act(action)

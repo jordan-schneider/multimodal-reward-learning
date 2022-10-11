@@ -11,6 +11,7 @@ from argh import arg  # type: ignore
 from linear_procgen.util import make_env
 from mrl.dataset.random_policy import RandomPolicy
 from mrl.dataset.roller import procgen_rollout_dataset
+from mrl.dataset.trajectories import TrajectoryDataset
 from mrl.dataset.trajectory_db import FeatureDataset
 from mrl.util import find_best_gpu
 from phasic_policy_gradient.train import make_model
@@ -22,6 +23,7 @@ def grid_hook(
     reward: np.ndarray,
     first: np.ndarray,
     info: List[Dict[str, Any]],
+    cstate: List[bytes],
 ) -> np.ndarray:
     return np.array([i["grid"] for i in info])
 
@@ -32,6 +34,7 @@ def grid_shape_hook(
     reward: np.ndarray,
     first: np.ndarray,
     info: List[Dict[str, Any]],
+    cstate: List[bytes],
 ) -> np.ndarray:
     return np.array([i["grid_shape"] for i in info])
 
@@ -42,6 +45,7 @@ def agent_pos_hook(
     reward: np.ndarray,
     first: np.ndarray,
     info: List[Dict[str, Any]],
+    cstate: List[bytes],
 ) -> np.ndarray:
     return np.array([i["agent_pos"] for i in info])
 
@@ -52,8 +56,24 @@ def exit_pos_hook(
     reward: np.ndarray,
     first: np.ndarray,
     info: List[Dict[str, Any]],
+    cstate: List[bytes],
 ) -> np.ndarray:
     return np.array([i["exit_pos"] for i in info])
+
+
+def assert_no_fire_before_end(traj: TrajectoryDataset.Traj) -> None:
+    assert traj.extras is not None and not np.any(traj.extras["grid"][:-1] == 12)
+
+
+def cstate_hook(
+    state: np.ndarray,
+    action: Optional[np.ndarray],
+    reward: np.ndarray,
+    first: np.ndarray,
+    info: List[Dict[str, Any]],
+    cstate: List[bytes],
+) -> np.ndarray:
+    return np.array(cstate)
 
 
 @arg("--policies", type=Path, nargs="+")
@@ -83,7 +103,9 @@ def main(
     for policy_path in policies:
         logging.info(f"Collecting {timesteps} steps from policy at {policy_path}")
 
-        dataset = FeatureDataset(rng=rng, extra_cols=["grid", "agent_pos", "exit_pos"])
+        dataset = FeatureDataset(
+            rng=rng, extra_cols=["cstate", "grid", "agent_pos", "exit_pos"]
+        )
         device = find_best_gpu()
         policy = make_model(env, arch="shared")
         policy.load_state_dict(torch.load(policy_path, map_location=device))
@@ -95,6 +117,7 @@ def main(
             timesteps=timesteps,
             flags=["action", "first", "feature"],
             extras=[
+                (cstate_hook, "cstate", tuple()),
                 (grid_hook, "grid", grid_shape),
                 (grid_shape_hook, "grid_shape", (2,)),
                 (agent_pos_hook, "agent_pos", (2,)),
@@ -108,6 +131,7 @@ def main(
                 and traj.actions is not None
                 and traj.extras is not None
             )
+            assert_no_fire_before_end(traj)
             dataset.append(
                 policy=str(policy_path),
                 time=arrow.now(),
@@ -141,6 +165,7 @@ def main(
                 and traj.actions is not None
                 and traj.extras is not None
             )
+            assert_no_fire_before_end(traj)
             dataset.append(
                 policy="random",
                 time=arrow.now(),
