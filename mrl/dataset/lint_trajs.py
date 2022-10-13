@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from typing import Tuple
 
-import fire
+import fire  # type: ignore
 import numpy as np
 from linear_procgen import ENV_NAMES, make_env
 from linear_procgen.feature_envs import FeatureEnv
@@ -38,7 +38,6 @@ def check_traj(
     # If the agent dies, we need to reset the env by reinitialzing the environment becuase the died variable isn't
     # set by set_state.
     reset = False
-    # print(f"len(actions)={len(actions)}, len(grids)={len(grids)}")
     for i in range(len(grids)):
         if reset:
             reset = False
