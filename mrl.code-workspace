@@ -4,13 +4,19 @@
 			"path": "."
 		},
 		{
+			"path": "../linear-procgen"
+		},
+		{
 			"path": "../procgen"
 		},
 		{
 			"path": "../phasic-policy-gradient"
 		},
 		{
-			"path": "../linear-procgen"
+			"path": "../experiment-server"
+		},
+		{
+			"path": "../procgen-experiment"
 		}
 	],
 	"settings": {
