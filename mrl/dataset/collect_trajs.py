@@ -94,7 +94,7 @@ def traj_dataset_from_policy(
 ) -> FeatureDataset:
     dataset = FeatureDataset(
         rng=rng,
-        extra_cols=["cstates", "grids", "grid_shape", "agent_pos", "exit_pos"],
+        extra_cols=["cstates", "grids", "grid_shapes", "agent_pos", "exit_pos"],
     )
 
     trajs = procgen_rollout_dataset(
@@ -153,7 +153,7 @@ def main(
     extras = [
         (cstate_hook, "cstates", tuple(), np.dtype("S22326")),
         (grid_hook, "grids", grid_shape, np.dtype(np.uint8)),
-        (grid_shape_hook, "grid_shape", (2,), np.dtype(np.uint8)),
+        (grid_shape_hook, "grid_shapes", (2,), np.dtype(np.uint8)),
         (agent_pos_hook, "agent_pos", (2,), np.dtype(np.uint8)),
         (exit_pos_hook, "exit_pos", (2,), np.dtype(np.uint8)),
     ]
