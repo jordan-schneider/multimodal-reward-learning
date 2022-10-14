@@ -1,5 +1,5 @@
-pytest
+black
 hypothesis
 mypy
 pylint
-black
+pytest

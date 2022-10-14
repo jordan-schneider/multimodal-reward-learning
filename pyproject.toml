@@ -1,0 +1,60 @@
+[project]
+name = "multimodal-reward-learning"
+version = "0.0.1"
+description = "Learning rewards from multiple human data modalities."
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [
+  {email = "jordan.jack.schneider@gmail.com"},
+  {name = "Jordan Schneider"}
+]
+classifiers = [
+  "Programming Language :: Python :: 3"
+]
+dependencies = [
+    "argh",
+    "arrow",
+    "experiment_server @ git+https://github.com/jordan-schneider/experiment-server.git#egg=experiment_server",
+    "filelock",
+    "fire",
+    "gputil",
+    "gym",
+    "gym3",
+    "hydra-core",
+    "linear-procgen @ git+https://github.com/jordan-schneider/linear-procgen@main#egg=linear_procgen",
+    "matplotlib",
+    "mpi4py",
+    "numpy >= 1.21",
+    "omegaconf @ git+https://github.com/jordan-schneider/omegaconf.git",
+    "pandas",
+    "phasic-policy-gradient @ git+https://github.com/jordan-schneider/phasic-policy-gradient.git",
+    "procgen @ git+https://github.com/jordan-schneider/procgen@master#egg=procgen",
+    "psutil",
+    "pyyaml",
+    "redis",
+    "scipy",
+    "sklearn",
+    "tensorboard",
+    "torch",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+test = [
+  "black",
+  "hypothesis",
+  "mypy",
+  "pylint",
+  "pytest",
+]
+
+[project.urls]
+repository = "https://github.com/jordan-schneider/multimodal-reward-learning"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["mrl", "question_gen"]
+package-data = {mrl = ["py.typed"], question_gen = ["py.typed"]}

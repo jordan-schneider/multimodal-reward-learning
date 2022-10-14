@@ -37,6 +37,7 @@ def test_rollout_always_firsts():
         reward: np.ndarray,
         first: np.ndarray,
         info: List[Dict[str, Any]],
+        cstate: List[bytes],
     ) -> np.ndarray:
         return np.array([i["grid"] for i in info])
 
@@ -48,7 +49,7 @@ def test_rollout_always_firsts():
         n_actions=T,
         n_trajs=N_TRAJS,
         flags=["state", "action", "reward", "first", "feature"],
-        extras=[(grid_hook, "grid", grid_shape)],
+        extras=[(grid_hook, "grid", grid_shape, np.uint8)],
         remove_incomplete=True,
     )
 

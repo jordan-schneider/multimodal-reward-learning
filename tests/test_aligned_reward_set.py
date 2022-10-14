@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 import torch
 from hypothesis import given, settings
 from hypothesis.extra.numpy import arrays
@@ -20,6 +21,7 @@ from mrl.inference.posterior import cover_sphere
     ),
     seed=integers(0, 2**31 - 1),
 )
+@pytest.mark.skip()
 @settings(deadline=None, max_examples=100)
 def test_aligned_reward_set_nonredundant(reward: np.ndarray, seed: int) -> None:
     torch.manual_seed(seed)

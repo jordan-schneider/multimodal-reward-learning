@@ -1,18 +1,15 @@
 name: mrl
 channels:
-  - conda-forge
-  - bioconda
-  - defaults
+    - conda-forge
+    - bioconda
+    - defaults
 dependencies:
-  - c-compiler
-  - python=3.8
-  - mesalib
-  - openmpi-mpicc
-  - cmake
-  - qt=5.12.5
-  - java-jdk 
-  - redis
-  - pip
-  - pip:
-    - -r requirements.txt
-    - -r requirements-dev.txt
+    - c-compiler
+    - python=3.8
+    - mesalib
+    - openmpi-mpicc
+    - cmake
+    - qt=5.12.5
+    - java-jdk
+    - redis
+    - pip
