@@ -1,20 +1,23 @@
-mpi4py
-gym3
-gym
-filelock
-numpy>=1.21
-git+https://github.com/jordan-schneider/phasic-policy-gradient.git
-git+https://github.com/jordan-schneider/omegaconf.git
-torch
-psutil
-pandas
-matplotlib
-tensorboard
-arrow
-tqdm
-fire
 argh
-scipy
+arrow
+experiment-server @ git+https://github.com/jordan-schneider/experiment-server.git#egg=experiment_server
+filelock
+fire
 gputil
+gym
+gym3
 hydra-core
+matplotlib
+mpi4py
+numpy>=1.21
+omegaconf @ git+https://github.com/jordan-schneider/omegaconf.git
+pandas
+phasic-policy-gradient @ git+https://github.com/jordan-schneider/phasic-policy-gradient.git
+psutil
 pyyaml
+redis
+scipy
+sklearn
+tensorboard
+torch
+tqdm

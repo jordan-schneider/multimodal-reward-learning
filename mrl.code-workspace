@@ -10,14 +10,15 @@
 			"path": "../procgen"
 		},
 		{
+			"path": "../procgen-experiment"
+		},
+		{
 			"path": "../phasic-policy-gradient"
 		},
 		{
 			"path": "../experiment-server"
 		},
-		{
-			"path": "../procgen-experiment"
-		}
+
 	],
 	"settings": {
 		"files.associations": {
