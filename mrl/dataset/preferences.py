@@ -576,9 +576,7 @@ class PreferenceGenerator:
         }
         if modality == "traj":
             hyper_values["length"] = (
-                f"length-{self.max_length}"
-                if self.max_length is not None
-                else "no-max",
+                f"length-{self.max_length}" if self.max_length is not None else "no-max"
             )
 
         outdir = folders.add_experiment(hyper_values)
