@@ -6,17 +6,17 @@ fire
 gputil
 gym
 gym3
-hydra-core
+joypy
 matplotlib
 mpi4py
 numpy>=1.21
-omegaconf @ git+https://github.com/jordan-schneider/omegaconf.git
 pandas
 phasic-policy-gradient @ git+https://github.com/jordan-schneider/phasic-policy-gradient.git
 psutil
 pyyaml
 redis
 scipy
+seaborn
 sklearn
 tensorboard
 torch
