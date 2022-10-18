@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, List, Literal, Optional
+from dataclasses import dataclass
+from typing import Literal, Optional
 
-from hydra.core.config_store import ConfigStore
 from linear_procgen.util import ENV_NAMES
-from omegaconf import MISSING
+
+DIFF_NORM_METHODS = Literal[
+    "diff-length", "sum-length", "max-length", "log-diff-length", None
+]
 
 
 @dataclass
@@ -15,14 +17,12 @@ class EnvConfig:
     normalize_step: bool = False
 
 
-@dataclass
 class PreferenceNoise:
-    name: str
+    pass
 
 
 @dataclass
 class FixedPreference(PreferenceNoise):
-    name: str = "fixed"
     temp: float = 0.001
 
 
@@ -38,33 +38,28 @@ class FlipProb(PreferenceNoise):
 @dataclass
 class PreferenceConfig:
     prefs_per_trial: int = 1000
-    normalize_differences: Literal[
-        "diff-length", "sum-length", "max-length", "log-diff-length", None
-    ] = "sum-length"
+    normalize_differences: DIFF_NORM_METHODS = "sum-length"
     deduplicate: bool = True
-    noise: PreferenceNoise = MISSING
+    noise: PreferenceNoise = FlipProb()
     max_length: Optional[int] = None
 
 
-@dataclass
 class InferenceNoise:
-    name: str
+    pass
 
 
 @dataclass
 class TrueInference(InferenceNoise):
-    name: str = "gt"
+    pass
 
 
 @dataclass
 class FixedInference(InferenceNoise):
-    name: str = "fixed"
     temp: float = 0.001
 
 
 @dataclass
 class GammaInference(InferenceNoise):
-    name: str = "gamma"
     k: float = 0.01
     theta: float = 0.01
     samples: int = 100
@@ -72,7 +67,7 @@ class GammaInference(InferenceNoise):
 
 @dataclass
 class InferenceConfig:
-    noise: InferenceNoise = MISSING
+    noise: InferenceNoise = GammaInference()
     likelihood_fn: Literal["boltzmann", "hinge"] = "boltzmann"
     use_shift: bool = False
     save_all: bool = False
@@ -80,62 +75,18 @@ class InferenceConfig:
 
 @dataclass
 class ExperimentConfig:
-    defaults: List[Any] = field(
-        default_factory=lambda: [
-            "_self_",
-            {"preference/noise": "flip-prob"},
-            {"inference/noise": "gamma"},
-            {"override hydra/hydra_logging": "none"},
-            {"override hydra/job_logging": "none"},
-        ]
-    )
-    rootdir: str = (
-        "/home/joschnei/multimodal-reward-learning/data/miner/near-original-reward/7"
-    )
+    rootdir: str = "/home/joschnei/research/multimodal-reward-learning/data/miner/4/"
     ars_name: str = "ars.mixed.npy"
     n_trials: int = 1
     append: bool = False
     env: EnvConfig = EnvConfig()
     preference: PreferenceConfig = PreferenceConfig()
     inference: InferenceConfig = InferenceConfig()
-    max_ram: str = "100G"
+    max_ram: str = "60G"
     seed: Optional[int] = None
     overwrite: bool = False
     verbosity: Literal["INFO", "DEBUG"] = "INFO"
-    hydra: Any = field(
-        default_factory=lambda: {
-            "output_subdir": None,
-            "run": {
-                "dir": ".",
-            },
-            "sweep": {
-                "dir": ".",
-            },
-        }
-    )
 
-
-def register_configs() -> None:
-    cs = ConfigStore.instance()
-    cs.store(name="experiment", node=ExperimentConfig)
-    cs.store(
-        group="preference/noise",
-        name="fixed",
-        node=FixedPreference,
-    )
-    cs.store(
-        group="preference/noise",
-        name="flip-prob",
-        node=FlipProb,
-    )
-    cs.store(
-        group="inference/noise",
-        name="fixed",
-        node=FixedInference,
-    )
-    cs.store(group="inference/noise", name="gt", node=TrueInference)
-    cs.store(
-        group="inference/noise",
-        name="gamma",
-        node=GammaInference,
-    )
+    def validate(self) -> None:
+        if self.overwrite and self.append:
+            raise ValueError("Can only specify one of overwrite or append")

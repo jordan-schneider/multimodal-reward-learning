@@ -1,33 +1,27 @@
-import logging
 from pathlib import Path
-from typing import Tuple, cast
+from typing import Tuple
 
-import hydra
 import numpy as np
-from omegaconf import MISSING, OmegaConf
+import yaml
 
 from mrl.aligned_rewards.aligned_reward_set import AlignedRewardSet
 from mrl.aligned_rewards.make_ars import main as make_ars
-from mrl.configs import ExperimentConfig, FixedPreference, FlipProb, register_configs
+from mrl.configs import ExperimentConfig, FixedPreference, FlipProb
 from mrl.dataset.preferences import PreferenceGenerator
 from mrl.experiment_db.experiment import ExperimentDB
 from mrl.inference.analysis import analysis
 from mrl.inference.plots import plot_comparisons
 from mrl.inference.posterior import compare_modalities
 from mrl.inference.results import Results
-from mrl.util import load, setup_logging
+from mrl.util import setup_logging
 
 
-@hydra.main(config_path=None, config_name="experiment")
-def main(config: ExperimentConfig):
-    if config.preference.noise is MISSING:
-        raise ValueError("Must specify preference noise model")
-    if config.inference.noise is MISSING:
-        raise ValueError("Must specify inferene noise model")
-    if config.inference.noise.name not in ["fixed", "gt"]:
-        raise NotImplementedError("Prior noise models not implemented")
-    if config.overwrite and config.append:
-        raise ValueError("Can only specify one of overwrite or append")
+def main() -> None:
+    """Runs a reward inference experiment with simulated preferences according to a given ground truth reward. See ExperimentConfig for details.
+    """
+    config = ExperimentConfig()
+    config.validate()
+
     rootdir = Path(config.rootdir)
     experiment_db = ExperimentDB(git_dir=Path())
     inference_outdir = experiment_db.add(rootdir / "inference", config)
@@ -38,7 +32,7 @@ def main(config: ExperimentConfig):
     rng = np.random.default_rng(seed=config.seed)
 
     ((state_path, state_start_trial), (traj_path, traj_start_trial)) = get_prefs(
-        config, rootdir, inference_outdir, rng=rng
+        config, rng=rng
     )
 
     reward_path = rootdir / "reward.npy"
@@ -81,7 +75,7 @@ def main(config: ExperimentConfig):
     analysis(
         results=results,
         aligned_reward_set=AlignedRewardSet(
-            path=rootdir / config.ars_name, true_reward=true_reward
+            diffs=np.load(rootdir / config.ars_name), true_reward=true_reward
         ),
     )
     plot_comparisons(results=results, outdir=inference_outdir)
@@ -89,15 +83,21 @@ def main(config: ExperimentConfig):
 
 def get_prefs(
     config: ExperimentConfig,
-    rootdir: Path,
-    inference_outdir: Path,
     rng: np.random.Generator,
 ) -> Tuple[Tuple[Path, int], Tuple[Path, int]]:
+    """Generate state and trajectory preferences according to configuration variables.
+
+    Args:
+        config (ExperimentConfig): Configuration for preference generation. See ExperimentConfig and PreferenceGenerator for details.
+        rng (np.random.Generator): Numpy random number generator.
+
+    Returns:
+        Tuple[Tuple[Path, int], Tuple[Path, int]]: Paths to state and trajectory preference files, and the trial number at which to start inference.
+    """
     noise = config.preference.noise
-    search_results_path = inference_outdir / "search_results.pkl"
 
     generator = PreferenceGenerator(
-        rootdir=rootdir,
+        rootdir=Path(config.rootdir),
         env=config.env.name,
         outname="prefs",
         rng=rng,
@@ -112,32 +112,17 @@ def get_prefs(
         verbosity=config.verbosity,
     )
 
-    if noise.name == "fixed" or (
-        noise.name == "flip-prob" and search_results_path.exists()
-    ):
-        if noise.name == "flip-prob":
-            cast(FlipProb, noise)
-            logging.info("Temperature search already done")
-            search_results = load(search_results_path)
-            state_temp = search_results["state"]
-            traj_temp = search_results["traj"]
-        else:
-            noise = cast(FixedPreference, noise)
-            state_temp = noise.temp
-            traj_temp = noise.temp
-
+    if isinstance(noise, FixedPreference):
+        state_temp = noise.temp
+        traj_temp = noise.temp
         state_path, state_start_trial = generator.gen_preferences(
             modality="state", temperature=state_temp
         )
-        logging.debug(f"state_path returned: {state_path}")
         traj_path, traj_start_trial = generator.gen_preferences(
             modality="traj",
             temperature=traj_temp,
         )
-        logging.debug(f"traj_path returned: {traj_path}")
-    elif noise.name == "flip-prob":
-        noise = cast(FlipProb, noise)
-
+    elif isinstance(noise, FlipProb):
         (state_path, state_start_trial), (
             traj_path,
             traj_start_trial,
@@ -151,10 +136,9 @@ def get_prefs(
 
 
 def write_config(config: ExperimentConfig, inference_outdir: Path) -> None:
-    config_yaml = OmegaConf.to_yaml(config)
-    (inference_outdir / "config.yaml").open("w").write(config_yaml)
+    """Writes the current config to a yaml file in the given directory."""
+    yaml.dump(config, stream=(inference_outdir / "config.pkl").open("w"))
 
 
 if __name__ == "__main__":
-    register_configs()
     main()
