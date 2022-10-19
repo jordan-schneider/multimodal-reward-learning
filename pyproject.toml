@@ -14,6 +14,7 @@ classifiers = [
 dependencies = [
     "argh",
     "arrow",
+    "attrs",
     "experiment_server @ git+https://github.com/jordan-schneider/experiment-server.git#egg=experiment_server",
     "filelock",
     "fire",
