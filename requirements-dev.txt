@@ -3,3 +3,4 @@ hypothesis
 mypy
 pylint
 pytest
+types-PyYAML
