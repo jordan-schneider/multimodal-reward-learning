@@ -2,7 +2,6 @@ from pathlib import Path
 from typing import Tuple
 
 import numpy as np
-import yaml
 
 from mrl.aligned_rewards.aligned_reward_set import AlignedRewardSet
 from mrl.aligned_rewards.make_ars import main as make_ars
@@ -17,8 +16,7 @@ from mrl.util import setup_logging
 
 
 def main() -> None:
-    """Runs a reward inference experiment with simulated preferences according to a given ground truth reward. See ExperimentConfig for details.
-    """
+    """Runs a reward inference experiment with simulated preferences according to a given ground truth reward. See ExperimentConfig for details."""
     config = ExperimentConfig()
     config.validate()
 
@@ -26,8 +24,7 @@ def main() -> None:
     experiment_db = ExperimentDB(git_dir=Path())
     inference_outdir = experiment_db.add(rootdir / "inference", config)
     setup_logging(level=config.verbosity, outdir=inference_outdir, force=True)
-
-    write_config(config, inference_outdir)
+    config.dump(inference_outdir)
 
     rng = np.random.default_rng(seed=config.seed)
 
@@ -133,12 +130,6 @@ def get_prefs(
             init_traj_temp=noise.init_traj_temp,
         )
     return (state_path, state_start_trial), (traj_path, traj_start_trial)
-
-
-def write_config(config: ExperimentConfig, inference_outdir: Path) -> None:
-    """Writes the current config to a yaml file in the given directory."""
-    yaml.dump(config, stream=(inference_outdir / "config.pkl").open("w"))
-
 
 if __name__ == "__main__":
     main()
