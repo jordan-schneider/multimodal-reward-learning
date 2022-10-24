@@ -4,7 +4,7 @@ from pathlib import Path
 
 import arrow
 import redis  # type: ignore
-from mrl.configs import ExperimentConfig
+from mrl.configs import Config
 
 
 class ExperimentDB:
@@ -14,10 +14,10 @@ class ExperimentDB:
 
     @dataclass
     class Metadata:
-        config: ExperimentConfig
+        config: Config
         git_hash: str
 
-    def add(self, path: Path, config: ExperimentConfig) -> Path:
+    def add(self, path: Path, config: Config) -> Path:
         now = arrow.utcnow()
         fullpath = path.absolute()
         fullpath /= now.format("YYYY-MM-DD:HH:mm:ss")

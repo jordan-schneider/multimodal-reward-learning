@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal, Optional
 
+import yaml
 from linear_procgen.util import ENV_NAMES
 
 DIFF_NORM_METHODS = Literal[
@@ -67,15 +69,24 @@ class GammaInference(InferenceNoise):
 
 @dataclass
 class InferenceConfig:
-    noise: InferenceNoise = GammaInference()
+    noise: InferenceNoise = FixedInference()
     likelihood_fn: Literal["boltzmann", "hinge"] = "boltzmann"
     use_shift: bool = False
     save_all: bool = False
+    reward_particles: int = 100_000
+
+
+class Config:
+    def dump(self, outdir: Path) -> None:
+        yaml.dump(self, stream=(outdir / "config.pkl").open("w"))
+
+    def validate(self) -> None:
+        raise NotImplementedError()
 
 
 @dataclass
-class ExperimentConfig:
-    rootdir: str = "/home/joschnei/research/multimodal-reward-learning/data/miner/4/"
+class ExperimentConfig(Config):
+    rootdir: str = "/home/joschnei/multimodal-reward-learning/data/miner/4/"
     ars_name: str = "ars.mixed.npy"
     n_trials: int = 1
     append: bool = False
@@ -90,3 +101,21 @@ class ExperimentConfig:
     def validate(self) -> None:
         if self.overwrite and self.append:
             raise ValueError("Can only specify one of overwrite or append")
+
+
+@dataclass
+class HumanExperimentConfig(Config):
+    rootdir: str = "/home/joschnei/multimodal-reward-learning/data/miner/"
+    git_dir: str = "/home/joschnei/multimodal-reward-learning"
+    question_db_path: str = (
+        "/home/joschnei/experiment-server/experiment_server/experiments.db"
+    )
+    inference: InferenceConfig = InferenceConfig()
+    env: EnvConfig = EnvConfig()
+    norm_mode: DIFF_NORM_METHODS = "sum-length"
+
+    verbosity: Literal["INFO", "DEBUG"] = "INFO"
+    seed: int = 234527394578
+
+    def validate(self) -> None:
+        pass
