@@ -15,6 +15,7 @@ from linear_procgen import make_env
 from linear_procgen.util import get_root_env
 
 from mrl.configs import FixedInference, HumanExperimentConfig
+from mrl.dataset.human_responses import UserDataset
 from mrl.experiment_db.experiment import ExperimentDB
 from mrl.inference.posterior import cover_sphere, make_likelihoods
 from mrl.inference.results import Results
@@ -108,7 +109,7 @@ def get_likelihood_fn(config: HumanExperimentConfig) -> Likelihood:
 def get_diffs(
     response_dir: Path, question_db_path: Path
 ) -> Dict[DataModality, np.ndarray]:
-    prefs = UsersPreferences(response_dir)
+    prefs = UserDataset(response_dir)
     question_ids = set(
         resp.question_id for user in prefs.users for resp in user.responses
     )
@@ -118,7 +119,7 @@ def get_diffs(
     features = get_features(
         questions,
         max_lens=[
-            (resp.question_id, resp.max_steps)
+            (resp.question_id, resp.steps)
             for user in prefs.users
             for resp in user.responses
         ],
@@ -234,37 +235,6 @@ def total_feature_rollout(
         total_features += env.get_info()["features"]
 
     return total_features
-
-
-class UsersPreferences:
-    def __init__(self, user_dir: Path) -> None:
-        self.user_dir = user_dir
-        self.users = [UserPreferences(path) for path in user_dir.glob("user_*.json")]
-
-
-class UserPreferences:
-    def __init__(self, path: Path) -> None:
-        data = yaml.safe_load(path.open("r"))
-        self.responses = [Response.from_dict(resp) for resp in data["responses"]]
-
-
-@dataclass
-class Response:
-    question_id: int
-    prefer_left: bool
-    start_time: arrow.Arrow
-    end_time: arrow.Arrow
-    max_steps: Tuple[int, int]
-
-    @staticmethod
-    def from_dict(data: dict) -> Response:
-        return Response(
-            question_id=data["question_id"],
-            prefer_left=data["answer"],
-            start_time=arrow.get(data["start_time"]),
-            end_time=arrow.get(data["end_time"]),
-            max_steps=tuple(data["max_steps"]),  # type: ignore
-        )
 
 
 if __name__ == "__main__":
