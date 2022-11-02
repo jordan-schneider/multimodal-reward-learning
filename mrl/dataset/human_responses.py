@@ -58,8 +58,10 @@ class User:
 
     @staticmethod
     def from_json(path: Path) -> User:
-        data = json.load(path.open("r"))
-        interaction_times = User._validate_interaction_times(data["interaction_times"])
+        data: dict[str, Any] = json.load(path.open("r"))
+        if "interact_times" not in data.keys() or data["interact_times"] is None:
+            raise ValueError(f"Missing interact_times in {path}")
+        interaction_times = User._validate_interaction_times(data["interact_times"])
         return User(
             user_id=data["user_id"],
             payment_code=data["payment_code"],
@@ -131,4 +133,10 @@ class Response:
 class UserDataset:
     def __init__(self, path: Path):
         self.path = path
-        self.users = [User.from_json(p) for p in path.glob("user_*.json")]
+        self.users = []
+        for p in path.glob("*.json"):
+            try:
+                user = User.from_json(p)
+                self.users.append(user)
+            except ValueError as e:
+                logging.warning(f"Skipping {p.name} due to {e}")

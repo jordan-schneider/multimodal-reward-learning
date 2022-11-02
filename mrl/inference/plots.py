@@ -1,7 +1,7 @@
 import logging
 from math import ceil
 from pathlib import Path
-from typing import Dict, Union
+from typing import Dict, Optional, Union
 
 import fire  # type: ignore
 import joypy  # type: ignore
@@ -63,12 +63,11 @@ def plot_comparisons(results: Results, outdir: Path) -> None:
         logging.warning("Results does not have entropies")
 
 
-def plot_comparison(results: Results, use_gt: bool = False) -> None:
+def plot_comparison(results: Results, outdir: Path, use_gt: bool = False) -> None:
     """Plot single comparison experiment"""
     assert results.current_experiment is not None, "No current experiment"
-    outdir = results.outdir / results.current_experiment
     if likelihoods := results.get("likelihood"):
-        plot_liklihoods(likelihoods, outdir)
+        plot_likelihoods(likelihoods, outdir)
 
         if use_gt:
             plot_gt_likelihood(likelihoods, outdir)
@@ -208,53 +207,71 @@ def plot_rewards(
         plt.close()
 
 
-def plot_liklihoods(
+def _plot_likelihood(likelihoods: np.ndarray, outdir: Path, name: str) -> None:
+    df = pd.DataFrame(likelihoods, dtype=np.float128)
+    assert df.notnull().all().all()
+    assert (df < np.inf).all().all()
+    df = df.melt(
+        value_vars=range(likelihoods.shape[1]),
+        var_name="timestep",
+        value_name="likelihood",
+    )
+
+    n_plots = min(10, likelihoods.shape[1])
+    timesteps = np.arange(0, likelihoods.shape[1], ceil(likelihoods.shape[1] / n_plots))
+    assert len(timesteps) == n_plots, f"{len(timesteps)} != {n_plots}"
+
+    df = df.loc[df["timestep"].isin(timesteps)]
+    df = df.loc[df.timestep > 1e-3]
+
+    small_df = df.loc[df.likelihood < 0.1]
+    large_df = df.loc[df.likelihood >= 0.1]
+
+    assert large_df.notnull().all().all()
+    assert (large_df.abs() < np.inf).all().all()
+
+    if len(small_df) > 0:
+        fig, axes = joypy.joyplot(
+            small_df, hist=True, by="timestep", overlap=0, bins=100
+        )
+        axes[-1].set_xlabel("Likelihood")
+        axes[-1].yaxis.set_label_coords(-0.07, 0.5)
+        axes[-1].set_ylabel("# Preferences")
+        axes[-1].yaxis.set_visible(True)
+        axes[-1].yaxis.set_ticks([])
+        fig.savefig(outdir / f"{name}.small.png")
+        plt.close(fig)
+
+    if len(large_df) > 0:
+        fig, axes = joypy.joyplot(
+            large_df, hist=True, by="timestep", overlap=0, bins=100
+        )
+        axes[-1].set_xlabel("Likelihood")
+        axes[-1].yaxis.set_label_coords(-0.07, 0.5)
+        axes[-1].set_ylabel("# Preferences")
+        axes[-1].yaxis.set_visible(True)
+        axes[-1].yaxis.set_ticks([])
+        fig.savefig(outdir / f"{name}.large.png")
+        plt.close(fig)
+
+    fig, axes = joypy.joyplot(df, hist=True, by="timestep", overlap=0, bins=100)
+    axes[-1].set_xlabel("Likelihood")
+    axes[-1].yaxis.set_label_coords(-0.07, 0.5)
+    axes[-1].set_ylabel("# Preferences")
+    axes[-1].yaxis.set_visible(True)
+    axes[-1].yaxis.set_ticks([])
+    fig.savefig(outdir / f"{name}.png")
+    plt.close(fig)
+
+
+def plot_likelihoods(
     likelihoods: Union[Dict[str, np.ndarray], np.ndarray], outdir: Path
 ) -> None:
-    def plot(likelihoods: pd.DataFrame, outdir: Path, name: str) -> None:
-        df = pd.DataFrame(likelihoods, dtype=np.float128)
-        assert df.notnull().all().all()
-        assert (df < np.inf).all().all()
-        df = df.melt(
-            value_vars=range(likelihoods.shape[1]),
-            var_name="timestep",
-            value_name="likelihood",
-        )
-
-        n_plots = min(10, likelihoods.shape[1])
-        timesteps = np.arange(
-            0, likelihoods.shape[1], ceil(likelihoods.shape[1] / n_plots)
-        )
-        assert len(timesteps) == n_plots, f"{len(timesteps)} != {n_plots}"
-
-        df = df.loc[df["timestep"].isin(timesteps)]
-        df = df.loc[df.timestep > 1e-3]
-
-        small_df = df.loc[df.likelihood < 0.1]
-        large_df = df.loc[df.likelihood >= 0.1]
-
-        assert large_df.notnull().all().all()
-        assert (large_df.abs() < np.inf).all().all()
-
-        if len(small_df) > 0:
-            fig, _ = joypy.joyplot(
-                small_df, hist=True, by="timestep", overlap=0, bins=100
-            )
-            fig.savefig(outdir / f"{name}.small.png")
-            plt.close(fig)
-
-        if len(large_df) > 0:
-            fig, _ = joypy.joyplot(
-                large_df, hist=True, by="timestep", overlap=0, bins=100
-            )
-            fig.savefig(outdir / f"{name}.large.png")
-            plt.close(fig)
-
     if isinstance(likelihoods, dict):
         for name, l in likelihoods.items():
-            plot(l, outdir, name=f"likelihood_hist.{name}")
+            _plot_likelihood(l, outdir, name=f"likelihood_hist.{name}")
     else:
-        plot(likelihoods, outdir, name="likelihood_hist")
+        _plot_likelihood(likelihoods, outdir, name="likelihood_hist")
 
 
 def plot_entropies(entropies: Dict[str, np.ndarray], outdir: Path) -> None:
@@ -268,11 +285,17 @@ def plot_entropies(entropies: Dict[str, np.ndarray], outdir: Path) -> None:
     plt.close()
 
 
-def post_hoc_plot_comparisons(outdir: Path) -> None:
+def post_hoc_plot_comparisons(outdir: Path, experiment: Optional[str]) -> None:
     outdir = Path(outdir)
     setup_logging(level="INFO", outdir=outdir, name="post_hoc_plot_comparisons.log")
     results = Results(outdir=outdir / "trials", load_contents=True)
-    plot_comparisons(results, outdir)
+    if experiment is None:
+        plot_comparisons(results, outdir)
+    else:
+        results.start(experiment)
+        plotdir = outdir / "trials" / experiment / "plots"
+        plotdir.mkdir(parents=True, exist_ok=True)
+        plot_comparison(results, plotdir)
 
 
 if __name__ == "__main__":

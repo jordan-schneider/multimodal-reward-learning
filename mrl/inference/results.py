@@ -22,6 +22,8 @@ class Results:
                     experiment_name = experiment_dir.parts[-1]
                     self.start(experiment_name)
                     for file in experiment_dir.iterdir():
+                        if file.suffix not in [".pkl", ".npy"]:
+                            continue
                         obj_name = file.stem
                         self.experiments[experiment_name][obj_name] = load(file)
 

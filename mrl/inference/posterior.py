@@ -13,7 +13,7 @@ from mrl.reward_model.likelihood import Likelihood
 from mrl.reward_model.logspace import cum_likelihoods
 from mrl.util import (
     get_temp_from_pref_path,
-    normalize_diffs,
+    get_normalized_diff,
     normalize_vecs,
     setup_logging,
 )
@@ -125,7 +125,7 @@ def compare_modalities(
             results.start(f"trial-{trial}")
 
             diffs = {
-                key: normalize_diffs(feature, mode=norm_diffs)
+                key: get_normalized_diff(feature, mode=norm_diffs)
                 for key, feature in features.items()
             }
 

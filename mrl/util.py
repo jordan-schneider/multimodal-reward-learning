@@ -40,7 +40,7 @@ NORM_DIFF_MODES = Literal[
 ]
 
 
-def normalize_diffs(
+def get_normalized_diff(
     features: np.ndarray,
     mode: NORM_DIFF_MODES = None,
 ) -> np.ndarray:
@@ -152,6 +152,7 @@ def max_batch_size(
         )
     else:
         raise ValueError(f"Modality {modality} must be 'state' or 'traj'")
+
 
 def max_state_batch_size(n_states: int, n_parallel_envs: int, step_nbytes: int) -> int:
     gc.collect()

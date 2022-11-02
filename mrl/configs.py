@@ -72,7 +72,7 @@ class InferenceConfig:
     noise: InferenceNoise = FixedInference()
     likelihood_fn: Literal["boltzmann", "hinge"] = "boltzmann"
     use_shift: bool = False
-    save_all: bool = False
+    save_all: bool = True
     reward_particles: int = 100_000
 
 
@@ -105,7 +105,7 @@ class ExperimentConfig(Config):
 
 @dataclass
 class HumanExperimentConfig(Config):
-    rootdir: str = "/home/joschnei/multimodal-reward-learning/data/miner/"
+    rootdir: str = "/nfs/data/joschnei/multimodal-reward-learning/data/miner/"
     git_dir: str = "/home/joschnei/multimodal-reward-learning"
     question_db_path: str = (
         "/home/joschnei/experiment-server/experiment_server/experiments.db"
