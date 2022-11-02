@@ -166,3 +166,7 @@ memprof/
 
 # Videos
 *.mp4
+
+*.pkl*
+
+nfs

@@ -17,7 +17,11 @@ def analysis(
 ):
     results.start("")
     reward_samples = cast(np.ndarray, results.get("reward_sample"))
-    true_reward = cast(np.ndarray, results.get("true_reward"))
+    true_reward = (
+        cast(np.ndarray, results.get("true_reward"))
+        if results.has("true_reward")
+        else None
+    )
 
     for trial in results.experiments:
         if trial == "":
@@ -158,10 +162,12 @@ def save_centroid_dispersions(
             except Exception as e:
                 logging.warning(f"Failed to find centroid for time t={t}", exc_info=e)
 
-    centroid_per_modality[key] = np.stack(centroids)
-    assert np.allclose(np.linalg.norm(centroid_per_modality[key], axis=1), 1.0)
-    dispersion_centroid_per_modality[key] = np.array(dispersions)
+        centroid_per_modality[key] = np.stack(centroids)
+        assert np.allclose(np.linalg.norm(centroid_per_modality[key], axis=1), 1.0)
+        dispersion_centroid_per_modality[key] = np.array(dispersions)
 
+    assert len(centroid_per_modality) == len(likelihoods)
+    assert len(dispersion_centroid_per_modality) == len(likelihoods)
     results.update("centroid_per_modality", centroid_per_modality)
     results.update("dispersion_centroid", dispersion_centroid_per_modality)
     return proj_mean_rewards

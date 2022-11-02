@@ -21,7 +21,7 @@ from mrl.util import (
     get_policy,
     load,
     max_batch_size,
-    normalize_diffs,
+    get_normalized_diff,
     np_remove,
     setup_logging,
 )
@@ -445,7 +445,7 @@ class PreferenceGenerator:
             timesteps=self.batch_timesteps
         )
         features = np.stack((feature_a, feature_b), axis=1)
-        feature_diffs = normalize_diffs(features, mode=self.normalize_differences)
+        feature_diffs = get_normalized_diff(features, mode=self.normalize_differences)
 
         nonempty_rows = np.any(feature_diffs != 0, axis=1)
         features = features[nonempty_rows]
@@ -494,7 +494,7 @@ class PreferenceGenerator:
             features = np.stack((feature_a, feature_b), axis=1)
             assert features.shape[:2] == (1, 2)
 
-            feature_diff = normalize_diffs(features, self.normalize_differences)
+            feature_diff = get_normalized_diff(features, self.normalize_differences)
             assert len(feature_diff.shape) == 2
 
             if not np.any(np.abs(feature_diff) > 1e-8):
