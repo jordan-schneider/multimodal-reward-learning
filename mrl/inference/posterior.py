@@ -5,6 +5,7 @@ from typing import Dict, Generator, List, Literal, Optional, Tuple, cast
 
 import fire  # type: ignore
 import numpy as np
+
 from mrl.configs import FixedInference, InferenceNoise, TrueInference
 from mrl.inference.results import Results
 from mrl.reward_model.boltzmann import boltzmann_likelihood
@@ -12,8 +13,8 @@ from mrl.reward_model.hinge import hinge_likelihood
 from mrl.reward_model.likelihood import Likelihood
 from mrl.reward_model.logspace import cum_likelihoods
 from mrl.util import (
-    get_temp_from_pref_path,
     get_normalized_diff,
+    get_temp_from_pref_path,
     normalize_vecs,
     setup_logging,
 )
@@ -132,7 +133,7 @@ def compare_modalities(
             try:
                 # TODO: Write function that processes one modality at a time to make multiple
                 # temperature values easy to handle.
-                results = make_likelihoods(
+                results = make_all_likelihoods(
                     reward_samples=reward_samples,
                     diffs=diffs,
                     reward_likelihood=hinge_likelihood
@@ -249,7 +250,7 @@ def load_comparison_data(
         yield trial_data
 
 
-def make_likelihoods(
+def make_all_likelihoods(
     reward_samples: np.ndarray,
     diffs: Dict[str, np.ndarray],
     reward_likelihood: Likelihood,
@@ -289,12 +290,57 @@ def make_likelihoods(
             results.update("gt_likelihood", gt_likelihood)
 
     logging.info("Saving total likelihoods")
-    save_likelihoods(likelihoods, results, save_all)
+    save_all_likelihoods(likelihoods, results, save_all)
+
+    return results
+
+
+def make_likelihoods(
+    reward_samples: np.ndarray,
+    diffs: np.ndarray,
+    dataset: str,
+    reward_likelihood: Likelihood,
+    use_shift: bool,
+    results: Results,
+    true_reward: Optional[np.ndarray] = None,
+    temp: float = 1.0,
+    save_all: bool = False,
+) -> Results:
+    logging.info("Computing p(reward|diff)")
+    log_likelihoods = reward_likelihood(
+        reward=reward_samples, diffs=diffs, temperature=temp
+    )
+
+    if save_all:
+        results.update_dict("log_likelihoods", dataset, log_likelihoods)
+
+    logging.info("Normalizing and totaling likelihoods")
+    likelihoods = cum_likelihoods(log_likelihoods=log_likelihoods, shift=use_shift)
+
+    if true_reward is not None:
+        indices = np.nonzero(np.all(true_reward == reward_samples, axis=1))
+        if len(indices) > 0:
+            gt_likelihood = likelihoods[indices[0][0]]
+            results.update_dict("gt_likelihood", dataset, gt_likelihood)
+
+    logging.info("Saving total likelihoods")
+    save_likelihoods(likelihoods, dataset, results, save_all)
 
     return results
 
 
 def save_likelihoods(
+    likelihoods: np.ndarray, dataset: str, results: Results, save_all: bool = False
+) -> Results:
+    results.update_dict("likelihood", dataset, likelihoods, save=save_all)
+    if not save_all:
+        # Subsample 1% of the sampled rewards and reduce precision to save disk space by default.
+        likelihood_samples = likelihoods[::100].astype(np.float32)
+        results.update_dict("likelihood_sample", dataset, likelihood_samples)
+    return results
+
+
+def save_all_likelihoods(
     likelihoods: Dict[str, np.ndarray], results: Results, save_all: bool = False
 ) -> Results:
     results.update("likelihood", likelihoods, save=save_all)

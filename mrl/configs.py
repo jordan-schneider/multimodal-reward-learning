@@ -74,6 +74,7 @@ class InferenceConfig:
     use_shift: bool = False
     save_all: bool = True
     reward_particles: int = 100_000
+    short_traj_cutoff: Optional[int] = 100
 
 
 class Config:
@@ -112,7 +113,11 @@ class HumanExperimentConfig(Config):
     )
     inference: InferenceConfig = InferenceConfig()
     env: EnvConfig = EnvConfig()
+    # TODO: Dedup this with PreferenceConfig
     norm_mode: DIFF_NORM_METHODS = "sum-length"
+
+    centroid_stats: bool = False
+    mean_dispersion_stats: bool = True
 
     verbosity: Literal["INFO", "DEBUG"] = "INFO"
     seed: int = 234527394578
