@@ -1,18 +1,21 @@
 from __future__ import annotations
 
+import datetime
 import logging
 import pickle as pkl
 import sqlite3
+from itertools import combinations
 from pathlib import Path
-from typing import Dict, Sequence, TypeVar, Union, cast
+from typing import Generator, Optional, Sequence, TypeVar, Union
 
 import numpy as np
-from experiment_server.type import DataModality, State
+import psutil  # type: ignore
+from experiment_server.type import State
 from linear_procgen import Miner, make_env
 from linear_procgen.util import get_root_env
 
 from mrl.configs import FixedInference, HumanExperimentConfig
-from mrl.dataset.human_responses import UserDataset
+from mrl.dataset.human_responses import Response, User, UserDataset
 from mrl.experiment_db.experiment import ExperimentDB
 from mrl.inference.analysis import analysis
 from mrl.inference.plots import plot_comparison
@@ -36,22 +39,11 @@ def main() -> None:
     config.dump(inference_outdir)
 
     rng = np.random.default_rng(seed=config.seed)
-    pairs_by_modality = cast(
-        Dict[str, np.ndarray],
-        get_feature_pairs(
-            response_dir=Path(config.rootdir) / "users",
-            question_db_path=Path(config.question_db_path),
-        ),
+    pairs_by_modality = get_feature_pairs(
+        response_dir=Path(config.rootdir) / "users",
+        question_db_path=Path(config.question_db_path),
+        short_traj_cutoff=config.inference.short_traj_cutoff,
     )
-    pairs_by_modality = trim_by_modality(pairs_by_modality)
-    pairs_by_modality["joint"] = get_joint(pairs_by_modality)
-    pairs_by_modality = {
-        k: v[rng.permutation(v.shape[0])] for k, v in pairs_by_modality.items()
-    }
-    diffs_by_modality = {
-        k: get_normalized_diff(pair, mode=config.norm_mode)
-        for k, pair in pairs_by_modality.items()
-    }
 
     results = Results(inference_outdir / "trials")
     results.start("")
@@ -67,26 +59,33 @@ def main() -> None:
     )
     results.update("reward_sample", reward_samples)
 
-    # TODO: Implement gamma temperature prior instead of using fixed for everything.
+    # TODO: Maybe one day implement gamma noise priors
     assert isinstance(config.inference.noise, FixedInference)
-    temps = {k: config.inference.noise.temp for k in diffs_by_modality.keys()}
-    results.update("temp", temps)
 
     logging.info("Starting inference on human prefs")
-    results.start("human")
-    results = make_likelihoods(
-        reward_samples=reward_samples,
-        diffs=diffs_by_modality,
-        reward_likelihood=get_likelihood_fn(config),
-        use_shift=config.inference.use_shift,
-        results=results,
-        temps=temps,
-        save_all=config.inference.save_all,
-    )
-    results.close()
+    for dataset, pairs in make_joints(pairs_by_modality):
+        diffs = preprocess_modality(pairs=pairs, config=config, rng=rng)
+        results.start("human")
+        results.update("temp", config.inference.noise.temp)
+        check_memory()
+        results = make_likelihoods(
+            reward_samples=reward_samples,
+            diffs=diffs,
+            dataset=dataset,
+            reward_likelihood=get_likelihood_fn(config),
+            use_shift=config.inference.use_shift,
+            results=results,
+            temp=config.inference.noise.temp,
+            save_all=config.inference.save_all,
+        )
+        results.close()
 
     logging.info("Computing post-inference metrics")
-    analysis(results, compute_centroids=True, compute_mean_dispersions=True)
+    analysis(
+        results,
+        compute_centroids=config.centroid_stats,
+        compute_mean_dispersions=config.mean_dispersion_stats,
+    )
 
     logging.info("Plotting metrics")
     results.start("human")
@@ -95,7 +94,20 @@ def main() -> None:
     plot_comparison(results, plotdir)
 
 
-def get_joint(diffs_by_modality: dict[str, np.ndarray]) -> np.ndarray:
+def check_memory() -> None:
+    if psutil.virtual_memory().percent > 80:
+        raise MemoryError("Memory usage over 80%")
+
+
+def preprocess_modality(
+    pairs: np.ndarray, config: HumanExperimentConfig, rng: np.random.Generator
+) -> np.ndarray:
+    pairs = pairs[rng.permutation(pairs.shape[0])]
+    pairs = get_normalized_diff(pairs, mode=config.norm_mode)
+    return pairs
+
+
+def get_fair_joint(diffs_by_modality: dict[str, np.ndarray]) -> np.ndarray:
     n_modalities = len(diffs_by_modality)
     n_diffs = len(diffs_by_modality.values().__iter__().__next__())
     return np.concatenate(
@@ -104,6 +116,18 @@ def get_joint(diffs_by_modality: dict[str, np.ndarray]) -> np.ndarray:
             for per_modality in diffs_by_modality.values()
         ]
     )
+
+
+def make_joints(
+    pairs_by_modality: dict[str, np.ndarray]
+) -> Generator[tuple[str, np.ndarray], None, None]:
+    for l in range(2, len(pairs_by_modality) + 1):
+        for joint in combinations(pairs_by_modality.keys(), l):
+            joint_name = "_".join(joint)
+            joint_pairs = np.concatenate(
+                [pairs_by_modality[modality] for modality in joint]
+            )
+            yield joint_name, joint_pairs
 
 
 def trim_by_modality(diffs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
@@ -128,9 +152,11 @@ def get_likelihood_fn(config: HumanExperimentConfig) -> Likelihood:
 
 
 def get_feature_pairs(
-    response_dir: Path, question_db_path: Path
-) -> dict[DataModality, np.ndarray]:
+    response_dir: Path, question_db_path: Path, short_traj_cutoff: Optional[int] = None
+) -> dict[str, np.ndarray]:
     prefs = UserDataset(response_dir)
+    prefs = filter_human_prefs(prefs)
+
     question_ids = set(
         resp.question_id for user in prefs.users for resp in user.responses
     )
@@ -138,12 +164,13 @@ def get_feature_pairs(
     questions = get_questions_from_db(db, question_ids)
 
     features = get_features(
-        questions,
+        questions=questions,
         max_lens=[
             (resp.question_id, resp.steps)
             for user in prefs.users
             for resp in user.responses
         ],
+        short_traj_cutoff=short_traj_cutoff,
     )
     diffs = [
         (np.stack((left, right)), modality) for _, left, right, modality in features
@@ -151,13 +178,37 @@ def get_feature_pairs(
     return sort_by_modality(diffs)
 
 
+def _user_is_spam(user: User) -> bool:
+    return user.get_fraction_both_started() < 0.5
+
+
+def _resp_is_spam(response: Response) -> bool:
+    if (response.steps[0] == 0) != (response.steps[1] == 0):
+        return True
+    if response.duration() < datetime.timedelta(seconds=2):
+        return True
+    return False
+
+
+def _filter_user(user: User) -> User:
+    user.responses = [resp for resp in user.responses if not _resp_is_spam(resp)]
+    return user
+
+
+def filter_human_prefs(prefs: UserDataset) -> UserDataset:
+    prefs.users = [
+        _filter_user(user)
+        for user in prefs.users
+        if len(user.responses) > 0 and not _user_is_spam(user)
+    ]
+    return prefs
+
+
 T = TypeVar("T")
 
 
-def sort_by_modality(
-    vals: Sequence[tuple[np.ndarray, DataModality]]
-) -> dict[DataModality, np.ndarray]:
-    by_modality: dict[DataModality, list[np.ndarray]] = {}
+def sort_by_modality(vals: Sequence[tuple[np.ndarray, str]]) -> dict[str, np.ndarray]:
+    by_modality: dict[str, list[np.ndarray]] = {}
     for val, modality in vals:
         current_modality = by_modality.get(modality, [])
         current_modality.append(val)
@@ -172,12 +223,13 @@ def get_features(
     questions: dict[
         int,
         tuple[
-            tuple[State, Sequence[int], DataModality],
-            tuple[State, Sequence[int], DataModality],
+            tuple[State, Sequence[int], str],
+            tuple[State, Sequence[int], str],
         ],
     ],
     max_lens: list[tuple[int, tuple[int, int]]],
-) -> list[tuple[int, np.ndarray, np.ndarray, DataModality]]:
+    short_traj_cutoff: Optional[int] = None,
+) -> list[tuple[int, np.ndarray, np.ndarray, str]]:
     # TODO: We start assuming here that the data modalities are the same
     out = []
     # TODO: This is inefficient, we should really only roll out each question once, but it makes the logic simpler and
@@ -188,12 +240,22 @@ def get_features(
             right_actions,
             right_modality,
         ) = questions[question_id]
+        if short_traj_cutoff is not None and left_modality == "traj":
+            modality = (
+                "short_traj"
+                if len(left_actions) < short_traj_cutoff
+                and len(right_actions) < short_traj_cutoff
+                else "long_traj"
+            )
+        else:
+            modality = left_modality
+
         out.append(
             (
                 question_id,
                 total_feature_rollout(left_state, left_actions, max_len=left_max),
                 total_feature_rollout(right_state, right_actions, max_len=right_max),
-                left_modality,
+                modality,
             )
         )
     return out
@@ -204,8 +266,8 @@ def get_questions_from_db(
 ) -> dict[
     int,
     tuple[
-        tuple[State, Sequence[int], DataModality],
-        tuple[State, Sequence[int], DataModality],
+        tuple[State, Sequence[int], str],
+        tuple[State, Sequence[int], str],
     ],
 ]:
     question_id_list = ", ".join(f":question_id_{i}" for i in range(len(question_ids)))

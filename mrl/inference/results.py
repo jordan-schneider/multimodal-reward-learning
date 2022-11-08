@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd  # type: ignore
+
 from mrl.util import dump, load
 
 
@@ -37,6 +38,14 @@ class Results:
         self.experiments[self.current_experiment][name] = value
         if save:
             dump(value, self.outdir / self.current_experiment / name)
+
+    def update_dict(self, name: str, key: Any, value: Any, save: bool=True) -> None:
+        assert self.current_experiment is not None, "No current experiment"
+        d = self.experiments[self.current_experiment].get(name, {})
+        d[key] = value
+        self.experiments[self.current_experiment][name] = d
+        if save:
+            dump(value, self.outdir / self.current_experiment / name )
 
     def has(self, name: str) -> bool:
         return any(name in exp.keys() for exp in self.experiments.values())

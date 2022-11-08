@@ -133,7 +133,7 @@ class Response:
 class UserDataset:
     def __init__(self, path: Path):
         self.path = path
-        self.users = []
+        self.users: list[User] = []
         for p in path.glob("*.json"):
             try:
                 user = User.from_json(p)
