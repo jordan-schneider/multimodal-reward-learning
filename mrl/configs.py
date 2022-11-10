@@ -108,13 +108,12 @@ class ExperimentConfig(Config):
 class HumanExperimentConfig(Config):
     rootdir: str = "/nfs/data/joschnei/multimodal-reward-learning/data/miner/"
     git_dir: str = "/home/joschnei/multimodal-reward-learning"
-    question_db_path: str = (
-        "/home/joschnei/experiment-server/experiment_server/experiments.db"
-    )
+    question_db_path: str = "/nfs/data/joschnei/experiment-server/experiments.db"
     inference: InferenceConfig = InferenceConfig()
     env: EnvConfig = EnvConfig()
     # TODO: Dedup this with PreferenceConfig
     norm_mode: DIFF_NORM_METHODS = "sum-length"
+    max_questions: Optional[int] = None
 
     centroid_stats: bool = False
     mean_dispersion_stats: bool = True

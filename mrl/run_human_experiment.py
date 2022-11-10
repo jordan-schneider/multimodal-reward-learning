@@ -36,62 +36,66 @@ def main() -> None:
     experiment_db = ExperimentDB(git_dir=Path(config.git_dir))
     inference_outdir = experiment_db.add(Path(config.rootdir) / "inference", config)
     setup_logging(level=config.verbosity, outdir=inference_outdir, force=True)
-    config.dump(inference_outdir)
+    try:
+        config.dump(inference_outdir)
 
-    rng = np.random.default_rng(seed=config.seed)
-    pairs_by_modality = get_feature_pairs(
-        response_dir=Path(config.rootdir) / "users",
-        question_db_path=Path(config.question_db_path),
-        short_traj_cutoff=config.inference.short_traj_cutoff,
-    )
-
-    results = Results(inference_outdir / "trials")
-    results.start("")
-
-    tmp_env = make_env(name=config.env.name, num=1, reward=1)
-    root_env = get_root_env(tmp_env)
-    env_features = root_env.get_features()[0].shape[0]
-
-    reward_samples = cover_sphere(
-        n_samples=config.inference.reward_particles,
-        ndims=env_features,
-        rng=rng,
-    )
-    results.update("reward_sample", reward_samples)
-
-    # TODO: Maybe one day implement gamma noise priors
-    assert isinstance(config.inference.noise, FixedInference)
-
-    logging.info("Starting inference on human prefs")
-    for dataset, pairs in make_joints(pairs_by_modality):
-        diffs = preprocess_modality(pairs=pairs, config=config, rng=rng)
-        results.start("human")
-        results.update("temp", config.inference.noise.temp)
-        check_memory()
-        results = make_likelihoods(
-            reward_samples=reward_samples,
-            diffs=diffs,
-            dataset=dataset,
-            reward_likelihood=get_likelihood_fn(config),
-            use_shift=config.inference.use_shift,
-            results=results,
-            temp=config.inference.noise.temp,
-            save_all=config.inference.save_all,
+        rng = np.random.default_rng(seed=config.seed)
+        pairs_by_modality = get_feature_pairs(
+            response_dir=Path(config.rootdir) / "users",
+            question_db_path=Path(config.question_db_path),
+            short_traj_cutoff=config.inference.short_traj_cutoff,
         )
-        results.close()
 
-    logging.info("Computing post-inference metrics")
-    analysis(
-        results,
-        compute_centroids=config.centroid_stats,
-        compute_mean_dispersions=config.mean_dispersion_stats,
-    )
+        results = Results(inference_outdir / "trials")
+        results.start("")
 
-    logging.info("Plotting metrics")
-    results.start("human")
-    plotdir = inference_outdir / "trials" / "human" / "plots"
-    plotdir.mkdir(parents=True, exist_ok=True)
-    plot_comparison(results, plotdir)
+        tmp_env = make_env(name=config.env.name, num=1, reward=1)
+        root_env = get_root_env(tmp_env)
+        env_features = root_env.get_features()[0].shape[0]
+
+        reward_samples = cover_sphere(
+            n_samples=config.inference.reward_particles,
+            ndims=env_features,
+            rng=rng,
+        )
+        results.update("reward_sample", reward_samples)
+
+        # TODO: Maybe one day implement gamma noise priors
+        assert isinstance(config.inference.noise, FixedInference)
+
+        logging.info("Starting inference on human prefs")
+        for dataset, pairs in make_datasets(pairs_by_modality):
+            diffs = preprocess_modality(pairs=pairs, config=config, rng=rng)
+            results.start("human")
+            results.update("temp", config.inference.noise.temp)
+            check_memory()
+            results = make_likelihoods(
+                reward_samples=reward_samples,
+                diffs=diffs,
+                dataset=dataset,
+                reward_likelihood=get_likelihood_fn(config),
+                use_shift=config.inference.use_shift,
+                results=results,
+                temp=config.inference.noise.temp,
+                save_all=config.inference.save_all,
+            )
+            results.close()
+
+        logging.info("Computing post-inference metrics")
+        analysis(
+            results,
+            compute_centroids=config.centroid_stats,
+            compute_mean_dispersions=config.mean_dispersion_stats,
+        )
+
+        logging.info("Plotting metrics")
+        results.start("human")
+        plotdir = inference_outdir / "trials" / "human" / "plots"
+        plotdir.mkdir(parents=True, exist_ok=True)
+        plot_comparison(results, plotdir)
+    except BaseException as e:
+        logging.exception(e)
+        raise e
 
 
 def check_memory() -> None:
@@ -103,6 +107,8 @@ def preprocess_modality(
     pairs: np.ndarray, config: HumanExperimentConfig, rng: np.random.Generator
 ) -> np.ndarray:
     pairs = pairs[rng.permutation(pairs.shape[0])]
+    if config.max_questions is not None:
+        pairs = pairs[: config.max_questions]
     pairs = get_normalized_diff(pairs, mode=config.norm_mode)
     return pairs
 
@@ -118,16 +124,26 @@ def get_fair_joint(diffs_by_modality: dict[str, np.ndarray]) -> np.ndarray:
     )
 
 
-def make_joints(
+def make_datasets(
     pairs_by_modality: dict[str, np.ndarray]
 ) -> Generator[tuple[str, np.ndarray], None, None]:
-    for l in range(2, len(pairs_by_modality) + 1):
+    for l in range(1, len(pairs_by_modality) + 1):
         for joint in combinations(pairs_by_modality.keys(), l):
-            joint_name = "_".join(joint)
             joint_pairs = np.concatenate(
                 [pairs_by_modality[modality] for modality in joint]
             )
+            joint_name = format_dataset_name(joint)
+
             yield joint_name, joint_pairs
+
+
+def format_dataset_name(modalities: Sequence[str]) -> str:
+    if "short_traj" in modalities and "long_traj" in modalities:
+        modalities = list(modalities)
+        del modalities[modalities.index("short_traj")]
+        del modalities[modalities.index("long_traj")]
+        modalities.append("traj")
+    return "_".join(modalities)
 
 
 def trim_by_modality(diffs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:

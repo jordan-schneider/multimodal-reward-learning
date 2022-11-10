@@ -52,12 +52,11 @@ def analysis(
 
         if compute_centroids:
             logging.info("Finding centroid dispersion statistics")
-            proj_mean_rewards = save_centroid_dispersions(
-                reward_samples, likelihoods, results
-            )
+            save_centroid_dispersions(reward_samples, likelihoods, results)
 
         if compute_mean_dispersions:
             logging.info("Finding mean dispersion")
+            proj_mean_rewards = results.get("proj_mean_reward")
             dispersion_mean = {
                 key: mean_geodesic_dispersion(
                     reward_samples=reward_samples,
@@ -136,7 +135,7 @@ def save_gt_dispersion(
 
 def save_centroid_dispersions(
     rewards: np.ndarray, likelihoods: Dict[str, np.ndarray], results: Results
-):
+) -> None:
     centroid_per_modality = {}
     dispersion_centroid_per_modality = {}
     proj_mean_rewards = results.get("proj_mean_reward")
@@ -170,7 +169,6 @@ def save_centroid_dispersions(
     assert len(dispersion_centroid_per_modality) == len(likelihoods)
     results.update("centroid_per_modality", centroid_per_modality)
     results.update("dispersion_centroid", dispersion_centroid_per_modality)
-    return proj_mean_rewards
 
 
 def mean_geodesic_dispersion(
