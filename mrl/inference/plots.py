@@ -1,14 +1,18 @@
 import logging
 from math import ceil
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Callable, Dict, Optional, Union
 
 import fire  # type: ignore
 import joypy  # type: ignore
+import matplotlib  # type: ignore
+import matplotlib.axes  # type: ignore
+import matplotlib.figure  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
 import numpy as np
 import pandas as pd  # type: ignore
 import seaborn as sns  # type: ignore
+
 from mrl.inference.results import Results
 from mrl.util import setup_logging
 
@@ -66,7 +70,8 @@ def plot_comparisons(results: Results, outdir: Path) -> None:
 def plot_comparison(results: Results, outdir: Path, use_gt: bool = False) -> None:
     """Plot single comparison experiment"""
     assert results.current_experiment is not None, "No current experiment"
-    if likelihoods := results.get("likelihood"):
+
+    if (likelihoods := results.get("likelihood")) is not None:
         plot_likelihoods(likelihoods, outdir)
 
         if use_gt:
@@ -96,115 +101,87 @@ def plot_comparison(results: Results, outdir: Path, use_gt: bool = False) -> Non
         plot_dispersions(dispersions_gt, outdir, outname="dispersion_gt")
 
 
-def plot_gt_likelihood(
-    likelihoods: Union[Dict[str, np.ndarray], np.ndarray], outdir: Path
-) -> None:
+def plot_gt_likelihood(likelihoods: Dict[str, np.ndarray], outdir: Path) -> None:
     logging.info("Plotting likelihood")
-    if isinstance(likelihoods, dict):
-        for name, l in likelihoods.items():
-            plt.plot(l[-1], label=name)
-        plt.legend()
-    else:
-        plt.plot(likelihoods[-1])
-    plt.title("Ground truth posterior likelihood")
-    plt.xlabel("Human preferences")
-    plt.ylabel("Likelihood of true reward")
-    plt.savefig(outdir / "gt_likelihood.png")
-    plt.close()
+    gt_likelhood = {name: l[-1] for name, l in likelihoods.items()}
+    plot_dict(
+        data=gt_likelhood,
+        title="Ground truth posterior likelihood",
+        xlabel="Human preferences",
+        ylabel="Likelihood of true reward",
+        outpath=outdir / "gt_likelihood.png",
+    )
 
 
 def plot_dispersions(
-    dispersions: Union[Dict[str, np.ndarray], np.ndarray], outdir: Path, outname: str
+    dispersions: Dict[str, np.ndarray], outdir: Path, outname: str
 ) -> None:
-    if isinstance(dispersions, dict):
-        for name, d in dispersions.items():
-            plt.plot(d, label=name)
-        plt.legend()
-    else:
-        plt.plot(dispersions)
-    plt.xlabel("Human preferences")
-    plt.ylabel("Mean dispersion")
-    plt.title("Concentration of posterior with data")
-    plt.savefig(outdir / f"{outname}.png")
-    plt.close()
+    plot_dict(
+        data=dispersions,
+        title="Concentration of posterior with data",
+        xlabel="Human preferences",
+        ylabel="Mean dispersion",
+        outpath=outdir / f"{outname}.png",
+    )
 
-    if isinstance(dispersions, dict):
-        for name, d in dispersions.items():
-            log_dispersion = np.log(d)
-            log_dispersion[log_dispersion == -np.inf] = None
-            plt.plot(log_dispersion, label=outname)
-        plt.legend()
-    else:
-        log_dispersion = np.log(dispersions)
-        log_dispersion[log_dispersion == -np.inf] = None
-        plt.plot(log_dispersion)
-    plt.xlabel("Human preferences")
-    plt.ylabel("log(mean dispersion)")
-    plt.title("Log-concentration of posterior with data")
-    plt.savefig(outdir / f"log_{outname}.png")
-    plt.close()
+    def _safe_log(arr: np.ndarray) -> np.ndarray:
+        log = np.log(arr)
+        log[log == -np.inf] = None
+        return log
+
+    log_dispersions = {k: _safe_log(v) for k, v in dispersions.items()}
+    plot_dict(
+        data=log_dispersions,
+        title="Log-concentration of posterior with data",
+        xlabel="Human preferences",
+        ylabel="log(mean dispersion)",
+        outpath=outdir / f"log_{outname}.png",
+    )
 
 
 def plot_counts(
-    counts: Union[Dict[str, np.ndarray], np.ndarray], outdir: Path, threshold: int = 200
+    counts: Dict[str, np.ndarray], outdir: Path, threshold: int = 200
 ) -> None:
-    max_count = (
-        max(np.max(c) for c in counts.values())
-        if isinstance(counts, dict)
-        else np.max(counts)
-    )
+    max_count = max(np.max(c) for c in counts.values())
     if isinstance(counts, dict):
-        for name, c in counts.items():
-            plt.plot(c, label=name)
-        plt.legend()
-    else:
-        plt.plot(counts)
-    plt.title("Number of rewards with nonzero likelihood")
-    plt.xlabel("Number of preferences")
-    plt.ylabel("Count")
-    plt.ylim((0, max_count * 1.05))
-    plt.savefig(outdir / "counts.png")
-    plt.close()
+        plot_dict(
+            data=counts,
+            title="Number of rewards with nonzero likelihood",
+            xlabel="Number of preferences",
+            ylabel="Count",
+            outpath=outdir / "counts.png",
+            customization=lambda fig, ax: ax.set_ylim((0, max_count * 1.05)),
+        )
 
-    if isinstance(counts, dict):
-        plot_small = any(np.any(c < threshold) for c in counts.values())
-    else:
-        plot_small = bool(np.any(counts < threshold))
-    if plot_small:
+    if any(np.any(c < threshold) for c in counts.values()):
+        small_counts = {
+            name: c[c < threshold]
+            for name, c in counts.items()
+            if np.any(c < threshold)
+        }
         if isinstance(counts, dict):
-            for name, c in counts.items():
-                plt.plot(c[c < threshold], label=name)
-            plt.legend()
-        else:
-            plt.plot(counts[counts < threshold])
-        plt.title("Number of rewards with nonzero likelihood")
-        plt.xlabel("Number of preferences")
-        plt.ylabel("Count")
-        plt.savefig(outdir / "small_counts.png")
-        plt.close()
+            plot_dict(
+                data=small_counts,
+                title="Number of rewards with nonzero likelihood",
+                xlabel="Number of preferences",
+                ylabel="Count",
+                outpath=outdir / "small_counts.png",
+                customization=lambda fig, ax: ax.set_ylim((0, max_count * 1.05)),
+            )
 
 
-def plot_rewards(
-    rewards: Union[Dict[str, np.ndarray], np.ndarray], outdir: Path, outname: str
-) -> None:
-    ndims = (
-        list(rewards.values())[0].shape[1]
-        if isinstance(rewards, dict)
-        else rewards.shape[1]
-    )
+def plot_rewards(rewards: Dict[str, np.ndarray], outdir: Path, outname: str) -> None:
+    ndims = list(rewards.values())[0].shape[1]
     for dim in range(ndims):
-        if isinstance(rewards, dict):
-            for name, r in rewards.items():
-                plt.plot(r[:, dim], label=name)
-            plt.legend()
-        else:
-            plt.plot(rewards[:, dim])
-        plt.ylim(-1, 1)
-        plt.xlabel("Preferences")
-        plt.ylabel(f"{dim}-th dimension of reward")
-        plt.title(f"{dim}-th dimension of reward")
-        plt.savefig(outdir / f"{dim}.{outname}.png")
-        plt.close()
+        nth_dim = {name: r[:, dim] for name, r in rewards.items()}
+        plot_dict(
+            data=nth_dim,
+            title=f"{dim}-th dimension of reward",
+            xlabel="Preferences",
+            ylabel=f"{dim}-th dimension of reward",
+            outpath=outdir / f"{dim}.{outname}.png",
+            customization=lambda fig, ax: ax.set_ylim((-1, 1)),
+        )
 
 
 def _plot_likelihood(likelihoods: np.ndarray, outdir: Path, name: str) -> None:
@@ -275,27 +252,57 @@ def plot_likelihoods(
 
 
 def plot_entropies(entropies: Dict[str, np.ndarray], outdir: Path) -> None:
-    for name, e in entropies.items():
-        plt.plot(e, label=name)
-    plt.legend()
-    plt.title("Posterior entropy")
-    plt.ylabel("Entropy")
-    plt.xlabel("Human preferences")
-    plt.savefig(outdir / "entropy.png")
-    plt.close()
+    plot_dict(
+        data=entropies,
+        title="Posterior entropy",
+        xlabel="Human preferences",
+        ylabel="Entropy",
+        outpath=outdir / "entropy.png",
+    )
+
+
+def plot_dict(
+    data: Dict[str, np.ndarray],
+    title: str,
+    xlabel: str,
+    ylabel: str,
+    outpath: Optional[Path] = None,
+    show: bool = False,
+    customization: Optional[
+        Callable[[matplotlib.figure.Figure, matplotlib.axes.Axes], None]
+    ] = None,
+) -> None:
+    fig = plt.figure()
+    axes = fig.subplots()
+    for name, d in data.items():
+        axes.plot(d, label=name)
+    axes.set_title(title)
+    axes.set_xlabel(xlabel)
+    axes.set_ylabel(ylabel)
+    axes.legend(loc="center left", bbox_to_anchor=(1, 0.5))
+    if customization is not None:
+        customization(fig, axes)
+    if outpath is not None:
+        fig.savefig(outpath, bbox_inches="tight")
+    if show:
+        fig.show()
 
 
 def post_hoc_plot_comparisons(outdir: Path, experiment: Optional[str]) -> None:
     outdir = Path(outdir)
     setup_logging(level="INFO", outdir=outdir, name="post_hoc_plot_comparisons.log")
-    results = Results(outdir=outdir / "trials", load_contents=True)
-    if experiment is None:
-        plot_comparisons(results, outdir)
-    else:
-        results.start(experiment)
-        plotdir = outdir / "trials" / experiment / "plots"
-        plotdir.mkdir(parents=True, exist_ok=True)
-        plot_comparison(results, plotdir)
+    try:
+        results = Results(outdir=outdir / "trials", load_contents=True)
+        if experiment is None:
+            plot_comparisons(results, outdir)
+        else:
+            results.start(experiment)
+            plotdir = outdir / "trials" / experiment / "plots"
+            plotdir.mkdir(parents=True, exist_ok=True)
+            plot_comparison(results, plotdir)
+    except BaseException as e:
+        logging.exception(e)
+        raise e
 
 
 if __name__ == "__main__":
