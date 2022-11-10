@@ -170,7 +170,12 @@ def plot_counts(
             )
 
 
-def plot_rewards(rewards: Dict[str, np.ndarray], outdir: Path, outname: str) -> None:
+def plot_rewards(
+    rewards: Dict[str, np.ndarray],
+    outdir: Optional[Path] = None,
+    outname: Optional[str] = None,
+    show: bool = False,
+) -> None:
     ndims = list(rewards.values())[0].shape[1]
     for dim in range(ndims):
         nth_dim = {name: r[:, dim] for name, r in rewards.items()}
@@ -179,7 +184,10 @@ def plot_rewards(rewards: Dict[str, np.ndarray], outdir: Path, outname: str) -> 
             title=f"{dim}-th dimension of reward",
             xlabel="Preferences",
             ylabel=f"{dim}-th dimension of reward",
-            outpath=outdir / f"{dim}.{outname}.png",
+            outpath=outdir / f"{dim}.{outname}.png"
+            if outdir is not None and outname is not None
+            else None,
+            show=show,
             customization=lambda fig, ax: ax.set_ylim((-1, 1)),
         )
 
@@ -272,19 +280,35 @@ def plot_dict(
         Callable[[matplotlib.figure.Figure, matplotlib.axes.Axes], None]
     ] = None,
 ) -> None:
-    fig = plt.figure()
+    fig = plt.figure(figsize=(15, 5))
     axes = fig.subplots()
+    axes.set_prop_cycle(color=plt.cm.tab20.colors)
+    lines = []
     for name, d in data.items():
-        axes.plot(d, label=name)
+        lines.append(axes.plot(d, label=name)[0])
     axes.set_title(title)
     axes.set_xlabel(xlabel)
     axes.set_ylabel(ylabel)
-    axes.legend(loc="center left", bbox_to_anchor=(1, 0.5))
+    legend = axes.legend(loc="center left", bbox_to_anchor=(1, 0.5))
     if customization is not None:
         customization(fig, axes)
     if outpath is not None:
         fig.savefig(outpath, bbox_inches="tight")
     if show:
+        legend_to_line = {k: v for k, v in zip(legend.get_lines(), lines)}
+        for legend_entry in legend.get_lines():
+            legend_entry.set_picker(True)
+
+        def on_pick(event):
+            legline = event.artist
+            origline = legend_to_line[legline]
+            visible = not origline.get_visible()
+            origline.set_visible(visible)
+
+            legline.set_alpha(1.0 if visible else 0.2)
+            fig.canvas.draw()
+
+        fig.canvas.mpl_connect("pick_event", on_pick)
         fig.show()
 
 
