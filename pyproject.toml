@@ -34,7 +34,7 @@ dependencies = [
     "redis",
     "scipy",
     "seaborn",
-    "sklearn",
+    "scikit-learn",
     "tensorboard",
     "torch",
     "tqdm",

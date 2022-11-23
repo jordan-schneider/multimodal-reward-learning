@@ -18,8 +18,12 @@ from mrl.configs import FixedInference, HumanExperimentConfig
 from mrl.dataset.human_responses import Response, User, UserDataset
 from mrl.experiment_db.experiment import ExperimentDB
 from mrl.inference.analysis import analysis
-from mrl.inference.plots import plot_comparison
-from mrl.inference.posterior import cover_sphere, make_likelihoods
+from mrl.inference.plots import plot_comparison, plot_comparisons
+from mrl.inference.posterior import (
+    cover_sphere,
+    make_likelihoods,
+    make_shuffle_likelihoods,
+)
 from mrl.inference.results import Results
 from mrl.reward_model.boltzmann import boltzmann_likelihood
 from mrl.reward_model.hinge import hinge_likelihood
@@ -43,13 +47,14 @@ def main() -> None:
         pairs_by_modality = get_feature_pairs(
             response_dir=Path(config.rootdir) / "users",
             question_db_path=Path(config.question_db_path),
+            env_name=config.env,
             short_traj_cutoff=config.inference.short_traj_cutoff,
         )
 
         results = Results(inference_outdir / "trials")
         results.start("")
 
-        tmp_env = make_env(name=config.env.name, num=1, reward=1)
+        tmp_env = make_env(name=config.env, num=1, reward=1)
         root_env = get_root_env(tmp_env)
         env_features = root_env.get_features()[0].shape[0]
 
@@ -62,23 +67,38 @@ def main() -> None:
 
         # TODO: Maybe one day implement gamma noise priors
         assert isinstance(config.inference.noise, FixedInference)
+        results.update("temp", config.inference.noise.temp)
 
         logging.info("Starting inference on human prefs")
         for dataset, pairs in make_datasets(pairs_by_modality):
             diffs = preprocess_modality(pairs=pairs, config=config, rng=rng)
-            results.start("human")
-            results.update("temp", config.inference.noise.temp)
             check_memory()
-            results = make_likelihoods(
-                reward_samples=reward_samples,
-                diffs=diffs,
-                dataset=dataset,
-                reward_likelihood=get_likelihood_fn(config),
-                use_shift=config.inference.use_shift,
-                results=results,
-                temp=config.inference.noise.temp,
-                save_all=config.inference.save_all,
-            )
+            if config.n_shuffles > 0:
+                results = make_shuffle_likelihoods(
+                    n_shuffles=config.n_shuffles,
+                    reward_samples=reward_samples,
+                    diffs=diffs,
+                    dataset=dataset,
+                    reward_likelihood=get_likelihood_fn(config),
+                    use_shift=config.inference.use_shift,
+                    experiment_basename="human",
+                    results=results,
+                    rng=rng,
+                    temp=config.inference.noise.temp,
+                    save_all=config.inference.save_all,
+                )
+            else:
+                results.start("human")
+                results = make_likelihoods(
+                    reward_samples=reward_samples,
+                    diffs=diffs,
+                    dataset=dataset,
+                    reward_likelihood=get_likelihood_fn(config),
+                    use_shift=config.inference.use_shift,
+                    results=results,
+                    temp=config.inference.noise.temp,
+                    save_all=config.inference.save_all,
+                )
             results.close()
 
         logging.info("Computing post-inference metrics")
@@ -89,10 +109,15 @@ def main() -> None:
         )
 
         logging.info("Plotting metrics")
-        results.start("human")
-        plotdir = inference_outdir / "trials" / "human" / "plots"
-        plotdir.mkdir(parents=True, exist_ok=True)
-        plot_comparison(results, plotdir)
+        if config.n_shuffles > 0:
+            plotdir = inference_outdir / "trials" / "plots"
+            plotdir.mkdir(parents=True, exist_ok=True)
+            plot_comparisons(results=results, outdir=plotdir)
+        else:
+            results.start("human")
+            plotdir = inference_outdir / "trials" / "human" / "plots"
+            plotdir.mkdir(parents=True, exist_ok=True)
+            plot_comparison(results, plotdir)
     except BaseException as e:
         logging.exception(e)
         raise e
@@ -168,7 +193,10 @@ def get_likelihood_fn(config: HumanExperimentConfig) -> Likelihood:
 
 
 def get_feature_pairs(
-    response_dir: Path, question_db_path: Path, short_traj_cutoff: Optional[int] = None
+    response_dir: Path,
+    question_db_path: Path,
+    env_name: str,
+    short_traj_cutoff: Optional[int] = None,
 ) -> dict[str, np.ndarray]:
     prefs = UserDataset(response_dir)
     prefs = filter_human_prefs(prefs)
@@ -186,6 +214,7 @@ def get_feature_pairs(
             for user in prefs.users
             for resp in user.responses
         ],
+        env_name=env_name,
         short_traj_cutoff=short_traj_cutoff,
     )
     diffs = [
@@ -244,6 +273,7 @@ def get_features(
         ],
     ],
     max_lens: list[tuple[int, tuple[int, int]]],
+    env_name: str,
     short_traj_cutoff: Optional[int] = None,
 ) -> list[tuple[int, np.ndarray, np.ndarray, str]]:
     # TODO: We start assuming here that the data modalities are the same
@@ -269,8 +299,12 @@ def get_features(
         out.append(
             (
                 question_id,
-                total_feature_rollout(left_state, left_actions, max_len=left_max),
-                total_feature_rollout(right_state, right_actions, max_len=right_max),
+                total_feature_rollout(
+                    env_name, left_state, left_actions, max_len=left_max
+                ),
+                total_feature_rollout(
+                    env_name, right_state, right_actions, max_len=right_max
+                ),
                 modality,
             )
         )
@@ -300,7 +334,7 @@ SELECT
     right_traj.start_state as right_state,
     right_traj.actions as right_actions,
     right_traj.modality as right_modality
-FROM 
+FROM
     (SELECT * FROM questions WHERE id IN ({question_id_list})) as questions
     INNER JOIN trajectories AS left_traj
         ON questions.first_id = left_traj.id
@@ -320,9 +354,12 @@ FROM
 
 
 def total_feature_rollout(
-    start_state: State, actions: Union[Sequence[int], np.ndarray], max_len: int
+    env_name: str,
+    start_state: State,
+    actions: Union[Sequence[int], np.ndarray],
+    max_len: int,
 ) -> np.ndarray:
-    env = make_env("miner", 1, 0)
+    env = make_env(env_name, 1, 0)
     root_env = get_root_env(env)
 
     if isinstance(start_state.grid_shape, np.ndarray):

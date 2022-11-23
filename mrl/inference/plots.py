@@ -1,7 +1,7 @@
 import logging
 from math import ceil
 from pathlib import Path
-from typing import Callable, Dict, Optional, Union
+from typing import Callable, Dict, Literal, Optional, Tuple, Union
 
 import fire  # type: ignore
 import joypy  # type: ignore
@@ -17,13 +17,24 @@ from mrl.inference.results import Results
 from mrl.util import setup_logging
 
 
-def plot_comparisons(results: Results, outdir: Path) -> None:
-    """Plot multiple comparison experiments"""
+def plot_comparisons(
+    results: Results,
+    outdir: Path,
+    fast_error_bars: bool = False,
+) -> None:
+    """Plot multiple comparison experiments. Tries to plot dispersion_gt, prob_aligned, gt_likelihood, entropy, and mean_reward."""
+
+    errorbar = "ci" if not fast_error_bars else ("se", 2)
     if results.has("dispersion_gt"):
         logging.info("Plotting dispersion_gt")
         dispersion_gt = results.getall("dispersion_gt")
         sns.relplot(
-            data=dispersion_gt, x="time", y="dispersion_gt", hue="modality", kind="line"
+            data=dispersion_gt,
+            x="time",
+            y="dispersion_gt",
+            hue="modality",
+            kind="line",
+            errorbar=errorbar,
         ).savefig(outdir / "dispersion_gt.png")
         plt.close()
     else:
@@ -38,6 +49,7 @@ def plot_comparisons(results: Results, outdir: Path) -> None:
             y="prob_aligned",
             hue="modality",
             kind="line",
+            errorbar=errorbar,
         ).savefig(outdir / "prob_aligned.png")
         plt.close()
     else:
@@ -52,6 +64,7 @@ def plot_comparisons(results: Results, outdir: Path) -> None:
             y="gt_likelihood",
             hue="modality",
             kind="line",
+            errorbar=errorbar,
         ).savefig(outdir / "gt_likelihood.png")
         plt.close()
     else:
@@ -59,16 +72,36 @@ def plot_comparisons(results: Results, outdir: Path) -> None:
 
     if results.has("entropy"):
         logging.info("Plotting entropy")
+        logging.debug("Getting all entropies")
         entropies = results.getall("entropy")
+        logging.debug("Plotting entropies")
         sns.relplot(
-            data=entropies, x="time", y="entropy", hue="modality", kind="line"
+            data=entropies,
+            x="time",
+            y="entropy",
+            hue="modality",
+            kind="line",
+            errorbar=errorbar,
         ).savefig(outdir / "entropy.png")
+        plt.close()
+        logging.debug("Done plotting entropies")
     else:
         logging.warning("Results does not have entropies")
 
+    if results.has("mean_reward"):
+        logging.info("Plotting mean reward")
+        plot_multiple_rewards(
+            rewards=results.getall("mean_reward"),
+            outdir=outdir,
+            outname="mean_reward",
+            errorbar=errorbar,
+        )
+    else:
+        logging.warning("Results does not have mean rewards")
+
 
 def plot_comparison(results: Results, outdir: Path, use_gt: bool = False) -> None:
-    """Plot single comparison experiment"""
+    """Plot single comparison experiment. Tries to plot liklihood, gt_likelihood, entropy, non-zero reward sample count, mean reward, dispersion from mean, centroid reward, dispersion from centroid, and dispersion from gt."""
     assert results.current_experiment is not None, "No current experiment"
 
     if (likelihoods := results.get("likelihood")) is not None:
@@ -82,14 +115,14 @@ def plot_comparison(results: Results, outdir: Path, use_gt: bool = False) -> Non
     if counts := results.get("count"):
         plot_counts(counts, outdir)
 
+    if mean_rewards := results.get("mean_reward"):
+        plot_rewards(rewards=mean_rewards, outdir=outdir, outname="mean_reward")
+
     if dispersion_mean := results.get("dispersion_mean"):
         plot_dispersions(dispersion_mean, outdir, outname="dispersion_mean")
 
     if centroid_per_modality := results.get("centroid_per_modality"):
         plot_rewards(rewards=centroid_per_modality, outdir=outdir, outname="centroids")
-
-    if mean_rewards := results.get("mean_reward"):
-        plot_rewards(rewards=mean_rewards, outdir=outdir, outname="mean_reward")
 
     if dispersion_centroid_per_modality := results.get("dispersion_centroid"):
         plot_dispersions(
@@ -99,6 +132,29 @@ def plot_comparison(results: Results, outdir: Path, use_gt: bool = False) -> Non
     if dispersions_gt := results.get("dispersion_gt"):
         assert use_gt
         plot_dispersions(dispersions_gt, outdir, outname="dispersion_gt")
+
+
+def plot_multiple_rewards(
+    rewards: pd.DataFrame,
+    outdir: Path,
+    outname: str,
+    errorbar: Union[str, Tuple[str, int]],
+) -> None:
+    """Plot mean reward for multiple experiments. Each dimension of reward is plotted separately."""
+    ndims = len([col for col in rewards.columns if "mean_reward" in col])
+    for dim in range(ndims):
+        logging.debug(f"Plotting reward dim {dim}")
+        reward_dim_name = f"mean_reward_{dim}"
+        assert reward_dim_name in rewards.columns
+        sns.relplot(
+            data=rewards,
+            x="time",
+            y=reward_dim_name,
+            hue="modality",
+            kind="line",
+            errorbar=errorbar,
+        ).savefig(outdir / f"{outname}_{dim}.png")
+        plt.close()
 
 
 def plot_gt_likelihood(likelihoods: Dict[str, np.ndarray], outdir: Path) -> None:
@@ -312,16 +368,29 @@ def plot_dict(
         fig.show()
 
 
-def post_hoc_plot_comparisons(outdir: Path, experiment: Optional[str]) -> None:
-    outdir = Path(outdir)
-    setup_logging(level="INFO", outdir=outdir, name="post_hoc_plot_comparisons.log")
+def post_hoc_plot_comparisons(
+    datadir: Path,
+    experiment: Optional[str] = None,
+    verbosity: Literal["INFO", "DEBUG"] = "INFO",
+    fast_error_bars: bool = False,
+) -> None:
+    """Plots experimental results for a previously run experiment.
+
+    Args:
+        datadir (Path): Location of the directory containing results. trials should be a subfolder. All plots will be saved in the plots subfolder, or a per-trial plots subfolder.
+        experiment (Optional[str]): The name of a single trial to run. If None, plots aggregate results for all trials. Defualts to None.
+        verbosity (Literal["INFO", "DEBUG"]): Logging level. Defaults to "INFO".
+    """
+    datadir = Path(datadir)
+    setup_logging(level=verbosity, outdir=datadir, name="post_hoc_plot_comparisons.log")
     try:
-        results = Results(outdir=outdir / "trials", load_contents=True)
+        results = Results(outdir=datadir / "trials", load_contents=True)
         if experiment is None:
-            plot_comparisons(results, outdir)
+            (datadir / "plots").mkdir(exist_ok=True)
+            plot_comparisons(results, datadir / "plots", fast_error_bars)
         else:
             results.start(experiment)
-            plotdir = outdir / "trials" / experiment / "plots"
+            plotdir = datadir / "trials" / experiment / "plots"
             plotdir.mkdir(parents=True, exist_ok=True)
             plot_comparison(results, plotdir)
     except BaseException as e:

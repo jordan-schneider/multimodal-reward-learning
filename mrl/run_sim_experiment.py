@@ -5,7 +5,7 @@ import numpy as np
 
 from mrl.aligned_rewards.aligned_reward_set import AlignedRewardSet
 from mrl.aligned_rewards.make_ars import main as make_ars
-from mrl.configs import ExperimentConfig, FixedPreference, FlipProb
+from mrl.configs import FixedPreference, FlipProb, SimulationExperimentConfig
 from mrl.dataset.preferences import PreferenceGenerator
 from mrl.experiment_db.experiment import ExperimentDB
 from mrl.inference.analysis import analysis
@@ -17,7 +17,7 @@ from mrl.util import setup_logging
 
 def main() -> None:
     """Runs a reward inference experiment with simulated preferences according to a given ground truth reward. See ExperimentConfig for details."""
-    config = ExperimentConfig()
+    config = SimulationExperimentConfig()
     config.validate()
 
     rootdir = Path(config.rootdir)
@@ -79,7 +79,7 @@ def main() -> None:
 
 
 def get_prefs(
-    config: ExperimentConfig,
+    config: SimulationExperimentConfig,
     rng: np.random.Generator,
 ) -> Tuple[Tuple[Path, int], Tuple[Path, int]]:
     """Generate state and trajectory preferences according to configuration variables.
@@ -130,6 +130,7 @@ def get_prefs(
             init_traj_temp=noise.init_traj_temp,
         )
     return (state_path, state_start_trial), (traj_path, traj_start_trial)
+
 
 if __name__ == "__main__":
     main()
