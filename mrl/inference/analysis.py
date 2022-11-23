@@ -2,11 +2,12 @@ import logging
 from typing import Dict, Optional, cast
 
 import numpy as np
+from tqdm import trange  # type: ignore
+
 from mrl.aligned_rewards.aligned_reward_set import AlignedRewardSet
 from mrl.inference.results import Results
 from mrl.inference.sphere import find_centroid
 from mrl.util import normalize_vecs
-from tqdm import trange  # type: ignore
 
 
 def analysis(
@@ -29,6 +30,8 @@ def analysis(
         results.start(trial)
 
         likelihoods = cast(Dict[str, np.ndarray], results.get("likelihood"))
+        if likelihoods is None:
+            continue
         if aligned_reward_set is not None:
             logging.info("Computing P(aligned)")
             prob_aligned = {

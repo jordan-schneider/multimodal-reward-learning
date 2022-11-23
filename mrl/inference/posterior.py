@@ -329,6 +329,49 @@ def make_likelihoods(
     return results
 
 
+def make_shuffle_likelihoods(
+    n_shuffles: int,
+    reward_samples: np.ndarray,
+    diffs: np.ndarray,
+    dataset: str,
+    reward_likelihood: Likelihood,
+    use_shift: bool,
+    experiment_basename: str,
+    results: Results,
+    rng: np.random.Generator,
+    true_reward: Optional[np.ndarray] = None,
+    temp: float = 1.0,
+    save_all: bool = False,
+) -> Results:
+    logging.info("Computing p(reward|diff)")
+    log_likelihoods = reward_likelihood(
+        reward=reward_samples, diffs=diffs, temperature=temp
+    )
+
+    if save_all:
+        results.start(experiment_basename)
+        results.update_dict("log_likelihoods", dataset, log_likelihoods)
+
+    logging.info("Normalizing and totaling likelihoods")
+    for i in range(n_shuffles):
+        results.start(f"{experiment_basename}_{i}")
+        shuffled_log_likelihoods = log_likelihoods[
+            rng.permutation(len(log_likelihoods))
+        ]
+        shuffled_likelihoods = cum_likelihoods(
+            log_likelihoods=shuffled_log_likelihoods, shift=use_shift
+        )
+        save_likelihoods(shuffled_likelihoods, dataset, results, save_all)
+
+        if true_reward is not None:
+            indices = np.nonzero(np.all(true_reward == reward_samples, axis=1))
+            if len(indices) > 0:
+                gt_likelihood = shuffled_likelihoods[indices[0][0]]
+                results.update_dict("gt_likelihood", dataset, gt_likelihood)
+
+    return results
+
+
 def save_likelihoods(
     likelihoods: np.ndarray, dataset: str, results: Results, save_all: bool = False
 ) -> Results:
