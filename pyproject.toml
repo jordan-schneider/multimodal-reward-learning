@@ -57,5 +57,7 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["mrl", "question_gen"]
 package-data = {mrl = ["py.typed"], question_gen = ["py.typed"]}
+
+[tool.setuptools.packages.find]
+include = ["mrl*", "question_gen*"]
