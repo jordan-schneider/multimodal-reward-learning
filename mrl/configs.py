@@ -1,20 +1,29 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import dataclasses
 from pathlib import Path
 from typing import Literal, Optional
 
-import yaml
+import tomli
+import tomli_w
 from linear_procgen.util import ENV_NAMES
+from pydantic.dataclasses import dataclass
+
+from mrl.strict_converter import StrictConverter
 
 DIFF_NORM_METHODS = Literal[
     "diff-length", "sum-length", "max-length", "log-diff-length", None
 ]
 
+# TODO: Add cattr deseralization that reads a type field where the nested dataclass type is ambiguous.
+
 
 class Config:
+    def load(self, path: Path):
+        raise NotImplementedError()
+
     def dump(self, outdir: Path) -> None:
-        yaml.dump(self, stream=(outdir / "config.pkl").open("w"))
+        tomli_w.dump(dataclasses.asdict(self), (outdir / "config.toml").open("wb"))
 
     def validate(self) -> None:
         raise NotImplementedError()
@@ -31,44 +40,48 @@ class TrueInference(InferenceNoise):
 
 @dataclass
 class FixedInference(InferenceNoise):
-    temp: float = 0.001
+    temp: float
 
 
 @dataclass
 class GammaInference(InferenceNoise):
-    k: float = 0.01
-    theta: float = 0.01
-    samples: int = 100
+    k: float
+    theta: float
+    samples: int
 
 
 @dataclass
 class InferenceConfig:
-    noise: InferenceNoise = FixedInference()
-    likelihood_fn: Literal["boltzmann", "hinge"] = "boltzmann"
-    use_shift: bool = False
-    save_all: bool = True
-    reward_particles: int = 10
-    short_traj_cutoff: Optional[int] = 100
+    noise: InferenceNoise
+    likelihood_fn: Literal["boltzmann", "hinge"]
+    use_shift: bool
+    save_all: bool
+    reward_particles: int
+    short_traj_cutoff: Optional[int]
 
 
 @dataclass
 class HumanExperimentConfig(Config):
-    rootdir: str = "/nfs/data/joschnei/multimodal-reward-learning/data/miner/"
-    git_dir: str = "/home/joschnei/multimodal-reward-learning"
-    question_db_path: str = "/nfs/data/joschnei/experiment-server/experiments.db"
-    inference: InferenceConfig = InferenceConfig()
-    env: ENV_NAMES = "miner"
-    # TODO: Dedup this with PreferenceConfig
-    norm_mode: DIFF_NORM_METHODS = "sum-length"
-    max_questions: Optional[int] = None
+    rootdir: str
+    git_dir: str
+    question_db_path: str
+    inference: InferenceConfig
+    env: ENV_NAMES
+    norm_mode: DIFF_NORM_METHODS
+    max_questions: Optional[int]
 
-    n_shuffles: int = 2
+    n_shuffles: int
 
-    centroid_stats: bool = False
-    mean_dispersion_stats: bool = True
+    centroid_stats: bool
+    mean_dispersion_stats: bool
 
-    verbosity: Literal["INFO", "DEBUG"] = "INFO"
-    seed: int = 23443394578
+    verbosity: Literal["INFO", "DEBUG"]
+    seed: int
+
+    @staticmethod
+    def load(path: Path) -> HumanExperimentConfig:
+        config_dict = tomli.load(path.open("rb"))
+        return StrictConverter().structure(config_dict, HumanExperimentConfig)
 
     def validate(self) -> None:
         pass
@@ -76,11 +89,11 @@ class HumanExperimentConfig(Config):
 
 @dataclass
 class EnvConfig:
-    name: ENV_NAMES = "miner"
+    name: ENV_NAMES
     # How many environments to run concurrently when generating questions, etc.
-    n_envs: int = 10
+    n_envs: int
     # Should the environment return features normalized between 0 and 1.
-    normalize_step: bool = False
+    normalize_step: bool
 
 
 class PreferenceNoise:
@@ -89,40 +102,45 @@ class PreferenceNoise:
 
 @dataclass
 class FixedPreference(PreferenceNoise):
-    temp: float = 0.001
+    temp: float
 
 
 @dataclass
 class FlipProb(PreferenceNoise):
-    name: str = "flip-prob"
-    prob: float = 0.5
-    calibration_prefs: int = 100
-    init_state_temp: float = 1.0
-    init_traj_temp: float = 1.0
+    name: str
+    prob: float
+    calibration_prefs: int
+    init_state_temp: float
+    init_traj_temp: float
 
 
 @dataclass
 class SyntheticPreferenceConfig:
-    prefs_per_trial: int = 1000
-    normalize_differences: DIFF_NORM_METHODS = "sum-length"
-    deduplicate: bool = True
-    noise: PreferenceNoise = FlipProb()
-    max_length: Optional[int] = None
+    prefs_per_trial: int
+    normalize_differences: DIFF_NORM_METHODS
+    deduplicate: bool
+    noise: PreferenceNoise
+    max_length: Optional[int]
 
 
 @dataclass
 class SimulationExperimentConfig(Config):
-    rootdir: str = "/home/joschnei/multimodal-reward-learning/data/miner/4/"
-    ars_name: str = "ars.mixed.npy"
-    n_trials: int = 1
-    append: bool = False
-    env: EnvConfig = EnvConfig()
-    preference: SyntheticPreferenceConfig = SyntheticPreferenceConfig()
-    inference: InferenceConfig = InferenceConfig()
-    max_ram: str = "60G"
-    seed: Optional[int] = None
-    overwrite: bool = False
-    verbosity: Literal["INFO", "DEBUG"] = "INFO"
+    rootdir: str
+    ars_name: str
+    n_trials: int
+    append: bool
+    env: EnvConfig
+    preference: SyntheticPreferenceConfig
+    inference: InferenceConfig
+    max_ram: str
+    seed: Optional[int]
+    overwrite: bool
+    verbosity: Literal["INFO", "DEBUG"]
+
+    @staticmethod
+    def load(path: Path) -> SimulationExperimentConfig:
+        config_dict = tomli.load(path.open("rb"))
+        return StrictConverter().structure(config_dict, SimulationExperimentConfig)
 
     def validate(self) -> None:
         if self.overwrite and self.append:

@@ -1,6 +1,7 @@
 argh
 arrow
 attrs
+cattrs
 experiment-server @ git+https://github.com/jordan-schneider/experiment-server.git#egg=experiment_server
 filelock
 fire
@@ -14,11 +15,12 @@ numpy>=1.21
 pandas
 phasic-policy-gradient @ git+https://github.com/jordan-schneider/phasic-policy-gradient.git
 psutil
-pyyaml
 redis
 scipy
 seaborn
 scikit-learn
 tensorboard
 torch
+tomli
+tomli-w
 tqdm

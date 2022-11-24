@@ -15,6 +15,7 @@ dependencies = [
     "argh",
     "arrow",
     "attrs",
+    "cattrs",
     "experiment_server @ git+https://github.com/jordan-schneider/experiment-server.git#egg=experiment_server",
     "filelock",
     "fire",
@@ -30,13 +31,14 @@ dependencies = [
     "phasic-policy-gradient @ git+https://github.com/jordan-schneider/phasic-policy-gradient.git",
     "procgen @ git+https://github.com/jordan-schneider/procgen@master#egg=procgen",
     "psutil",
-    "pyyaml",
     "redis",
     "scipy",
     "seaborn",
     "scikit-learn",
     "tensorboard",
     "torch",
+    "tomli",
+    "tomli-w",
     "tqdm",
 ]
 
