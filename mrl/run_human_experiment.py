@@ -8,11 +8,12 @@ from itertools import combinations
 from pathlib import Path
 from typing import Generator, Optional, Sequence, TypeVar, Union
 
+import fire  # type: ignore
 import numpy as np
 import psutil  # type: ignore
 from experiment_server.type import State
 from linear_procgen import Miner, make_env
-from linear_procgen.util import get_root_env
+from linear_procgen.util import assure_env, get_root_env
 
 from mrl.configs import FixedInference, HumanExperimentConfig
 from mrl.dataset.human_responses import Response, User, UserDataset
@@ -31,10 +32,10 @@ from mrl.reward_model.likelihood import Likelihood
 from mrl.util import get_normalized_diff, setup_logging
 
 
-def main() -> None:
+def main(config_path: Path) -> None:
     """Runs a reward inference experiment using human preferences."""
 
-    config = HumanExperimentConfig()
+    config = HumanExperimentConfig.load(Path(config_path))
     config.validate()
 
     experiment_db = ExperimentDB(git_dir=Path(config.git_dir))
@@ -359,7 +360,7 @@ def total_feature_rollout(
     actions: Union[Sequence[int], np.ndarray],
     max_len: int,
 ) -> np.ndarray:
-    env = make_env(env_name, 1, 0)
+    env = make_env(assure_env(env_name), 1, 0)
     root_env = get_root_env(env)
 
     if isinstance(start_state.grid_shape, np.ndarray):
@@ -398,4 +399,4 @@ def total_feature_rollout(
 
 
 if __name__ == "__main__":
-    main()
+    fire.Fire(main)
