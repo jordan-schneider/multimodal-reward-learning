@@ -45,7 +45,7 @@ class Results:
         d[key] = value
         self.experiments[self.current_experiment][name] = d
         if save:
-            dump(value, self.outdir / self.current_experiment / name)
+            dump(d, self.outdir / self.current_experiment / name)
 
     def has(self, name: str) -> bool:
         return any(name in exp.keys() for exp in self.experiments.values())

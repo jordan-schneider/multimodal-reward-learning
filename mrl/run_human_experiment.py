@@ -87,6 +87,7 @@ def main(config_path: Path) -> None:
                     rng=rng,
                     temp=config.inference.noise.temp,
                     save_all=config.inference.save_all,
+                    check_last_equal=config.check_last_equal,
                 )
             else:
                 results.start("human")

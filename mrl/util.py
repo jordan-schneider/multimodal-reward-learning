@@ -4,7 +4,7 @@ import logging
 import pickle as pkl
 import re
 from pathlib import Path
-from typing import Any, Literal, Optional, OrderedDict, Tuple, cast
+from typing import Any, Literal, Optional, OrderedDict, Sequence, Tuple, cast
 
 import numpy as np
 import psutil  # type: ignore
@@ -295,3 +295,8 @@ def is_redundant(
         # redundant since without constraint c^T w >=0
         logging.debug("Redundant")
         return True
+
+def assert_many_allclose(vecs: Sequence[np.ndarray], rtol=1.e-5, atol=1.e-8, equal_nan=False) -> None:
+    first = vecs[0]
+    for vec in vecs[1:]:
+        assert np.allclose(first, vec, rtol, atol, equal_nan)
