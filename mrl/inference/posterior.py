@@ -13,6 +13,7 @@ from mrl.reward_model.hinge import hinge_likelihood
 from mrl.reward_model.likelihood import Likelihood
 from mrl.reward_model.logspace import cum_likelihoods
 from mrl.util import (
+    assert_many_allclose,
     get_normalized_diff,
     get_temp_from_pref_path,
     normalize_vecs,
@@ -342,6 +343,7 @@ def make_shuffle_likelihoods(
     true_reward: Optional[np.ndarray] = None,
     temp: float = 1.0,
     save_all: bool = False,
+    check_last_equal: bool = False,
 ) -> Results:
     logging.info("Computing p(reward|diff)")
     log_likelihoods = reward_likelihood(
@@ -353,14 +355,17 @@ def make_shuffle_likelihoods(
         results.update_dict("log_likelihoods", dataset, log_likelihoods)
 
     logging.info("Normalizing and totaling likelihoods")
+    last_likelihoods = []
     for i in range(n_shuffles):
         results.start(f"{experiment_basename}_{i}")
         shuffled_log_likelihoods = log_likelihoods[
-            rng.permutation(len(log_likelihoods))
+            :, rng.permutation(log_likelihoods.shape[1])
         ]
         shuffled_likelihoods = cum_likelihoods(
             log_likelihoods=shuffled_log_likelihoods, shift=use_shift
         )
+        if check_last_equal:
+            last_likelihoods.append(shuffled_likelihoods[:, -1])
         save_likelihoods(shuffled_likelihoods, dataset, results, save_all)
 
         if true_reward is not None:
@@ -368,6 +373,9 @@ def make_shuffle_likelihoods(
             if len(indices) > 0:
                 gt_likelihood = shuffled_likelihoods[indices[0][0]]
                 results.update_dict("gt_likelihood", dataset, gt_likelihood)
+
+        if check_last_equal and len(last_likelihoods) > 1:
+            assert_many_allclose(last_likelihoods)
 
     return results
 

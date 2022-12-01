@@ -107,6 +107,7 @@ class HumanExperimentConfig(Config):
     seed: int
 
     max_questions: Optional[int] = None
+    check_last_equal: bool = False
 
     @staticmethod
     def load(path: Path) -> HumanExperimentConfig:
