@@ -1,4 +1,5 @@
 import numpy as np
+
 from mrl.reward_model.boltzmann import boltzmann_likelihood
 
 
@@ -16,7 +17,7 @@ def hinge_likelihood(
         temperature (float): Temperature to use for Boltzmann-rational likelihood.
         approximate (bool): Whether to use approximate likelihoods.
     Returns:
-        np.ndarray:  (Batch of) log proportional likelihoods of each reward under each halfplan.
+        np.ndarray:  (Batch of) log proportional likelihoods of each reward under each halfplane.
     """
 
     log_likelihood = boltzmann_likelihood(reward, diffs, temperature, approximate)
