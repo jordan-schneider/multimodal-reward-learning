@@ -10,10 +10,10 @@ from mrl.run_human_experiment import format_dataset_name
 def main(experiment_dir: Path, dry_run: bool = True):
     experiment_dir = Path(experiment_dir)
     results = Results(experiment_dir / "trials", load_contents=True)
-    for experiment_name in results.experiments.keys():
+    for experiment_name in results.experiment.keys():
         print(f"Processing {experiment_name}")
         results.start(experiment_name)
-        for key, value in results.experiments[experiment_name].items():
+        for key, value in results.experiment[experiment_name].items():
             if isinstance(value, dict):
                 new_dict: Dict[str, Any] = {}
                 for dataset_name, dataset_value in value.items():

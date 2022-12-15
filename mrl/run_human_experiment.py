@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import gc
 import logging
 import pickle as pkl
 import sqlite3
@@ -20,11 +21,8 @@ from mrl.dataset.human_responses import Response, User, UserDataset
 from mrl.experiment_db.experiment import ExperimentDB
 from mrl.inference.analysis import analysis
 from mrl.inference.plots import plot_comparison, plot_comparisons
-from mrl.inference.posterior import (
-    cover_sphere,
-    make_likelihoods,
-    make_shuffle_likelihoods,
-)
+from mrl.inference.posterior import (cover_sphere, make_likelihoods,
+                                     make_shuffle_likelihoods)
 from mrl.inference.results import Results
 from mrl.reward_model.boltzmann import boltzmann_likelihood
 from mrl.reward_model.hinge import hinge_likelihood
@@ -32,14 +30,17 @@ from mrl.reward_model.likelihood import Likelihood
 from mrl.util import get_normalized_diff, setup_logging
 
 
-def main(config_path: Path) -> None:
+def main(config_path: Path, continue_from: Optional[Path] = None) -> None:
     """Runs a reward inference experiment using human preferences."""
 
     config = HumanExperimentConfig.load(Path(config_path))
     config.validate()
 
-    experiment_db = ExperimentDB(git_dir=Path(config.git_dir))
-    inference_outdir = experiment_db.add(Path(config.rootdir) / "inference", config)
+    if continue_from is None:
+        experiment_db = ExperimentDB(git_dir=Path(config.git_dir))
+        inference_outdir = experiment_db.add(Path(config.rootdir) / "inference", config)
+    else:
+        inference_outdir = Path(continue_from)
     setup_logging(level=config.verbosity, outdir=inference_outdir, force=True)
     try:
         config.dump(inference_outdir)
@@ -52,26 +53,39 @@ def main(config_path: Path) -> None:
             short_traj_cutoff=config.inference.short_traj_cutoff,
         )
 
+        logging.info("Loading results")
         results = Results(inference_outdir / "trials")
+        logging.info("Done loading results")
         results.start("")
 
         tmp_env = make_env(name=config.env, num=1, reward=1)
         root_env = get_root_env(tmp_env)
         env_features = root_env.get_features()[0].shape[0]
 
-        reward_samples = cover_sphere(
-            n_samples=config.inference.reward_particles,
-            ndims=env_features,
-            rng=rng,
-        )
-        results.update("reward_sample", reward_samples)
+        if continue_from is None:
+            reward_samples = cover_sphere(
+                n_samples=config.inference.reward_particles,
+                ndims=env_features,
+                rng=rng,
+            )
+            results.update("reward_sample", reward_samples)
+        else:
+            # Do the call anyway to advance RNG, but don't use it
+            cover_sphere(
+                n_samples=config.inference.reward_particles,
+                ndims=env_features,
+                rng=rng,
+            )
+            reward_samples = results.get("reward_sample")
 
-        # TODO: Maybe one day implement gamma noise priors
-        assert isinstance(config.inference.noise, FixedInference)
-        results.update("temp", config.inference.noise.temp)
+        if continue_from is None:
+            # TODO: Maybe one day implement gamma noise priors
+            assert isinstance(config.inference.noise, FixedInference)
+            results.update("temp", config.inference.noise.temp)
 
         logging.info("Starting inference on human prefs")
         for dataset, pairs in make_datasets(pairs_by_modality):
+            logging.info(f"Starting inference on {dataset}")
             diffs = preprocess_modality(pairs=pairs, config=config, rng=rng)
             check_memory()
             if config.n_shuffles > 0:
@@ -86,8 +100,8 @@ def main(config_path: Path) -> None:
                     results=results,
                     rng=rng,
                     temp=config.inference.noise.temp,
-                    save_all=config.inference.save_all,
                     check_last_equal=config.check_last_equal,
+                    load=continue_from is not None,
                 )
             else:
                 results.start("human")
@@ -126,8 +140,13 @@ def main(config_path: Path) -> None:
 
 
 def check_memory() -> None:
-    if psutil.virtual_memory().percent > 80:
+    gc.collect()
+    usage = psutil.virtual_memory().percent
+    if usage > 80:
         raise MemoryError("Memory usage over 80%")
+    logging.info(
+        f"Memory usage: {usage}%",
+    )
 
 
 def preprocess_modality(
