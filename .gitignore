@@ -170,3 +170,5 @@ memprof/
 *.pkl*
 
 nfs
+
+*.npy

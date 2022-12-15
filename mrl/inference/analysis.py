@@ -24,7 +24,7 @@ def analysis(
         else None
     )
 
-    for trial in results.experiments:
+    for trial in results.experiment_names():
         if trial == "":
             continue
         results.start(trial)

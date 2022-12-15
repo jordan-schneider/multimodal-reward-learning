@@ -25,7 +25,7 @@ def plot_comparisons(
     """Plot multiple comparison experiments. Tries to plot dispersion_gt, prob_aligned, gt_likelihood, entropy, and mean_reward."""
 
     errorbar = "ci" if not fast_error_bars else ("se", 2)
-    if results.has("dispersion_gt"):
+    if results.any_has("dispersion_gt"):
         logging.info("Plotting dispersion_gt")
         dispersion_gt = results.getall("dispersion_gt")
         sns.relplot(
@@ -40,7 +40,7 @@ def plot_comparisons(
     else:
         logging.warning("Results did not have dispersion gt")
 
-    if results.has("prob_aligned"):
+    if results.any_has("prob_aligned"):
         logging.info("Plotting prob_aligned")
         prob_aligned = results.getall("prob_aligned")
         sns.relplot(
@@ -55,7 +55,7 @@ def plot_comparisons(
     else:
         logging.warning("Results did not have prob aligned")
 
-    if results.has("gt_likelihood"):
+    if results.any_has("gt_likelihood"):
         logging.info("Plotting likelihood")
         likelihoods_gt = results.getall("gt_likelihood")
         sns.relplot(
@@ -70,7 +70,7 @@ def plot_comparisons(
     else:
         logging.warning("Results did not have likelihood gt")
 
-    if results.has("entropy"):
+    if results.any_has("entropy"):
         logging.info("Plotting entropy")
         logging.debug("Getting all entropies")
         entropies = results.getall("entropy")
@@ -88,7 +88,7 @@ def plot_comparisons(
     else:
         logging.warning("Results does not have entropies")
 
-    if results.has("mean_reward"):
+    if results.any_has("mean_reward"):
         logging.info("Plotting mean reward")
         plot_multiple_rewards(
             rewards=results.getall("mean_reward"),
@@ -102,7 +102,7 @@ def plot_comparisons(
 
 def plot_comparison(results: Results, outdir: Path, use_gt: bool = False) -> None:
     """Plot single comparison experiment. Tries to plot liklihood, gt_likelihood, entropy, non-zero reward sample count, mean reward, dispersion from mean, centroid reward, dispersion from centroid, and dispersion from gt."""
-    assert results.current_experiment is not None, "No current experiment"
+    assert results.current_experiment_name is not None, "No current experiment"
 
     if (likelihoods := results.get("likelihood")) is not None:
         plot_likelihoods(likelihoods, outdir)
@@ -384,7 +384,7 @@ def post_hoc_plot_comparisons(
     datadir = Path(datadir)
     setup_logging(level=verbosity, outdir=datadir, name="post_hoc_plot_comparisons.log")
     try:
-        results = Results(outdir=datadir / "trials", load_contents=True)
+        results = Results(outdir=datadir / "trials")
         if experiment is None:
             (datadir / "plots").mkdir(exist_ok=True)
             plot_comparisons(results, datadir / "plots", fast_error_bars)

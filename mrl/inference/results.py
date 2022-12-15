@@ -9,50 +9,60 @@ from mrl.util import dump, load
 
 
 class Results:
-    current_experiment: Optional[str]
+    current_experiment_name: Optional[str]
 
-    def __init__(self, outdir: Path, load_contents: bool = False):
+    def __init__(self, outdir: Path):
         self.outdir = outdir
         self.outdir.mkdir(parents=True, exist_ok=True)
 
-        self.experiments: Dict[str, Dict[str, Any]] = {}
-
-        if load_contents:
-            for experiment_dir in self.outdir.iterdir():
-                if experiment_dir.is_dir():
-                    experiment_name = experiment_dir.parts[-1]
-                    self.start(experiment_name)
-                    for file in experiment_dir.iterdir():
-                        if file.suffix not in [".pkl", ".npy"]:
-                            continue
-                        obj_name = file.stem
-                        self.experiments[experiment_name][obj_name] = load(file)
+        self.experiment: Dict[str, Any] = {}
 
     def start(self, experiment_name: str):
-        self.experiments[experiment_name] = self.experiments.get(experiment_name, {})
-        self.current_experiment = experiment_name
-        (self.outdir / self.current_experiment).mkdir(exist_ok=True)
+        self.current_experiment_name = experiment_name
+        (self.outdir / self.current_experiment_name).mkdir(exist_ok=True)
+        self._load(self.current_experiment_name)
+
+    def _load(self, experiment_name: str):
+        experiment_dir = self.outdir / experiment_name
+        self.experiment = {}
+        if experiment_dir.is_dir():
+            for file in experiment_dir.iterdir():
+                if file.suffix not in [".pkl", ".npy"]:
+                    continue
+                obj_name = file.stem
+                self.experiment[obj_name] = load(file)
 
     def update(self, name: str, value: Any, save: bool = True) -> None:
-        assert self.current_experiment is not None, "No current experiment"
-        self.experiments[self.current_experiment][name] = value
+        assert self.current_experiment_name is not None, "No current experiment"
+        self.experiment[name] = value
         if save:
-            dump(value, self.outdir / self.current_experiment / name)
+            dump(value, self.outdir / self.current_experiment_name / name)
 
     def update_dict(self, name: str, key: Any, value: Any, save: bool = True) -> None:
-        assert self.current_experiment is not None, "No current experiment"
-        d = self.experiments[self.current_experiment].get(name, {})
+        assert self.current_experiment_name is not None, "No current experiment"
+        d = self.experiment.get(name, {})
         d[key] = value
-        self.experiments[self.current_experiment][name] = d
+        self.experiment[name] = d
         if save:
-            dump(d, self.outdir / self.current_experiment / name)
+            dump(d, self.outdir / self.current_experiment_name / name)
 
     def has(self, name: str) -> bool:
-        return any(name in exp.keys() for exp in self.experiments.values())
+        """Returns true if the current experiment has a key with the given name."""
+        return name in self.experiment.keys()
+
+    def any_has(self, name: str) -> bool:
+        current_experiment_name = self.current_experiment_name
+        for experiment_name in self.experiment_names():
+            self._load(experiment_name)
+            if self.has(name):
+                self._load(current_experiment_name)
+                return True
+        self._load(current_experiment_name)
+        return False
 
     def get(self, name: str) -> Any:
-        assert self.current_experiment is not None, "No current experiment"
-        return self.experiments[self.current_experiment].get(name)
+        assert self.current_experiment_name is not None, "No current experiment"
+        return self.experiment.get(name)
 
     def getall(self, name: str) -> pd.DataFrame:
         """Produces a dataframe of the given value for all trials.
@@ -75,24 +85,27 @@ class Results:
         Returns:
             pd.DataFrame: Dataframe with trial, time, and 1 or more value columns with data across all trials.
         """
-        if not self.has(name):
+        if not self.any_has(name):
             raise ValueError(f"No {name} values in any experiment")
 
+        current_experiment_name = self.current_experiment_name
+
         out = pd.DataFrame(columns=["trial", "time"])
-        for exp_name, exp in self.experiments.items():
-            if name not in exp.keys():
+        for exp_name in self.experiment_names():
+            self._load(exp_name)
+            if name not in self.experiment.keys():
                 logging.warning(
                     f"{name} not present in experiment {exp_name}, skipping"
                 )
                 continue
 
-            value = exp[name]
+            value = self.experiment[name]
             if isinstance(value, np.ndarray):
                 if len(value.shape) > 1:
                     raise NotImplementedError(
                         f"Underlying array with {len(value.shape)} dims > 1 not supported"
                     )
-                df = self.__make_df(name, value)
+                df = self.__make_df([name], value)
                 df["trial"] = exp_name
                 out = out.append(df.copy())
             elif isinstance(value, dict):
@@ -116,10 +129,12 @@ class Results:
                         )
 
         out = out.reset_index(drop=True)
+        if current_experiment_name is not None:
+            self._load(current_experiment_name)
         return out
 
     def experiment_names(self) -> List[str]:
-        return list(self.experiments.keys())
+        return list([d.name for d in self.outdir.iterdir() if d.is_dir()])
 
     @staticmethod
     def __make_df(columns: Sequence[str], value: np.ndarray) -> pd.DataFrame:
@@ -130,4 +145,5 @@ class Results:
         return df
 
     def close(self):
-        self.current_experiment = None
+        self.current_experiment_name = None
+        self.experiment = {}

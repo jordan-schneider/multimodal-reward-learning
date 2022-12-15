@@ -342,22 +342,34 @@ def make_shuffle_likelihoods(
     rng: np.random.Generator,
     true_reward: Optional[np.ndarray] = None,
     temp: float = 1.0,
-    save_all: bool = False,
     check_last_equal: bool = False,
+    load: bool = False,
 ) -> Results:
     logging.info("Computing p(reward|diff)")
-    log_likelihoods = reward_likelihood(
-        reward=reward_samples, diffs=diffs, temperature=temp
+    results.start(experiment_basename)
+    log_likelihoods = (
+        results.get("log_likelihoods").get(dataset, None)
+        if results.has("log_likelihoods")
+        else None
     )
-
-    if save_all:
-        results.start(experiment_basename)
+    if not load or log_likelihoods is None:
+        log_likelihoods = reward_likelihood(
+            reward=reward_samples, diffs=diffs, temperature=temp
+        )
         results.update_dict("log_likelihoods", dataset, log_likelihoods)
 
     logging.info("Normalizing and totaling likelihoods")
     last_likelihoods = []
     for i in range(n_shuffles):
         results.start(f"{experiment_basename}_{i}")
+        if (
+            load
+            and results.has("likelihoods")
+            and dataset in results.get("likelihoods") is not None
+        ):
+            # Advance RNG
+            rng.permutation(log_likelihoods.shape[1])
+            continue
         shuffled_log_likelihoods = log_likelihoods[
             :, rng.permutation(log_likelihoods.shape[1])
         ]
@@ -366,7 +378,7 @@ def make_shuffle_likelihoods(
         )
         if check_last_equal:
             last_likelihoods.append(shuffled_likelihoods[:, -1])
-        save_likelihoods(shuffled_likelihoods, dataset, results, save_all)
+        save_likelihoods(shuffled_likelihoods, dataset, results, save_all=True)
 
         if true_reward is not None:
             indices = np.nonzero(np.all(true_reward == reward_samples, axis=1))
